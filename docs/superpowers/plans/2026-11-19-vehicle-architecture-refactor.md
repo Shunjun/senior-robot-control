@@ -1218,3 +1218,31 @@ agent extra离线仍缺websockets15.0.1缓存，未换版本联网，不称完�
 Ruff/format、CRLF diff及10文件自审通过；完整命令与限制见
 [manager本片记录](../../../senior_control/README.md#r5-请求和agent具体运行绑定)。
 固定分支提交禁hooks，不启动服务或仿真、不发实车运动、不部署推送。
+
+
+### R5 状态快照与RGB1生产绑定（基线388d1bf）
+
+开始时固定分支干净，预算13文件：产品增4改6，工具文档改3，测试/配置/删除0。
+core motion_state只承接原MotionMode/MotionState，其他控制契约不动；core rgb1承接原唯一
+codec完整字节/常量/函数。manager snapshot_bindings承接实际SnapshotState和vehicle_frame
+投影绑定，frame_bindings承接具体LatestFrameFile和原读帧/poll注入。旧入口显式兼容，
+manual_control.vehicle_frame保留原签名并惰性调用canonical，ROS手动ingress导入不带投影；
+composition用canonical工厂并保留模块名patch入口，其他运行/地图/媒体/CLI不动。
+仿真相机只换codec import，不运行脚本、不验证其环境或仿真行为。
+
+限定非仿真验证：test_vehicle_state、test_agent_config，以及runtime_reporting的
+test_ipc_failure_still_reports/test_report_heartbeat_does_not_extend_motion_evidence两条纯报告
+场景；不执行调用CommandNode/ASGI组合夹具的其他场景，不跑simulation_video或仿真测试。
+离仓库验证canonical生产绑定、旧对象身份和手动ingress惰性导入，以及非仿真临时RGB1
+字节读写公开API；root/manager wheel，Ruff/CRLF diff。原失败最小同版本基线对照。
+不改控制许可/新鲜度/配额/帧协议，不启动服务/ROS/实车/仿真，不发运动、部署或推送。
+
+本片实际13文件与预算一致：产品增4改6、工具文档改3，测试/配置/锁0。
+codec逐字节一致，原Mode/State/投影/读取构造定义保持，控制/ingress/composition其余业务AST
+不变；SnapshotState仅store注解指向manager。仿真相机仅换import，不执行或验证环境。
+指定非仿真选择23通过，兼容名收尾后23通过（0.57s），无基线失败/断言修改。
+真实root/manager wheel及base12包/SDK26包重装、pip check、纯core/手动ingress惰性导入、
+具体生产snapshot/frame/非仿真普通文件codec、旧对象身份与工厂patch入口通过。
+其他9旧wheel复用；10份非仿真Python的Ruff/format、CRLF diff及13文件自审通过。
+完整命令/选择与未验项见[manager本片记录](../../../senior_control/README.md#r5-状态快照与rgb1生产绑定)。
+固定分支提交禁hooks，未运行或新增仿真验收、未启服务、不发实车运动、不部署推送。

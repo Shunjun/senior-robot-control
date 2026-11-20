@@ -222,6 +222,7 @@ assert all(callable(c) for c in (ManualIngress, ManualTarget, MotionRuntimeRecei
 assert 'senior_control.agent.main' not in sys.modules
 assert 'vehicle_manager.agent.frame_projection' not in sys.modules
 assert 'vehicle_manager.agent.state_ports' not in sys.modules
+assert 'vehicle_manager.agent.snapshot_bindings' not in sys.modules
 """,
         """
 from importlib import import_module
@@ -524,6 +525,228 @@ def verify_manager_config(*, compatible: bool = False) -> None:
         for name in ("senior_control", "cloud", "rclpy", "senior_robot"):
             assert name not in sys.modules, name
         print("installed manager config/PoseReply without legacy SDK or ROS: PASS")
+
+
+def verify_snapshot_frames(*, compatible: bool = False) -> None:
+    """Read the canonical non-simulation codec and bind display-only production snapshots."""
+    import asyncio
+    import inspect
+    import subprocess
+    import tempfile
+    import time
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from vehicle_manager.agent.local_state import RuntimeState
+    from vehicle_manager.agent.snapshot_bindings import SnapshotState, vehicle_frame
+    from vehicle_manager.agent.snapshot_state import SnapshotState as GenericSnapshots
+    from vehicle_manager.media.frame_bindings import LatestFrameFile
+    from vehicle_manager.media.latest_frame import LatestFrameFile as GenericFrames
+
+    from vehicle_core import rgb1
+    from vehicle_core.errors import DomainError, ErrorCode
+    from vehicle_core.image_frame import ImageFrame
+    from vehicle_core.motion_state import MotionMode, MotionState
+    from vehicle_core.runtime_state import MotionRuntimeState, RuntimeObservation
+
+    scripts = [
+        """
+import sys
+from vehicle_core.motion_state import MotionMode, MotionState
+from vehicle_core import rgb1
+assert MotionMode.__module__ == MotionState.__module__ == 'vehicle_core.motion_state'
+assert 'vehicle_manager' not in sys.modules and 'senior_control' not in sys.modules
+assert rgb1._HEADER.format == '!4sBHHQ' and rgb1._MAGIC == b'RGB1'
+assert rgb1._MAX_AGE_NS == 1_000_000_000 and rgb1._POLL_SECONDS == 0.025
+"""
+    ]
+    if compatible:
+        scripts.append("""
+import sys
+from senior_control.agent.manual_control import ManualIngress, MotionRuntimeReceiver
+assert callable(ManualIngress) and callable(MotionRuntimeReceiver)
+for name in ('vehicle_manager.agent.frame_projection', 'vehicle_manager.agent.state_ports',
+             'vehicle_manager.agent.snapshot_bindings', 'senior_control.agent.main'):
+    assert name not in sys.modules, name
+""")
+    for script in scripts:
+        subprocess.run([sys.executable, "-c", script], cwd="/tmp", check=True)
+    for value in (MotionMode, MotionState, SnapshotState, LatestFrameFile):
+        assert "site-packages" in inspect.getfile(value), value
+    assert SnapshotState.__module__ == "vehicle_manager.agent.snapshot_bindings"
+    assert LatestFrameFile.__module__ == "vehicle_manager.media.frame_bindings"
+    assert rgb1.publish_image.__module__ == rgb1._read_frame.__module__ == "vehicle_core.rgb1"
+    for name in ("vehicle_core/motion_state.py", "vehicle_core/rgb1.py"):
+        assert Path(name) in (importlib.metadata.distribution("senior-control").files or [])
+    for name in (
+        "vehicle_manager/agent/snapshot_bindings.py",
+        "vehicle_manager/media/frame_bindings.py",
+    ):
+        assert Path(name) in (importlib.metadata.distribution("vehicle-manager").files or [])
+    assert SnapshotState is not GenericSnapshots and issubclass(SnapshotState, GenericSnapshots)
+    assert SnapshotState.collect is GenericSnapshots.collect
+    assert LatestFrameFile is not GenericFrames and issubclass(LatestFrameFile, GenericFrames)
+    assert LatestFrameFile.next_frame is GenericFrames.next_frame
+    mode = MotionState(MotionMode.IDLE, "standby", None, 0, 0, True, ("acquire",))
+    assert mode.mode is MotionMode.IDLE
+    sample = MotionRuntimeState.model_validate(
+        {
+            "schema": 1,
+            "robot_id": "robot",
+            "boot_id": "boot",
+            "sequence": 1,
+            "sampled_steady": 10.0,
+            "mode": "idle",
+            "reason": "standby",
+            "stationary": True,
+            "healthy": True,
+            "evidence_stamp_steady": 10.0,
+            "evidence_deadline_steady": 10.05,
+            "estop_revision": 0,
+            "fault_revision": 0,
+            "confirmed_estop_status": "clear",
+            "allowed_actions": ["acquire"],
+            "task_id": None,
+            "output_generation": 1,
+            "body_reference": None,
+            "wheel_linear_mps": None,
+        }
+    )
+    before = sample.model_dump()
+    arguments = dict(
+        sequence=1,
+        connected=True,
+        task=None,
+        manual=None,
+        manual_enabled=True,
+        tasks_enabled=False,
+        runtime_enabled=True,
+        safety_revisions=(0, 0),
+        now=10.1,
+    )
+    projected = vehicle_frame(sample, **arguments)
+    assert projected["mode"] == "idle" and projected["allowed_actions"] == ["acquire"]
+    assert projected["observation"]["status"] == "current"
+    assert sample.model_dump() == before and sample.evidence_deadline_steady == 10.05
+
+    async def verify(directory):
+        live = RuntimeState(
+            False,
+            False,
+            False,
+            None,
+            "idle",
+            motion_runtime=sample,
+            motion_runtime_version=1,
+            runtime_observation=RuntimeObservation(status="current", last_sampled_steady=10.0),
+        )
+        state = SimpleNamespace(read=AsyncMock(return_value=live))
+        tasks = SimpleNamespace(snapshot_tasks=AsyncMock(return_value=((), frozenset())))
+        points = SimpleNamespace(home=AsyncMock(return_value=None))
+        snapshots = SnapshotState(state, tasks, points, manual_enabled=True, clock=lambda: 10.1)
+        assert snapshots._ports.frame is vehicle_frame
+        assert (
+            snapshots._ports.observation is RuntimeObservation
+            and snapshots._ports.error is DomainError
+        )
+        assert (
+            snapshots._state is state
+            and snapshots._tasks is tasks
+            and snapshots._waypoints is points
+        )
+        first = await snapshots.collect()
+        assert first.vehicle_ui["mode"] == "idle"
+        state.read.side_effect = DomainError(ErrorCode.UNAVAILABLE, "lost")
+        second = await snapshots.collect()
+        assert second.vehicle_ui["observation"]["status"] == "ipc_unavailable"
+        assert second.vehicle_ui["sequence"] > first.vehicle_ui["sequence"]
+        assert sample.model_dump() == before
+        path = directory / "frame.rgb"
+        assert rgb1.publish_image(path, 1, 1, 3, "rgb8", b"abc")
+        reader = LatestFrameFile(path)
+        assert reader._read_frame is rgb1._read_frame and reader._poll_seconds == rgb1._POLL_SECONDS
+        frame = await reader.next_frame(0.1)
+        assert type(frame) is ImageFrame and frame.data == b"abc"
+        assert frame.encoding == "rgb8" and frame.width == frame.height == 1
+        assert rgb1._read_frame(path, reader._last_capture) is None
+
+    with tempfile.TemporaryDirectory(prefix="installed-snapshot-frame-", dir="/tmp") as directory:
+        asyncio.run(verify(Path(directory)))
+    if compatible:
+        from senior_control.agent import composition, manual_control
+        from senior_control.motion import contracts
+        from senior_control.vision import rgb1 as old_rgb1
+        from senior_control.vision import simulation_video as old_frame_exports
+
+        assert contracts.MotionMode is MotionMode and contracts.MotionState is MotionState
+        assert manual_control.MotionMode is MotionMode and manual_control.MotionState is MotionState
+        assert composition.SnapshotState is SnapshotState
+        assert composition.LatestFrameFile is old_frame_exports.LatestFrameFile is LatestFrameFile
+        for name in (
+            "_HEADER",
+            "_MAGIC",
+            "_ENCODINGS",
+            "_MAX_WIDTH",
+            "_MAX_HEIGHT",
+            "_MAX_AGE_NS",
+            "_POLL_SECONDS",
+            "_size",
+            "_read_frame",
+            "publish_image",
+        ):
+            assert getattr(old_rgb1, name) is getattr(rgb1, name)
+            assert getattr(old_frame_exports, name) is getattr(rgb1, name)
+        assert inspect.signature(manual_control.vehicle_frame) == inspect.signature(vehicle_frame)
+        assert manual_control.vehicle_frame(sample, **arguments) == projected
+        signature = inspect.signature(SnapshotState)
+        assert signature.parameters["clock"].default is time.monotonic
+        assert signature.parameters["manual_enabled"].default is False
+        captured = []
+        marker = object()
+
+        async def capture(config, *, ports):
+            captured.append(ports.snapshot_state)
+            return 0
+
+        config = composition.AgentConfig(
+            "robot",
+            "wss://cloud.invalid",
+            "token",
+            Path("/tmp/snapshot.db"),
+            Path("/tmp/snapshot.sock"),
+        )
+        with (
+            patch.object(composition, "SnapshotState", marker),
+            patch.object(composition, "_run_agent", capture),
+        ):
+            assert asyncio.run(composition.run_agent(config)) == 0
+        assert captured == [marker]
+        assert composition._media_binding.__globals__["LatestFrameFile"] is LatestFrameFile
+    else:
+        assert not any(
+            name == "senior_control"
+            or name.startswith(
+                (
+                    "senior_control.",
+                    "cloud",
+                    "rclpy",
+                    "launch",
+                    "nav2",
+                    "senior_mapping",
+                    "senior_navigation",
+                    "senior_robot",
+                    "httpx",
+                    "websockets",
+                    "aiortc",
+                    "av",
+                )
+            )
+            for name in sys.modules
+        )
+    print(
+        "installed shared motion/RGB1, production snapshot/frame and lazy compatibility: PASS",
+        compatible,
+    )
 
 
 def verify_request_runtime(*, compatible: bool = False) -> None:
@@ -1484,6 +1707,7 @@ def verify_manager_agent(*, network: bool = False) -> None:
     verify_production_bindings()
     verify_route_execution()
     verify_request_runtime()
+    verify_snapshot_frames()
     if network:
         import httpx
         import websockets
@@ -1716,17 +1940,19 @@ def verify_manager_media(*, backend: bool = False) -> None:
 def verify_legacy_media() -> None:
     from senior_robot.ros_video import RosCameraSource as Camera
     from vehicle_manager.media import stream, turn
+    from vehicle_manager.media.frame_bindings import LatestFrameFile
     from vehicle_manager.media.latest_frame import LatestFrameFile as Reader
     from vehicle_manager.media.signaling import VideoSignaling as Signaling
 
     from senior_control.runtime.diagnostics import DiagnosticAsyncQueue
     from senior_control.vision import rgb1
+    from senior_control.vision import simulation_video as old_frame_exports
     from senior_control.vision import stream as old_stream
     from senior_control.vision import turn as old_turn
     from senior_control.vision.ros_video import RosCameraSource
     from senior_control.vision.signaling import VideoSignaling
-    from senior_control.vision.simulation_video import LatestFrameFile, publish_image
     from senior_control.vision.synchronizer import ImageFrame
+    from vehicle_core.rgb1 import publish_image
 
     for module, old in ((stream, old_stream), (turn, old_turn)):
         for name in (
@@ -1742,6 +1968,8 @@ def verify_legacy_media() -> None:
     assert old_turn.verify_turn_credentials is turn.verify_turn_credentials
     assert old_stream.logger.name == "senior_control.vision.stream"
     assert publish_image is rgb1.publish_image
+    assert old_frame_exports.LatestFrameFile is LatestFrameFile
+    assert old_frame_exports.publish_image is publish_image
     assert issubclass(LatestFrameFile, Reader) and LatestFrameFile.next_frame is Reader.next_frame
     reader = LatestFrameFile(Path("/tmp/unused.rgb"))
     assert reader._read_frame is rgb1._read_frame
@@ -2879,6 +3107,11 @@ def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--lazy-shared-only"]:
         verify_lazy_shared_imports()
+    elif sys.argv[1:] == ["--manager-snapshot-frame-only"]:
+        verify_manager_core_distribution()
+        verify_snapshot_frames()
+    elif sys.argv[1:] == ["--manager-snapshot-frame-compatible"]:
+        verify_snapshot_frames(compatible=True)
     elif sys.argv[1:] == ["--manager-runtime-only"]:
         verify_manager_core_distribution()
         verify_request_runtime()

@@ -2,7 +2,6 @@
 
 import asyncio
 import logging
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from importlib.util import find_spec
@@ -32,26 +31,26 @@ from vehicle_manager.agent.production_bindings import (
 )
 from vehicle_manager.agent.request_bindings import LifecycleNavigationOperations, StoreTaskPort
 from vehicle_manager.agent.runtime_bindings import Agent
-from vehicle_manager.agent.snapshot_state import SnapshotState as _SnapshotState
-from vehicle_manager.agent.state_ports import SnapshotPorts
+
+# //Compatible: keep the historical module factory names patchable at assembly time.
+from vehicle_manager.agent.snapshot_bindings import SnapshotState as SnapshotState
+from vehicle_manager.agent.snapshot_bindings import vehicle_frame as vehicle_frame
+from vehicle_manager.media.frame_bindings import LatestFrameFile as LatestFrameFile
 from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
 from vehicle_manager.storage.bindings import Database
 from vehicle_manager.tasks.execution_bindings import NavigationEffects, TaskExecutor
 from vehicle_manager.tasks.navigation_port import TaskNavigation
 
-from senior_control.agent.manual_control import vehicle_frame
 from senior_control.agent.workspace import WorkspaceReader
 from senior_control.tasks import TaskStore
 from senior_control.tasks.lifecycle_store import Admission
 from senior_control.tasks.runtime import TaskRuntime
-from senior_control.vision.simulation_video import LatestFrameFile
 from senior_control.waypoints.store import WaypointStore
 from vehicle_core.diagnostics import configure_diagnostics
 from vehicle_core.errors import DomainError
 from vehicle_core.image_frame import ImageFrame
 from vehicle_core.ipc import IpcClient
 from vehicle_core.lifecycle_events import READ_FD, observe
-from vehicle_core.runtime_state import RuntimeObservation
 
 logger = logging.getLogger("senior_control.agent")
 
@@ -60,41 +59,6 @@ logger = logging.getLogger("senior_control.agent")
 class _ControlViewer:
     robot_id: str
     role: str = "control"
-
-
-# //Compatible: original construction, canonical safety-frontier/display owner.
-
-
-class SnapshotState(_SnapshotState):
-    def __init__(
-        self,
-        state: IpcState,
-        tasks: TaskStore,
-        waypoints: WaypointStore,
-        workspace: WorkspaceReader | None = None,
-        *,
-        navigation: LifecycleNavigationOperations | None = None,
-        connected: Callable[[], bool] = lambda: True,
-        epoch: Callable[[], int] = lambda: 0,
-        manual_enabled: bool = False,
-        clock: Callable[[], float] = time.monotonic,
-        settings_enabled: bool = False,
-        logs_enabled: Callable[[], bool] = lambda: False,
-    ) -> None:
-        super().__init__(
-            state,
-            tasks,
-            waypoints,
-            workspace,
-            ports=SnapshotPorts(vehicle_frame, RuntimeObservation, DomainError),
-            navigation=navigation,
-            connected=connected,
-            epoch=epoch,
-            manual_enabled=manual_enabled,
-            clock=clock,
-            settings_enabled=settings_enabled,
-            logs_enabled=logs_enabled,
-        )
 
 
 def build_task_runtime(

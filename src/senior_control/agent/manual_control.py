@@ -11,8 +11,6 @@ from typing import Literal
 from senior_control.motion.contracts import (
     AcceptedManualIntent,
     ManualIntent,
-    MotionMode,
-    MotionState,
 )
 from senior_control.motion.manual_authority import (
     ManualAuthorityContext,
@@ -20,6 +18,10 @@ from senior_control.motion.manual_authority import (
     ManualAuthorityReceipt,
 )
 from senior_control.settings.models import DrivingSettings
+
+# //Compatible: retain the original value names without loading management projection.
+from vehicle_core.motion_state import MotionMode as MotionMode
+from vehicle_core.motion_state import MotionState as MotionState
 from vehicle_core.runtime_state import MotionRuntimeState, RuntimeObservation
 from vehicle_core.values import Velocity
 
@@ -191,13 +193,11 @@ def vehicle_frame(
     now: float,
     observation: RuntimeObservation | None = None,
 ) -> dict[str, object]:
-    # //Compatible: only the management projection needs these original owners.
-    from vehicle_manager.agent.frame_projection import vehicle_frame as _vehicle_frame
-    from vehicle_manager.agent.state_ports import ProjectionPorts
+    # //Compatible: ROS ingress stays independent until display projection is requested.
+    from vehicle_manager.agent.snapshot_bindings import vehicle_frame as _vehicle_frame
 
     return _vehicle_frame(
         runtime,
-        ports=ProjectionPorts(RuntimeObservation, MotionState, MotionMode, MotionMode.ESTOP),
         sequence=sequence,
         connected=connected,
         task=task,

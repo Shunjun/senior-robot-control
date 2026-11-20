@@ -2,7 +2,7 @@
 
 设置、车辆日志、SQLite技术设施、任务核心与TaskStore已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，请求/具体Agent运行绑定见末尾本片记录。
+下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，状态快照/共享帧绑定见末尾本片记录。
 
 ## 实际目录与调用
 
@@ -2965,3 +2965,97 @@ main函数不变，composition除import外业务AST相同。8份Python的Ruff/fo
 未验完整agent网络extra、真实云连接、媒体后端、ROS/Nav2/车辆、Linux/Humble ABI或实车手动控制。
 没有启动任何生产/开发/ROS/实车/仿真服务或仿真验证，未发实车运动、部署或推送；
 仅固定功能分支提交待审核。
+
+
+## R5 状态快照与RGB1生产绑定
+
+基线`feat/vehicle-architecture-refactor@388d1bf`，开始时干净；实际13文件，
+产品新增4、修改6，工具文档修改3，测试/配置/删除0。没有新增发行、依赖、CLI或工厂入口。
+
+`vehicle_core/motion_state.py`仅承接原MotionMode/MotionState两类原定义，旧motion/contracts
+显式 //Compatible 同对象出口，其余控制契约和状态机不动。core/rgb1.py承接原唯一codec，
+完整实现与迁移前**逐字节相同**，函数/常量/帧字节、新鲜度和权限检查不变；旧rgb1仅显式转发。
+
+manager/agent/snapshot_bindings.py承接具体SnapshotState和vehicle_frame投影绑定；原函数
+文本完全相同，薄构造仅waypoint类型注解指向真正manager generic owner。MotionRuntimeState/
+RuntimeObservation、MotionMode/State、DomainError均用原同对象，原kwargs/defaults和generic
+collect/projection方法不变。旧manual_control.vehicle_frame保留原签名/输出并在调用时惰性
+委托canonical；导入手动ingress不加载管理投影，新旧手动模块类型名也保持同对象。
+
+manager/media/frame_bindings.py仅原LatestFrameFile具体薄构造，注入唯一core _read_frame和
+原poll间隔；旧读取出口只同对象转发。composition直接导入canonical SnapshotState和
+LatestFrameFile，保留模块工厂名在每次assembly时读取，方便原patch；其他组合/地图/媒体
+逻辑不动。仿真相机脚本仅替换codec import，没有执行脚本、检查其环境或增加仿真验收项。
+
+### 实际命令和结果
+
+环境macOS arm64，Python3.12.15、pytest8.4.2、Ruff0.17.3、uv0.12.23。
+复用原主检出.venv的测试工具，当前项目运行.venv未变。明确选择无仿真运行的状态/报告用例：
+
+```sh
+python -m pytest senior_control/tests/test_vehicle_state.py \
+  senior_control/tests/test_runtime_reporting.py::test_ipc_failure_still_reports \
+  senior_control/tests/test_runtime_reporting.py::test_report_heartbeat_does_not_extend_motion_evidence \
+  senior_control/tests/test_agent_config.py -q --tb=short
+```
+
+首次23通过（0.56s），保留手动模块类型兼容名后同选择复跑**23 passed in 0.57s**。
+覆盖原状态优先级/独立安全修订/重连与待确认overlay、body与wheel年龄分离、IPC失败报告/
+序列递增、不延长运行证据、原配置与九client/生命周期。runtime_reporting只选上述两条纯报告
+场景，没有执行其CommandNode/ASGI组合夹具；没有运行simulation_video测试、仿真环境或脚本。
+原用例无失败，测试/断言未改，无需基线对照。
+
+离仓库真实wheel命令（`UV_CACHE_DIR=/tmp/vehicle-uv-cache`，`<checkout>`为本工作区）：
+
+```sh
+uv build --offline --wheel --out-dir /tmp/vehicle-snapshot-frame-wheels
+uv build --offline --wheel --out-dir /tmp/vehicle-snapshot-frame-wheels senior_control
+python3.12 -m venv /tmp/vehicle-snapshot-frame-base
+uv pip install --offline --python /tmp/vehicle-snapshot-frame-base/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-snapshot-frame-wheels/*.whl \
+  /tmp/m5c-wheels/senior_contracts-*.whl
+uv pip install --offline --python /tmp/vehicle-dag-sdk/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-snapshot-frame-wheels/*.whl
+/tmp/vehicle-snapshot-frame-base/bin/python -m pip check
+/tmp/vehicle-dag-sdk/bin/python -m pip check
+cd /tmp
+/tmp/vehicle-snapshot-frame-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-snapshot-frame-only
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --manager-snapshot-frame-compatible
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --lazy-shared-only
+/tmp/vehicle-snapshot-frame-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only
+```
+
+root/manager真实非editable wheel构建、全新base12包和SDK26包重装与pip check通过；
+兼容名/导入格式收尾后重建root并再次重装检查。约束为5988c42原根冻结导出，未升级registry。
+SDK其余9个旧wheel复用前片（navigation/robot来自route-execution构建，contracts等6个来自
+m5c-wheels，cloud来自cloud-build-9cafe01），不称本片全量重建或ROS安装。
+
+安装检查仅验证生产类装配与非仿真技术边界：
+
+- 新core值/codec在独立进程可导入，根wheel RECORD与site-packages归属正确，不加载manager
+  或旧SDK；manager snapshot/frame两个绑定是实际canonical模块、保留bound!=generic及原方法身份。
+- 实际SnapshotState注入原frame/observation/error构造、同state/tasks/waypoints，collect读取原
+  RuntimeState/MotionRuntimeState/RuntimeObservation；IPC失联仍报告且序列前进，原sample未修改。
+  vehicle_frame与旧惰性入口签名/输出一致，不延长evidence_deadline或增加valid_until。
+- 仅用canonical core公开publish_image与生产LatestFrameFile对临时普通RGB1文件读写：ImageFrame
+  原类型/字节/尺寸/编码、同read_frame/poll工厂、capture去重保持。没有调用任何相机、仿真脚本、
+  模拟器生命周期或环境验证；旧读取路径仅导入出口检查对象身份，不运行其测试。
+- SDK证明旧contracts/手动类型、codec全部函数/常量与canonical is同对象，旧composition工厂
+  和读取类同对象。以仅捕获bootstrap ports的_run_agent替身验证SnapshotState模块patch入口，
+  不执行实际Agent/媒体工厂；LatestFrameFile仍由原函数globals读取。
+- 独立进程只导入原ManualIngress/MotionRuntimeReceiver，断言frame_projection/state_ports/
+  snapshot_bindings及旧Agent main未加载；管理投影只在调用显示入口时加载。
+  base不加载旧SDK/ROS/Nav2/地图/导航执行/cloud/httpx/websockets/aiortc/av。
+
+旧shared-import及manager有效生产绑定检查继续通过；原operator检查只import监督符号并渲染
+kind=real profile，没有执行仿真或生产服务。安装工具原media检查也改用canonical帧类/codec，
+旧出口只保留身份断言，本片未执行该混合media入口。
+
+git show对照：codec完整字节一致，两共享类型/投影函数/读取类文本不变，SnapshotState仅
+store注解变化；其余控制契约、manual ingress/receiver和composition业务AST不变。
+10份非仿真Python产品/工具的Ruff与format、既有CRLF约定diff和13文件自审通过；仿真脚本
+只做import迁移，不列作验证对象。提交禁hooks避免未授权全量/仿真检查，范围检查手动执行。
+
+未验agent网络extra/媒体后端、Linux/Humble ABI、真实ROS/Nav2/车辆或手动控制。
+前片websockets15.0.1离线缓存缺口仍保留，本片不重试网络extra安装；本地帧IO不代表后端已通过。
+未启动任何生产/开发/ROS/车辆/仿真服务，未发实车运动、部署或推送；固定功能分支提交待审核。
