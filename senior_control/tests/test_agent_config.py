@@ -31,9 +31,18 @@ def test_agent_config_requires_encrypted_remote_transport() -> None:
 async def test_composition_opens_and_closes_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    from senior_control.agent import composition
     from senior_control.agent import main as agent_module
     from senior_control.agent.composition import run_agent
+    from senior_control.runtime.ipc import IpcClient
     from senior_control.storage.database import Database
+
+    clients: list[IpcClient] = []
+
+    def client(*args, **kwargs):
+        value = IpcClient(*args, **kwargs)
+        clients.append(value)
+        return value
 
     seen: list[bool] = []
     real_exit = Database.__aexit__
@@ -43,8 +52,22 @@ async def test_composition_opens_and_closes_database(
         seen.append(not self.is_open)
 
     async def run(self: agent_module.Agent) -> None:
-        await self._release()
+        try:
+            database = self._journal._database
+            tasks = self._dispatcher._tasks._store
+            assert tasks._database is database
+            assert self._state._tasks is tasks
+            assert self._state._waypoints._database is database
+            assert self._motion.tasks._database is database
+            assert self._motion.tasks._store is tasks
+            assert self._motion.tasks._database.connection is database.connection
+            assert self._motion.tasks._database.write_lock is database.write_lock
+            assert len({id(value) for value in clients}) == 9
+            assert sorted(value._timeout for value in clients) == [1.0] * 8 + [3.0]
+        finally:
+            await self._release()
 
+    monkeypatch.setattr(composition, "IpcClient", client)
     monkeypatch.setattr(Database, "__aexit__", close)
     monkeypatch.setattr(agent_module.Agent, "run", run)
     monkeypatch.setattr(agent_module.Agent, "install_signal_handlers", lambda self: None)

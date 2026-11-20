@@ -1533,3 +1533,77 @@ Root→manager依赖保持单向，manager新模块无Root/ROS反向导入；不
 下一片须先确认共享技术安装归属：IPC codec/身份和诊断队列跨管理/ROS共用，
 帧龄策略仍原owner；Clock、ImageFrame、车内值/异常构造来源及媒体设备输入仍按真实边界核定，
 不得用新根runtime、扩大WS contracts或复制业务/状态绕过。
+
+### M5B 本地请求适配与真实任务工厂
+
+基线3e7cf31。实际职责与调用：
+
+```text
+senior_control/src/vehicle_manager/agent/
+├── local_ports.py          # 原client方法形状；逐实例异常/导航构造引用
+├── ipc_motion.py           # IpcMotion与TaskAwareMotion唯一业务实现
+├── ipc_navigation.py       # IpcMapPort/IpcNavigation请求及ack解析
+├── ipc_state.py            # IpcState原采样/资格/geometry投影规则
+└── composition.py          # 原run_agent + 原build_task_runtime工厂
+src/senior_control/agent/
+├── connection.py           # Compatible IpcMotion薄构造；原MotionRejected仍原类
+├── ports.py                # Compatible薄构造；原RuntimeState/StateReply/PoseReply/Home接线
+└── composition.py          # 原生产绑定；build_task_runtime逐次接原具体构造器
+senior_control/tests/test_agent_ports.py # 原用例逐字节归管理包
+```
+
+原run_agent绑定仍提供同一个Database/TaskStore/WaypointStore/journal及9个真实IpcClient，
+manager原bootstrap保留八个1000ms客户端与一个3000ms导航客户端、原身份/domain/run记录。
+实际工厂只将原TaskExecutor和NavigationEffects具体构造器传给manager工厂，
+原LifecycleStore/Service/Runtime对象、连接、写锁、Home协调和错误继承保持；
+工厂泛型保留注入Executor的具体返回类型，无新cast或名义类型替代。
+旧适配器是Compatible薄子类，非同一类，但所有业务方法同一实现；
+TaskAwareMotion仍是旧IpcMotion子类，原任务/手动仲裁与super链保持。
+
+具体DomainError/IpcError/MotionRejected/RouteRejected、MapRef/Pose2D/RoutePlan、
+StateReply解析器和RuntimeState返回工厂仍原owner逐次注入，无值/异常/锁复制。
+StateReply/RuntimeState/PoseReply及IpcHomePort业务体未迁，内部DTO未加入WS。
+状态仍按原sampled_at和0.5秒门限判断，valid_until仍为原采样加0.5秒；
+仅原同代可信几何可显示，旧代次/未知结果/终端释放及新手动保护原样。
+原navigation effect字段/accepted三态/unknown仅查询、任务离线继续和manual五次接管尝试保持。
+Unix v1 framing/peer身份、Clock、诊断、媒体、ROS执行、DB/Home与地图/控制权威未迁未改。
+
+实际14逻辑文件：产品8（新增4/修改4）、测试2（迁移1/修改1）、配置0、工具文档4修改；
+合计新增4/修改9/迁移1/删除0，迁移单计。比30–42预报小，因为复用了既有bootstrap、
+Requester、工厂注入和自动wheel/test发现，不另造按类门面或为凑数改依赖/CI。
+测试只有原agent_ports整文件迁移，及原真实Agent装配用例观察九client/timeout、同DB/Store/连接/写锁；
+原断言保留，无新增pytest场景。其余传输/跨执行回归仍归原owner，未无关搬测。
+
+验证环境：macOS arm64、CPython3.12.15、pytest8.4.2、ruff0.17.3、mypy2.4.0、uv0.12.23。
+工具取主仓库`.venv/bin`，uv设`UV_CACHE_DIR=/tmp/vehicle-uv-cache`；仅原测试临时socket/替身，无真实服务。
+
+- 首轮原agent_ports/ipc_frames/agent_config/direct_navigation/terminal_release_wire：34通过、
+  1受限Unix bind和1退役控制夹具失败。允许原socket后的完整选集命令：
+  `python -m pytest tests/unit/test_agent_ports.py tests/unit/test_ipc_frames.py tests/unit/test_runtime_identity.py tests/integration/test_ipc_lifecycle.py tests/integration/test_ipc_exclusive_bind.py tests/integration/test_intent_ipc_stream.py tests/integration/test_task_ownership.py tests/integration/test_terminal_metadata_runtime.py tests/integration/test_manual_wire.py senior_control/tests/test_agent_config.py senior_control/tests/test_runtime.py senior_control/tests/test_runtime_reporting.py ros2/tests/test_terminal_release_wire.py -q --tb=short`：
+  104通过/4失败，6.35秒。当时agent_ports仍在旧路径，随后逐字节迁入本包，
+  `pytest senior_control/tests/test_agent_ports.py -q`七项复用通过；没有把重跑相加宣称新覆盖。
+- `git archive 3e7cf31`临时基线，原解释器运行
+  `pytest tests/integration/test_manual_wire.py ros2/tests/test_terminal_release_wire.py -q --tb=short`：33通过/完全相同4失败。
+  三个manual_wire旧夹具缺CommandNode._output_incarnation，一个terminal_release旧夹具缺MotionCoreOutput.controller；
+  未补假属性、删断言或弱化退场规则，真实native/ROS整链未因此得到认证。
+- 原装配用例`test_agent_config.py::test_composition_opens_and_closes_database`追加实际client/DB引用观察，
+  保留原关闭断言并定向复跑：1通过，11.34秒。最初新增观察误读Agent._tasks，
+  按真实Dispatcher._tasks._store修正并以finally执行原release，未补属性或移除原断言；失败测试进程已清理。
+- 五个原适配类和任务工厂按明示接缝规范化AST审计一致；RuntimeState/StateReply/PoseReply/Home、
+  AgentConfig/run_agent/media业务体保持；原测试字节、IPC/诊断/Clock/DB/媒体字节保持。
+  原task_poses的MapRef cast仅静态用途，canonical Store已接受只读MapReference，
+  现直接传原任务上的同一运行时对象，不新增运行时校验。
+- `MYPYPATH=senior_control/src:contracts/src mypy senior_control/src/vehicle_manager`：71源码仍原4项。
+  MYPYPATH取Root pytest原pythonpath后`mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：
+  263源码仍原39项，归一行号与M5A诊断集合一致。原具体Executor类型通过工厂泛型保留，无新增ignore/cast。
+- `uv build --offline senior_control --out-dir /tmp/m5b-wheels`及Root对应构建，manager/Root两个sdist/wheel通过；
+  仓库外基础8包、agent-extra15包和旧SDK32包叠加安装最终生产代码，运行既有工具三个模式及pip check，
+  基础8包、agent-extra15包及SDK32包三模式和三个pip check均通过；核对canonical方法、
+  旧薄子类/MRO、原值/异常/DTO工厂和同SQLite装配。初次SDK旧help子进程15秒超时，
+  原时限未改，默认工具完整重跑通过；未以加长或删除保护绕过。
+  独立manager只验明确接口与导入无Root/ROS，不借SDK装配称独立部署；Root/manager配置、锁、CI不改。
+
+安装和回归中的临时Unix服务仅原测试夹具；未启动开发/实车/仿真服务、部署或推送。
+实际Linux SO_PEERCRED/PR_SET_PDEATHSIG/SOCK_SEQPACKET、ROS/ament/DDS/厂商、媒体、Python3.10和CI未验；
+原native/SLAM安装仍UNVERIFIED。管理生产仍需Root配置/具体值/诊断/IPC/媒体及执行provider绑定，
+并未完成独立生产部署。下一片共享安装归属仍待确认，不用根runtime、WS扩张或复制owner绕过。

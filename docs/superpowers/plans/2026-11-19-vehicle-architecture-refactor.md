@@ -107,6 +107,7 @@ src/senior_control/                        # 尚未迁完的现有生产实现�
 | B6.M4A 操作与两条监管链已迁 | 原cli/profile、vehicle_deploy、docker_start_helper/simulation_cli管理职责 → `vehicle_manager/{profile,cli,deployment,service,simulation,platform_ports}` | 原模块/签名/systemd配置保持，原技术owner逐调用注入；共享socket函数归既有IPC且ROS不再读管理helper；23文件与旧失败/兼容安装见M4A记录，ROS launch及独立部署后置 |
 | B6.M4B 组合入口已归位 | 原real_runtime → senior_robot；simulation_motion/RGBD → senior_sim；manager实际调用更新 | 原预检字节、全部launch声明/default与配置保持；旧Include和预检Compatible；Python wheel/SDK已验，实际ROS/ament安装及独立管理部署未验，详见M4B |
 | B6.M5A 管理观测与Agent CLI已迁 | Root observability与Agent main驱动 → vehicle_manager/observability、agent/application | 旧公开观测同对象、原main签名Compatible逐次接原配置/run_agent，12文件、原17项及安装验证见M5A；共享技术边界和管理独立生产部署仍后置 |
+| B6.M5B 本地请求与任务工厂已迁 | IpcMotion/TaskAwareMotion、IpcMapPort/IpcNavigation/IpcState → manager agent ipc_*；任务工厂 → 原manager composition | 原具体类型/异常/DTO及DB/IPC/诊断仍原owner注入，旧构造Compatible，九客户端/timeout与终端规则保持；复用既有接口使实际范围小于预报，见M5B |
 | B7 后置：既有导航迁移，再实现新导航 | `src/senior_control/navigation.py`、`src/senior_control/hardware_navigation.py`、`ros2/src/senior_robot/senior_robot/navigation_adapter.py` 与现有 Nav2 对接 → `senior_navigation` | 既有导航在此前批次保留可用；依赖 B3/B4 的运动接口和 B5 的地图/定位接口稳定，先迁原目标/进度/取消/装配行为，再实现前沿探索等新算法；所有运动仍经共同控制，导航新算法不得前置 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
@@ -680,3 +681,21 @@ manager67源码仍原4项，全链259源码仍原39项，无新增诊断。
 生产入口仍由Root提供真实工厂/车内值异常、同DB协调、IPC/诊断与媒体绑定，不宣称独立管理生产部署。
 后片共享IPC/诊断/帧及车内公开值安装归属待负责人确认，不新增根runtime或扩大WS契约绕过；
 原ROS/Linux/厂商实测缺口与native/SLAM UNVERIFIED保留，导航算法仍最后。
+
+
+### B6.M5B 本地请求适配与真实工厂归位
+
+基线3e7cf31；五个请求适配类业务归manager/agent/ipc_motion、ipc_navigation、ipc_state，
+local_ports仅原client形状和逐实例原异常/构造引用，复用既有Requester，无新传输或公共值owner。
+原build_task_runtime归manager既有composition，原具体TaskExecutor/NavigationEffects由Root边界逐次传入。
+生产同DB/Store/journal、9客户端及1000/3000ms、锁/Home协调、pose代次/0.5秒及原valid_until、
+unknown仅查、离线已接受任务和旧退场不撤新手动保持，Root旧薄子类Compatible，非同类但业务唯一。
+RuntimeState/StateReply/PoseReply/Home接线、值/异常、Unix codec/peer、Clock/诊断/媒体和ROS权威原位，
+不扩WS、不新建项目、不改算法、不声称管理独立部署。
+实际14逻辑文件：产品8/测试2/配置0/工具文档4，新增4修改9迁移1删除0；
+复用已交付bootstrap/安装声明使闭包小于30–42预报，不为数量添加门面或配置。
+原选集104通过/4失败，3e7cf31归档复现相同四个旧控制夹具失败；未补假属性或弱化保护。
+原agent_ports逐字节迁入manager测试，原装配例保留断言并观察真实9client/DB引用，无新增pytest场景。
+五类/工厂规范化AST与原DTO/其他owner字节审计保持，manager71源码仍旧4项、全链263源码仍旧39项。
+实际目录、命令版本、安装/定向结果与平台缺口见[manager M5B](../../../senior_control/README.md#m5b-本地请求适配与真实任务工厂)。
+后续共享安装/媒体与执行provider边界仍按此前只读清单待审；真实ROS/Linux缺口及native/SLAM UNVERIFIED保留。

@@ -12,7 +12,22 @@ from pathlib import Path
 
 def verify_manager_agent(*, network: bool = False) -> None:
     from vehicle_manager import agent
-    from vehicle_manager.agent.composition import run_agent
+    from vehicle_manager.agent.composition import build_task_runtime, run_agent
+    from vehicle_manager.agent.ipc_motion import IpcMotion, TaskAwareMotion
+    from vehicle_manager.agent.ipc_navigation import IpcMapPort, IpcNavigation
+    from vehicle_manager.agent.ipc_state import IpcState
+
+    assert all(
+        callable(value)
+        for value in (
+            build_task_runtime,
+            IpcMotion,
+            TaskAwareMotion,
+            IpcMapPort,
+            IpcNavigation,
+            IpcState,
+        )
+    )
     from vehicle_manager.agent.connection import HeartbeatFrame, Link, MotionPort
     from vehicle_manager.agent.main import Agent
 
@@ -497,6 +512,27 @@ def verify_legacy_task_store() -> None:
     for name in ("run", "_session", "dispatch", "_collect", "request_shutdown", "_release"):
         assert getattr(LegacyAgent, name) is getattr(ManagerAgent, name)
     assert issubclass(MotionRejected, IpcError)
+    from vehicle_manager.agent.ipc_motion import IpcMotion as ManagerMotion
+    from vehicle_manager.agent.ipc_motion import TaskAwareMotion as ManagerTaskMotion
+    from vehicle_manager.agent.ipc_navigation import IpcMapPort as ManagerMaps
+    from vehicle_manager.agent.ipc_navigation import IpcNavigation as ManagerNavigation
+    from vehicle_manager.agent.ipc_state import IpcState as ManagerState
+
+    from senior_control.agent.connection import IpcMotion as LegacyMotion
+    from senior_control.agent.ports import RuntimeState, StateReply
+    from senior_control.navigation import RoutePlan
+
+    for legacy, canonical, methods in (
+        (LegacyMotion, ManagerMotion, ("_ok", "manual", "learning", "close")),
+        (TaskAwareMotion, ManagerTaskMotion, ("manual", "send_intent", "bind_tasks")),
+        (IpcMapPort, ManagerMaps, ("_call", "export", "import_", "clear")),
+        (IpcNavigation, ManagerNavigation, ("_call", "task_effect", "task_effect_status")),
+        (IpcState, ManagerState, ("read",)),
+    ):
+        assert legacy is not canonical and issubclass(legacy, canonical)
+        for method in methods:
+            assert getattr(legacy, method) is getattr(canonical, method)
+    assert issubclass(TaskAwareMotion, LegacyMotion)
     assert ManualOperationResult.__bases__ == (OperationResult,)
 
     import subprocess
@@ -629,6 +665,15 @@ def verify_legacy_task_store() -> None:
             assert capture._values.map_reference is MapRef
             assert capture._values.pose is Pose2D and capture._values.error is DomainError
             state = IpcState(client)
+            assert state._parse_state == StateReply.model_validate
+            assert state._state_factory is RuntimeState and state._map_reference is MapRef
+            assert state._error is DomainError and state._ipc_error is IpcError
+            assert navigation._values.route_plan is RoutePlan
+            assert navigation._values.route_rejected is RouteRejected
+            assert navigation._values.pose is Pose2D
+            assert navigation._values.error is DomainError
+            assert navigation._values.ipc_error is IpcError
+            assert navigation._waypoints is points and navigation._tasks is store
             assert state is not capture._state and state._client is capture._state._client
             workspace = WorkspaceReader("robot", store, points, client)
             actions = LifecycleNavigationOperations(executor, state, workspace, points)
@@ -649,6 +694,8 @@ def verify_legacy_task_store() -> None:
                 disable_client=IpcClient(directory / "unused.sock", robot_id="robot"),
                 safety_client=IpcClient(directory / "unused.sock", robot_id="robot"),
             )
+            assert motion._errors.domain is DomainError and motion._errors.ipc is IpcError
+            assert motion._errors.rejected is MotionRejected
             installed_agent = LegacyAgent(
                 "robot",
                 connector=connector,

@@ -5,11 +5,11 @@ import logging
 import os
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TypeVar
 
 from vehicle_manager.agent.bootstrap_ports import (
     AgentBootstrapPorts,
@@ -22,13 +22,43 @@ from vehicle_manager.agent.settings_wire import SettingsRuntime
 from vehicle_manager.settings.models import vehicle_settings_profile
 from vehicle_manager.settings.service import RuntimeGate, SettingsService
 from vehicle_manager.settings.store import SettingsStore
+from vehicle_manager.storage.database import Database
 from vehicle_manager.tasks.executor import TaskExecutor
 from vehicle_manager.tasks.lifecycle import Context
-from vehicle_manager.tasks.lifecycle_store import ContextProvider
+from vehicle_manager.tasks.lifecycle_service import LifecycleService
+from vehicle_manager.tasks.lifecycle_store import Admission, ContextProvider, LifecycleStore
 from vehicle_manager.tasks.models import ExecutionContext
+from vehicle_manager.tasks.navigation_port import NavigationEffects, TaskNavigation
+from vehicle_manager.tasks.runtime import TaskRuntime
+from vehicle_manager.tasks.store import TaskStore
 from vehicle_manager.vehicle_logs.store import VehicleLogStore
 
 logger = logging.getLogger("senior_control.agent")
+ExecutorT = TypeVar("ExecutorT", bound=TaskExecutor)
+
+
+def build_task_runtime(
+    database: Database,
+    tasks: TaskStore,
+    navigation: TaskNavigation,
+    *,
+    boot_id: str,
+    connected: Callable[[], bool] | None = None,
+    admission: Admission | None = None,
+    executor_factory: Callable[..., ExecutorT],
+    navigation_effects: Callable[..., NavigationEffects],
+) -> tuple[TaskRuntime, ExecutorT]:
+    """Assembly only; all transitions and effects stay in the task driver/ports."""
+    durable = LifecycleStore(tasks, boot_id=boot_id, admission=admission)
+    effects = navigation_effects(durable, navigation)
+
+    def current() -> Context:
+        value = executor.current_context()
+        return replace(value, connected=connected()) if connected is not None else value
+
+    service = LifecycleService(durable, effects, context=current)
+    executor = executor_factory(database, tasks, None, lifecycle=service)
+    return TaskRuntime(tasks, executor), executor
 
 
 async def pause_failed_tasks(executor: TaskExecutor) -> bool:

@@ -141,3 +141,10 @@ M5A复用原`tests/unit/test_logging_diagnostics.py`、`tests/integration/test_b
 最初受限bind失败不当作产品失败，也未补假属性。安装工具另外核对真实旧Agent help/78错误退出
 及公开同对象别名；manager基础/agent-extra导入通过不代表独立生产装配完成。
 完整命令、版本和环境限制见[manager M5A](../README.md#m5a-管理观测与agent命令行驱动)。
+
+M5B将原`tests/unit/test_agent_ports.py`逐字节迁入本目录，保留七项原用例和旧真实构造入口。
+`test_agent_config.py`原SQLite打开/关闭装配用例继续调用真实run_agent，观察原九客户端及1000/3000ms、
+同一DB/Store/连接/写锁，原关闭断言不改；没有新增pytest场景或假属性。
+IPC传输/身份/intent、任务ownership、终端/manual等跨边界原用例仍在原位置，未为本片搬改传输owner测试。
+选集104通过/4个同3e7cf31基线旧夹具失败，未弱化控制保护；命令和平台/安装限制见
+[manager M5B](../README.md#m5b-本地请求适配与真实任务工厂)。

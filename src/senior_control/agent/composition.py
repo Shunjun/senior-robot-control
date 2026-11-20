@@ -5,13 +5,14 @@ import logging
 import re
 import time
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from importlib.util import find_spec
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from senior_mapping.workspace_export import load_exported_grid
 from vehicle_manager.agent.bootstrap_ports import AgentBootstrapPorts, MediaBinding
+from vehicle_manager.agent.composition import build_task_runtime as _build_task_runtime
 from vehicle_manager.agent.composition import pause_failed_tasks as pause_failed_tasks
 from vehicle_manager.agent.composition import run_agent as _run_agent
 from vehicle_manager.agent.snapshot_state import SnapshotState as _SnapshotState
@@ -43,9 +44,7 @@ from senior_control.runtime.ipc import IpcClient
 from senior_control.runtime.lifecycle_events import READ_FD, observe
 from senior_control.storage.database import Database
 from senior_control.tasks import TaskExecutor, TaskStore
-from senior_control.tasks.lifecycle import Context
-from senior_control.tasks.lifecycle_service import LifecycleService
-from senior_control.tasks.lifecycle_store import Admission, LifecycleStore
+from senior_control.tasks.lifecycle_store import Admission
 from senior_control.tasks.navigation_port import NavigationEffects, TaskNavigation
 from senior_control.tasks.runtime import TaskRuntime
 from senior_control.vehicle_logs.service import VehicleLogService
@@ -166,17 +165,17 @@ def build_task_runtime(
     connected: Callable[[], bool] | None = None,
     admission: Admission | None = None,
 ) -> tuple[TaskRuntime, TaskExecutor]:
-    """Assembly only; all transitions and effects stay in the task driver/ports."""
-    durable = LifecycleStore(tasks, boot_id=boot_id, admission=admission)
-    effects = NavigationEffects(durable, navigation)
-
-    def current() -> Context:
-        value = executor.current_context()
-        return replace(value, connected=connected()) if connected is not None else value
-
-    service = LifecycleService(durable, effects, context=current)
-    executor = TaskExecutor(database, tasks, None, lifecycle=service)
-    return TaskRuntime(tasks, executor), executor
+    """//Compatible: same database/stores and original concrete execution/error constructors."""
+    return _build_task_runtime(
+        database,
+        tasks,
+        navigation,
+        boot_id=boot_id,
+        connected=connected,
+        admission=admission,
+        executor_factory=TaskExecutor,
+        navigation_effects=NavigationEffects,
+    )
 
 
 # //Compatible: the task pause policy is the same canonical function.
