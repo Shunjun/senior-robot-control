@@ -1812,3 +1812,54 @@ python/ruff/mypy来自主仓库原 `.venv/bin`，uv使用 `UV_CACHE_DIR=/tmp/veh
 本轮仅原受控测试RTC/socket/SQLite夹具，没有启动开发/实车/仿真服务或VM，没有部署/推送。
 实际ROS/rclpy/ament/Linux/厂商加载与设备、Python3.10和CI未验；安装工具导航ROS和原native/SLAM仍UNVERIFIED。
 独立manager生产安装仍需核定Root发行定位和共享诊断/值/原媒体学习与地图读取边界，不提前变更已定目录或生产入口。
+
+## 单文件 Shell CLI（618a553 后续批次）
+
+`bin/senior-robot.sh` 是唯一 Shell 源，独立复制为 PATH 命令，不编译。Shell 拥有 help、命令与参数解析、隐藏配对交互、restart 和 journal 路由；不把整串 argv 交给旧 argparse。
+
+```text
+bin/senior-robot.sh
+  native → 项目 .venv → senior_control.operator_actions（原 SDK 逐次绑定）
+                         → vehicle_manager.operator_actions → cli.execute → 原 owners
+  docker → host inspect / systemd / journal
+         → 已运行容器项目 .venv → 同一固定动作绑定
+                               → 原 profile / 凭据 / 原子写入 / IPC / runtime
+旧 python -m senior_control.cli → Compatible argparse → 同一 cli.execute
+```
+
+- `senior-robot start/stop/restart/status/logs` 管宿主机，`senior-robot docker ...` 管本项目 Docker 服务。pair/doctor/deploy 也使用相同分组；未新增 Docker 仿真。
+- 两种模式只在所选运行位置准备项目 `.venv`，Humble 须使用匹配的系统 Python 与 system-site-packages。Docker 宿主机无 Python；Shell 依赖 Bash、jq、Docker、GNU timeout、systemd 等系统工具。native 解释器来自 `project_dir/.venv/bin/python` 或绝对路径 `SENIOR_ROBOT_PYTHON`，Docker 忽略宿主 Python 覆盖。
+- 原 credentials/TLS/目录校验先于隐藏提示，stdin 传码，不进 argv/env/日志；显式关闭回显并在退出/中断恢复，无法安全设置终端则拒绝读取。Docker 配对按调用操作者 UID/GID 运行，保留原凭据属主；既有文件仍由原原子实现拒绝覆盖。
+- 停止容器的 Docker dry-run/start 只 inspect 后非零退出，不 exec/start/run、不写配置/unit、不调用 systemctl。运行中预览在容器 `.venv` 使用同一渲染器完整生成；新 unit 无自动 docker start。旧 Python Compatible 入口仍允许原停机预览和原默认启动流程，未删旧断言。
+- Docker 正式部署仍写同一映射目录，以原 `_install_once`/`install_artifacts` 保留原子防覆盖和 0600/0644；Shell 在宿主 link/reload，失败或取消后按文件 inode 收据与确切链接回滚。若容器/传输在写入后失联、无法得到收据或完成回滚，会非零失败，需检查已有文件，不能盲删后重试；真实故障交互仍需 Linux/Docker 验证。
+- stop/status 保留确切旧 Docker unit 的管理；start 另核对新渲染内容，拒绝用旧自动启动共享容器的 unit。native 不会操作 Docker unit。restart 仅在原停止成功后启动，原 helper/IPC/guard 停机顺序和同 DB/九客户端保持。日志读取宿主项目 journal，仿真 user scope；Docker 日志可在容器停着时读取，不使用只反映容器 PID1的 docker logs。
+- 语法2，业务非零，缺工具/解释器127，原系统工具退出码保留；GNU timeout 超时124。没有把进程 active 当作 IPC/云/运动资格。
+
+安装：`install -m 0755 bin/senior-robot.sh <PATH目录>/senior-robot`。Root wheel 已撤掉同名 console-script 注册；升级旧 wheel 后检查 `type -a senior-robot`，不要让旧 venv 脚本遮盖新 Shell。原 Python module/API 与签名仍显式 Compatible。固定动作采用已有原 SDK 平台绑定，尚未完成无旧 SDK 的 manager 独立生产发行，也未改共享 IPC/诊断/Clock/媒体 owner 或 WS/ROS 协议。
+
+### 实际范围与验收
+
+22 逻辑文件，增4改18删0，未新增项目：
+
+| 类别 | 新增 | 修改 |
+| --- | --- | --- |
+| 产品7 | `bin/senior-robot.sh`；`src/senior_control/operator_actions.py`；`senior_control/src/vehicle_manager/operator_actions.py` | manager `cli.py`、`deployment.py`、`platform_ports.py`、`simulation.py` |
+| 测试3 | `senior_control/tests/test_shell_cli.py` | 同目录 `test_vehicle_cli.py`、`test_control_directory_cli.py` |
+| 配置构建3 | 无 | 根 `pyproject.toml`、`deploy/senior-agent.service`、`.github/workflows/backend.yml` |
+| 工具文档9 | 无 | 根/manager README；确认稿；原实施计划；operations 的 vehicle-deploy/simulation/hardware/ros-interface-rebuild；`tools/verify_batch_one_install.py` |
+
+已选 Shell 检查有8个测试函数：无 Python help/语法、独立 PATH/参数边界、restart 停后启及失败、journal scope与退出码、停止 Docker 预览/start 零副作用、运行中容器 `.venv` 原预览、真实 PTY 隐藏输入/恢复、Docker 操作者身份/已有凭据与原配对准入。原 CLI/目录测试保留原断言，只将已确认运行环境期望改 `.venv`，并在原 pair/lifecycle 场景补实际固定动作调用；没有迁/改旧任务或控制夹具。
+
+环境：macOS arm64，Bash 3.2.57，Python 3.12.15，pytest 8.4.2，ruff 0.17.3，mypy 2.4.0，uv 0.12.23。下列 Python/ruff/mypy 使用原主仓 `.venv/bin`；构建/安装使用 `UV_CACHE_DIR=/tmp/vehicle-uv-cache`。
+
+- `bash -n bin/senior-robot.sh`，改动 Python 的 `ruff check` / `ruff format --check`，`git diff --check`：通过。
+- 首轮 Shell 测试在脚本不存在时5失败，补实现后通过；新增 Docker 运行预览捕获并修正 Bash3 `set -u` 空数组兼容问题，现有保护未删除。PTY 在普通沙箱因 TIOCGETD 拒绝而失败；扩大测试权限后，隐藏输入、xtrace不泄漏和终端恢复通过，产品仍在无法关闭回显时安全失败。
+- 最终定向命令：`python -m pytest senior_control/tests/test_shell_cli.py senior_control/tests/test_vehicle_cli.py senior_control/tests/test_control_directory_cli.py senior_control/tests/test_docker_start_helper.py senior_control/tests/test_agent_config.py senior_control/tests/test_agent_ports.py tests/integration/test_task_ownership.py tests/unit/test_task_terminal_release.py -q --tb=short --junitxml=/tmp/shell-cli-final.xml`：**104通过、1跳过、26旧错误**，11.46秒，退出1。
+- 跳过原 Linux Unix peer credentials 项；26错误均原退役夹具访问 `MotionCoreOutput.controller`。`git archive 618a553` 至 `/tmp/shell-cli-baseline`，相同原7份清单（不含新增 Shell）普通沙箱下当前/基线均90通过、1跳过、6权限失败、26相同错误；错误ID逐条相同。扩大权限后原 socket/关停/Agent 6项通过。日志见 `/tmp/shell-{current,baseline}-tests.txt` 与 `/tmp/shell-cli-final-tests.txt`，未补假属性或弱化断言。
+- 全链 mypy：`MYPYPATH=<原pytest pythonpath> mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`，当前272源码与基线270源码均39旧错误，归一行号后诊断逐条一致；曾发现新绑定返回类型1项，已修正后恢复基线39。
+- `uv lock --check --offline`通过，原锁无需变更。`uv build --offline --out-dir /tmp/shell-cli-wheels` 与 `uv build senior_control --offline --out-dir /tmp/shell-cli-wheels`：Root/manager sdist和wheel通过。
+- 新建 `/tmp/shell-cli-sdk`，安装新Root/manager wheel与既有9份闭包wheel（26包），单独复制 Shell 到其 bin；从 `/tmp` 运行 `python <仓库>/tools/verify_batch_one_install.py`：实际原工厂/同DB/任务/媒体/类型身份/旧module help和错误退出、新固定入口、无 Python Shell help/语法及无同名console注册通过；`uv pip check --python /tmp/shell-cli-sdk/bin/python`通过。首次安装命令误用相对 Shell 路径，校验如实因未安装脚本失败，改为绝对源路径后通过。
+- `/tmp/shell-manager-wheel` 单独安装 manager/contracts（8包），离仓库导入 `vehicle_manager.operator_actions` 来自 site-packages，无 Root/cloud/ROS wheel；只证明包边界与固定动作可导入，平台绑定仍需原 SDK。
+- Docker 只读 `docker version --format '{{.Server.Version}}'`：普通沙箱先拒绝 socket，扩大只读权限后明确 daemon 不可连接；未启动 Docker/容器。Docker 行为由原替身与真实 Python 渲染验证，未声称真实 Docker/systemd link/rollback 或镜像运行通过。
+
+未验：真正 Linux/systemd 用户/系统 unit、Humble/ament/厂商设备、真实容器/UID映射/取消断连回滚、真实仿真及车辆、Python3.10/CI。安装工具的导航 executable/share、native接收/守卫和SLAM继续明确 UNVERIFIED。只用了原受控本地子进程/socket/SQLite及PTY夹具，未启动开发、实车、仿真服务、容器或 VM，未部署或推送。后续 B8 和共享发行/平台独立部署边界由负责人另行审阅推进。

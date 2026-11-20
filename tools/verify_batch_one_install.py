@@ -239,7 +239,7 @@ def verify_manager_operator() -> None:
         assert profile.credentials == root / "device.json" and profile.socket == root / "agent.sock"
         rendered = deployment.render_service(profile, "1000", container_root=None)
         assert "KillMode=mixed" in rendered and "RestartPreventExitStatus=78" in rendered
-        assert "/opt/robot/.ros-venv/bin/python" in rendered
+        assert "/opt/robot/.venv/bin/python" in rendered
         assert "senior_control.docker_start_helper" in rendered
         assert deployment.environment(profile, root).count("SENIOR_") == 4
     assert not any(
@@ -317,6 +317,47 @@ def verify_legacy_operator() -> None:
         )
         assert "usage:" in result.stdout
     console = Path(sys.executable).with_name("senior-robot")
+    assert console.read_bytes().startswith(b"#!/bin/bash\n")
+    assert not any(
+        entry.name == "senior-robot"
+        for entry in importlib.metadata.distribution("senior-control").entry_points
+    ), "install the single Shell source separately; do not shadow a console-script"
+    import os
+
+    without_python = dict(os.environ, PATH="/nonexistent")
+    independent = subprocess.run(
+        [str(console), "--help"],
+        cwd="/tmp",
+        env=without_python,
+        capture_output=True,
+        text=True,
+        timeout=15,
+        check=True,
+    )
+    assert "restart" in independent.stdout and "docker" in independent.stdout
+    syntax = subprocess.run(
+        [str(console), "start", "--headless", "invalid"],
+        cwd="/tmp",
+        env=without_python,
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert syntax.returncode == 2
+    from vehicle_manager import operator_actions as actions_owner
+
+    from senior_control import operator_actions as installed_actions
+
+    assert installed_actions.execute is actions_owner.main
+    assert installed_actions.docker_action is actions_owner.docker_action
+    fixed = subprocess.run(
+        [sys.executable, "-m", "senior_control.operator_actions"],
+        cwd="/tmp",
+        capture_output=True,
+        text=True,
+        timeout=15,
+    )
+    assert fixed.returncode == 2 and "Invalid normalized operator request" in fixed.stderr
     result = subprocess.run(
         [str(console), "--help"], cwd="/tmp", capture_output=True, text=True, timeout=15, check=True
     )

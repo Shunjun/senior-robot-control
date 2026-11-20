@@ -775,3 +775,14 @@ Root依赖/CLI/systemd、DrivingSettings公开值、IPC/诊断/Clock/策略均�
 Root发行是否最终作为公共core、共享值/诊断单实例及真实媒体/学习/地图读取执行边界仍为待定，
 未新增顶层项目/发行，也不把提案写成决定；后片需负责人审核与预报后实施。
 B8实际ROS/Humble/Linux与真实仿真/设备验收仍待环境，缺失新算法留原模块实现阶段。
+
+
+### Shell CLI 批次（基线 618a553）
+
+用户确认根 `bin/senior-robot.sh` 单 Shell 源独立安装到 PATH 为 `senior-robot`，拥有实际解析/help/交互；native 默认命令，Docker 显式 `docker` 分组，两模式均以项目 `.venv` 为目标，Docker 宿主机无 Python，restart 停成功再启动，logs 读取项目 journal。Docker 只管理项目进程/unit，不停止共享容器，不新增 Docker 仿真。
+
+总预算 22 逻辑文件：产品 7（增3改4）、测试3（增1改2）、配置3改、工具文档9改，合增4改18删0。先修改本确认记录，再接固定 Python 动作与原 owner，不重跑旧 argparse；先验 Shell 无 Python help/语法、独立 PATH、参数边界/restart/凭据与日志保护及原 CLI 回归。不得提前改变 IPC/guard/ROS 算法或宣称管理独立部署。
+
+用户随后明确停止容器的预览直接失败，冻结已解除：新 Shell 只 inspect 判定停止后非零退出，既不 exec/start/run也不写配置/unit/systemctl；已运行容器使用其 `.venv` 中固定动作完整预览。Docker start 同样要求共享容器已运行，新 unit 无自动 docker start。原 Python Compatible 入口仍可执行原停机预览与旧启动流程，不删除原断言。
+
+Shell 直接管理宿主 systemd/journal，Python 逐次提供原 profile、渲染、原子写入、凭据、IPC探针与实际运行 owner；固定请求不是旧 argparse 的二次解析。新 Docker deploy 使用挂载目录同一原子写入器，宿主 link/reload失败以原文件身份收据回滚；unit/config不一致拒绝启动，native不操作Docker unit。独立 Shell 安装与 wheel 解绑，CI 安装单脚本后验旧 module兼容和新动作，不宣称 manager 独立部署。实际文件及命令/基线/缺口见管理 README 的 Shell CLI 记录；B8真实Linux/Humble/车辆验收与共享发行边界仍未完成。

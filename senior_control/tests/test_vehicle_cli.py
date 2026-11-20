@@ -1,8 +1,10 @@
 import json
+from io import StringIO
 from pathlib import Path
 
 import pytest
 from vehicle_manager import cli as cli_owner
+from vehicle_manager import operator_actions
 from vehicle_manager import simulation as simulation_owner
 
 from senior_control import cli
@@ -45,6 +47,13 @@ def test_lifecycle_uses_default_simulation_profile(default_profile, monkeypatch,
 
     monkeypatch.setattr(simulation_cli, "lifecycle", lifecycle)
     assert cli.main([command]) == 0
+    assert (
+        operator_actions.main(
+            [command, "profile", str(default_profile), "true", "false", "", ""],
+            ports=cli._ports(),
+        )
+        == 0
+    )
 
 
 def test_deploy_requires_explicit_real_profile(default_profile, monkeypatch):
@@ -105,6 +114,15 @@ def test_pair_prompts_and_uses_tls(tmp_path: Path, monkeypatch) -> None:
                 "--name",
                 "test",
             ]
+        )
+        == 0
+    )
+
+    assert (
+        operator_actions.main(
+            ["pair", "profile", str(profile), "true", "false", "https://example.test", "test"],
+            ports=cli._ports(),
+            secret_input=StringIO("one-time code\n"),
         )
         == 0
     )

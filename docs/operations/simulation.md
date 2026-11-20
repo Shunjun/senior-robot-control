@@ -12,23 +12,24 @@
 
 需要带 systemd 用户会话的 Ubuntu 22.04、ROS 2 Humble 和 Gazebo Fortress。历史传感器契约环境为 Ubuntu 22.04.5 aarch64 / Fortress 6.18.0，该记录不代表当前完整安全、导航链已通过。需要预先安装对应官方 ROS / Gazebo 二进制及 `ros_gz_sim`、`ros_gz_bridge`、`gz_ros2_control`、`controller_manager`、`diff_drive_controller`、`joint_state_broadcaster`、`robot_state_publisher`、`xacro`，并提供 Python 3.10 venv/pip、rosdep、colcon 和本机构建工具。无窗口模式还需要 `xvfb`、`xauth`、`mesa-utils` 与可用的渲染环境。
 
-下列命令供操作者在仿真机执行，从项目根目录开始。只有克隆仓库还没有 CLI；本页使用 ROS 运行环境 `.ros-venv` 安装并执行 CLI，因为仿真监督进程和 Agent 使用启动 CLI 的 Python。不要用实车宿主机那份不含 ROS 的 `.venv` 代替它。
+下列命令供操作者在仿真机执行，从项目根目录开始。只有克隆仓库还没有 CLI；CLI 单文件安装到 PATH，Python 运行仅使用项目 `.venv`，需包含原 ROS/仿真依赖；原监督进程和 Agent 由该解释器启动，不另设 CLI 虚拟环境。
 
 ```sh
 git clone https://github.com/Shunjun/senior-robot-control.git
 cd senior-robot-control
+sudo install -m 0755 bin/senior-robot.sh /usr/local/bin/senior-robot
 source /opt/ros/humble/setup.bash
-python3.10 -m venv --system-site-packages .ros-venv
-.ros-venv/bin/python -m pip install -e '.[agent,safety,ros]'
+python3.10 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install -e '.[agent,safety,ros]'
 rosdep update --rosdistro humble
 rosdep install --from-paths ros2/src --ignore-src -r -y --rosdistro humble
 cd ros2
-../.ros-venv/bin/python -m colcon build --packages-up-to senior_sim senior_robot
+../.venv/bin/python -m colcon build --packages-up-to senior_sim senior_robot
 source install/setup.bash
 cd ..
 ```
 
-ROS 的 `rclpy` 由已安装的 ROS 提供，`--system-site-packages` 使该环境可访问它。用 `.ros-venv` 的解释器构建，避免系统 colcon 生成的入口找不到项目模块。每个新终端加载 ROS 底层与本项目 `ros2/install/setup.bash`。具体 ROS 传感器契约与手动独立 launch 见 [ros2/README.md](../../ros2/README.md)；不要与下文 CLI 管理的同一实例重复启动。
+ROS 的 `rclpy` 由已安装的 ROS 提供，`--system-site-packages` 使该环境可访问它。用 `.venv` 的解释器构建，避免系统 colcon 生成的入口找不到项目模块。每个新终端加载 ROS 底层与本项目 `ros2/install/setup.bash`。具体 ROS 传感器契约与手动独立 launch 见 [ros2/README.md](../../ros2/README.md)；不要与下文 CLI 管理的同一实例重复启动。
 
 ## 2. 先创建统一目录与配置
 
@@ -62,16 +63,16 @@ chmod 700 "$HOME/senior-control"
 先在云端网页为此仿真实例生成一次性配对码，再在仿真机项目根目录执行，按交互提示输入；不要将配对码或 token 写进命令行或文档。已有凭据拒绝覆盖；旧凭据被删除且无备份时要重新配对。
 
 ```sh
-.ros-venv/bin/senior-robot pair --cloud-url wss://robot.example.com/ws/agent --name '隔离仿真'
-.ros-venv/bin/senior-robot doctor
-.ros-venv/bin/senior-robot start
-.ros-venv/bin/senior-robot status
-.ros-venv/bin/senior-robot stop
+senior-robot pair --cloud-url wss://robot.example.com/ws/agent --name '隔离仿真'
+senior-robot doctor
+senior-robot start
+senior-robot status
+senior-robot stop
 ```
 
 以上默认使用 `~/senior-control`。自选目录时，每条命令都显式追加 `--control-dir /home/sim/another-sim`，并先在该目录创建 `config.json`。仿真无需执行实车 `deploy`；`start` 通过 `simulation_cli.py` 创建 systemd 用户服务，先启动 ROS 仿真入口并完成适配器握手，随后启动 Agent，停止先 Agent 后本次仿真。它不管理其他实例或厂商进程。
 
-`doctor` 不启动 Gazebo、设备或 ROS 节点。另需检查 ROS 参数文件时，可在项目根目录执行 `.ros-venv/bin/python tools/doctor.py config/simulation.yaml`；没有运行 ROS 图时实时项为 `not_run`，不代表通过。检查和构建不会自动下载模型权重。
+`doctor` 不启动 Gazebo、设备或 ROS 节点。另需检查 ROS 参数文件时，可在项目根目录执行 `.venv/bin/python tools/doctor.py config/simulation.yaml`；没有运行 ROS 图时实时项为 `not_run`，不代表通过。检查和构建不会自动下载模型权重。
 
 查看日志也在仿真宿主机，以同一普通用户执行：
 
@@ -90,7 +91,7 @@ journalctl --user -u "$unit" -n 100 --no-pager
 窗口，在 Linux 图形桌面的终端执行：
 
 ```sh
-.ros-venv/bin/senior-robot start --headless false
+senior-robot start --headless false
 ```
 
 窗口模式绕过 Xvfb，将当前终端的 `DISPLAY`、`XAUTHORITY` 及相关桌面会话环境传入
@@ -107,7 +108,7 @@ Agent。停止时先给 Agent 时间完成停车与关停，再退出本次服�
 
 ### 工作台实时地图
 
-`.ros-venv/bin/senior-robot start` 的仿真档按 1 倍时间启动标准 Gazebo 输入，并通过 `navigation_enabled:=true` 编排原装 map_server、AMCL 和 Nav2。地图资产由 `senior_sim` 的 `world_reference` 脚本从固定 SDF 生成到本次运行的私有目录，退出时清理；生成通用 `navigation_reference.json`，Agent 使用与实车相同的地图/定位接入。
+`senior-robot start` 的仿真档按 1 倍时间启动标准 Gazebo 输入，并通过 `navigation_enabled:=true` 编排原装 map_server、AMCL 和 Nav2。地图资产由 `senior_sim` 的 `world_reference` 脚本从固定 SDF 生成到本次运行的私有目录，退出时清理；生成通用 `navigation_reference.json`，Agent 使用与实车相同的地图/定位接入。
 定位来自标准 `/amcl_pose`，真值 `/ground_truth/odom` 仅用于环境诊断，不授予控制或导航资格。只有地图、定位、传感器和任务生命周期满足通用检查时才能使用导航。默认不启动 `slam_toolbox`。
 每次导航独立启动控制器和 BT 节点，结束或撤销权限后回收；底盘 drive 在环境中只启动一次。私有导航 Twist 经过项目唯一最终输出 owner 发布 `/cmd_vel`，原装 drive 使用 unstamped Twist 订阅。其他场景和实车仍使用各自明确配置的地图和定位来源。
 
@@ -145,3 +146,5 @@ Agent 沿用每 0.25 秒一次的状态轮询，位置、至多 64 个激光点�
 `tools/vehicle_motion_capture.py` 只读订阅，环境录制显式传 `--use-sim-time`，实车使用默认标准系统 ROS 时钟。当前记录 schema 为 2：带测量 header 的行使用 `time` 的五个必填整数域 `stamp_ns`、`received_ros_ns`、`received_steady_ns`、`sample_steady_ns`、`clock_generation`；派生扫描另保留完整 `first_time` / `last_time`，后续回放不重新映射。`received_steady_ns` 表示本次录制回调，与原始测量记录分开。`/clock` 行仅记 `data.clock_ros_ns` 与回调 steady，不声称测量身份。无 header 的状态/命令只保留回调时间。
 
 旧捕获文件没有自动兼容入口；缺原始 receipt 的历史几何只能作为明确标记的合成数据，不能证明采集年龄。`vehicle_motion_analyze.py` 保留故障窗口和区间平均分析，不给出物理停车或整车资格结论；录制缺流、解码/时间错误会明确报告 incomplete。离线 `scan_matcher_replay.py` 保留 capture 时间记录并按原顺序输出几何输入，不模拟 DDS/TF 接纳或重新证明年龄。
+
+Shell `senior-robot restart` 仅在原 stop 成功后 start，`senior-robot logs --follow` 直接读取同一 transient user unit journal。此仿真仍是宿主机模式，不支持 docker 分组仿真。

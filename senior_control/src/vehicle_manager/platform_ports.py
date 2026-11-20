@@ -111,3 +111,13 @@ class SimulationPorts:
     validate_profile: Callable[[VehicleProfile], None]
     remove_stale_socket: Callable[[Path], None]
     supervise: Callable[..., Coroutine[Any, Any, int]]
+
+
+@dataclass(frozen=True)
+class DockerOperatorPorts:
+    """Existing runtime effects inside the selected, already-running container."""
+
+    runtime_profile: Callable[[Path], VehicleProfile]
+    validate_runtime: Callable[[VehicleProfile], None]
+    probe: Callable[..., Coroutine[Any, Any, bool]]
+    max_path: int

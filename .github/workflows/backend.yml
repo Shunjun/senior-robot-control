@@ -15,6 +15,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: uv sync --frozen --group dev --extra safety --extra cloud --extra agent --extra video --extra ros
+      - run: bash -n bin/senior-robot.sh
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
       - run: uv run --no-sync mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud
@@ -33,6 +34,7 @@ jobs:
       - run: |
           python -m venv /tmp/wheel-test
           /tmp/wheel-test/bin/pip install dist/*.whl
+          install -m 0755 bin/senior-robot.sh /tmp/wheel-test/bin/senior-robot
           cd /tmp
           /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config, senior_motion_control.state_machine; import importlib.util; assert importlib.util.find_spec("shapely") is None'
           /tmp/wheel-test/bin/python -c 'import cloud.app, senior_control.cloud.app; from cloud.snapshots import SnapshotCache; from senior_control.cloud.snapshots import SnapshotCache as Old; assert Old is SnapshotCache'

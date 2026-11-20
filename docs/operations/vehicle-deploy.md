@@ -15,15 +15,15 @@
 已有 Docker 容器模式的关系为：
 
 ```text
-宿主机：项目 .venv 中的 CLI → 宿主机 systemd
+宿主机：独立 Shell CLI → 宿主机 systemd
                                   ↓ docker exec
-容器：项目 .ros-venv 中的 Agent ↔ Unix socket ↔ ROS 适配器
+容器：项目 .venv 中的 Agent ↔ Unix socket ↔ ROS 适配器
 ```
 
 | 项目 | 已有 Docker 容器模式 | 非容器模式 |
 | --- | --- | --- |
-| 执行 deploy/start/stop/status 的 CLI | 宿主机项目 `.venv` | 宿主机项目 `.venv` |
-| Agent 使用的 Python | 容器内 `<project_dir>/.ros-venv/bin/python` | 本机 `<project_dir>/.ros-venv/bin/python` |
+| 执行 deploy/start/stop/status 的 CLI | 宿主机 Shell，无 Python | 宿主机 Shell |
+| Agent 使用的 Python | 容器内 `<project_dir>/.venv/bin/python` | 本机 `<project_dir>/.venv/bin/python` |
 | systemd 服务管理器 | 宿主机；容器内不需要 systemd | 本机 |
 | `config.json` 中的 `project_dir` | 容器内实际项目路径 | 本机实际项目路径 |
 | 配置、凭据、数据库和 IPC | 一个已有可写 bind mount 内的统一目录 | 一个本机统一目录 |
@@ -32,25 +32,19 @@
 
 CLI 默认统一目录为执行用户的 `~/senior-control`。用 `--control-dir` 选择其他目录。Docker 模式通过已有挂载自动推导对应的容器内路径；两边不必同名，但必须映射同一批文件。它不会自动新增挂载或重建容器。
 
-## 2. 克隆并在宿主机安装 CLI
+## 2. 安装独立 Shell CLI
 
-在实车宿主机执行。已有仓库可直接进入项目根目录；需要使用包含 `--control-dir`、`--container` 和上述联合启动修复的项目版本，不能仅凭分支名判断已经包含修复。
+在宿主机项目根目录执行（尚未克隆时先克隆仓库）：
 
 ```sh
-# 尚未克隆时执行：
-git clone https://github.com/Shunjun/senior-robot-control.git /home/wheeltec/ros2_shared_dir/senior-robot-control
-
-cd /home/wheeltec/ros2_shared_dir/senior-robot-control
-python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[agent,safety]'
-.venv/bin/senior-robot --help
+sudo install -m 0755 bin/senior-robot.sh /usr/local/bin/senior-robot
+type -a senior-robot
+senior-robot --help
 ```
 
-需要 Python 3.10 或更新版本；系统应提供 `venv` 和 pip。仅克隆不会注册 `senior-robot` 命令，安装项目后入口才会出现在 `.venv/bin` 中。
+单 Shell 文件不编译、不依赖源码相对位置。宿主机应提供 Bash、jq、systemd、GNU timeout，Docker 模式另需 Docker CLI。无 Python 时 help 和语法诊断仍可用；Docker 模式不会调用宿主 Python。Python wheel 已不注册同名 console-script；升级旧环境会移除旧注册项，仍应检查 PATH，避免遗留 venv 脚本遮盖 `/usr/local/bin/senior-robot`。不要盲删其他项目的同名命令。
 
-可选执行 `source .venv/bin/activate`，把该目录加入当前 shell 的 PATH，然后直接输入 `senior-robot`。激活不是必需步骤，本页始终使用显式路径。`sudo` 通常重置 PATH，所以也用 `sudo .venv/bin/senior-robot ...`。
-
-宿主机 `.venv` 只运行 CLI，不要求安装 ROS。不要让宿主机 Python 重建或复用容器的 `.ros-venv`：两边的 Python 版本、ROS 扩展和二进制依赖可能不同。
+native 模式的业务和 ROS 在项目 `.venv` 中，Docker 模式在容器项目 `.venv` 中；只准备选用的运行环境。不得把旧虚拟环境简单改名：须使用与 ROS ABI 一致的 Python 重建（Humble 通常为系统 Python 3.10），保留 `--system-site-packages`。native 用配置 `project_dir` 定位 `.venv/bin/python`，旧 profile 缺少该字段时显式设置绝对路径 `SENIOR_ROBOT_PYTHON`；sudo 会过滤环境，应显式传变量或填好 project_dir。
 
 ## 3. 创建统一目录和 config.json
 
@@ -106,7 +100,7 @@ Docker 模式可在 config.json 添加 `"container": "ros2"`，参照
 
 实车运动启动会先加载 `vendor_ros_setup`（默认 `/home/wheeltec/wheeltec_ros2/install/setup.bash`），再加载本项目 `ros_setup`。厂家底盘、雷达和相机分别复用 `turn_on_wheeltec_robot.launch.py`、`wheeltec_lidar.launch.py` 与 `wheeltec_camera.launch.py`，从厂家的 `wheeltec_param.yaml` 读取车型、IMU 和雷达型号，相机型号同样读取厂家配置；不启动键盘控制或独立厂家导航。相机在 Agent/IPC 就绪后启动，崩溃会报告视频不可用，不会关闭激光运动链；厂家相机驱动的段错误仍需独立排查。所有本次启动的驱动随服务联合停止；不要同时手动启动相同驱动。当前厂家底盘发布 `/odom`（帧 `odom_combined`）、`/imu/data_raw`，雷达发布 `/scan`。旧配套 YAML 的 `wheel_frame: odom` 自动迁移为 `odom_combined`，话题 `/odom` 不改名。
 
-CLI 不会自动创建此配置。将示例云域名换成实际 WSS 云端地址。可显式添加 `ros_setup` 指向实际 ROS overlay 的绝对路径；默认推导为 `project_dir/ros2/install/setup.bash`。该 overlay 必须包含构建时正确加载的 ROS 底层及厂商 underlay。若驱动使用特定 ROS 域，添加与驱动实际一致的 `ros_domain` 整数；不要照搬仿真域或假定为 42。`project_dir` 在 Docker 模式下指容器内的路径，必须能找到 `.ros-venv/bin/python` 和已安装的本项目。Python 路径不单独配置。不要逐项添加 `credentials`、`database`或 `socket` 的其他路径；CLI 从统一目录推导它们。
+CLI 不会自动创建此配置。将示例云域名换成实际 WSS 云端地址。可显式添加 `ros_setup` 指向实际 ROS overlay 的绝对路径；默认推导为 `project_dir/ros2/install/setup.bash`。该 overlay 必须包含构建时正确加载的 ROS 底层及厂商 underlay。若驱动使用特定 ROS 域，添加与驱动实际一致的 `ros_domain` 整数；不要照搬仿真域或假定为 42。`project_dir` 在 Docker 模式下指容器内的路径，必须能找到 `.venv/bin/python` 和已安装的本项目。Python 路径不单独配置。不要逐项添加 `credentials`、`database`或 `socket` 的其他路径；CLI 从统一目录推导它们。
 
 | 文件 | 来源与用途 |
 | --- | --- |
@@ -126,16 +120,18 @@ systemd 只在宿主机 `/etc/systemd/system` 建立指向目录内服务文件�
 
 ## 4. 配对设备
 
-先在云端网页设备列表选择添加设备，生成一次性配对码。在宿主机项目根目录执行，交互式输入配对码：
+Docker 模式先完成第5节容器内安装，并保持共享容器运行。先在云端网页设备列表选择添加设备，生成一次性配对码。在宿主机项目根目录执行，交互式输入配对码：
 
 ```sh
-.venv/bin/senior-robot pair \
+senior-robot docker pair --container ros2 \
   --control-dir /home/wheeltec/ros2_shared_dir/senior-control \
   --cloud-url wss://robot.example.com/ws/agent \
   --name wheeltec
 ```
 
 此处 URL 应与 `config.json` 指向同一云端。配对不需要启动硬件或 Agent。以统一目录所属用户配对，确保 `device.json` 与目录属主一致；不要使用 sudo 配对后留下不匹配的属主。文件已存在时 pair 拒绝覆盖，设备 token 不应写入仓库、命令行参数或日志。
+
+native 模式使用 `senior-robot pair`，其余参数相同。Docker 配对以操作者 UID/GID 执行，沿用原私有目录与文件属主约束。Shell 在原凭据/TLS校验通过后才隐藏读取配对码，无法安全关闭终端回显则失败；凭据不进入 argv、环境或日志，原原子防覆盖写入保持。
 
 ## 5. 在 Agent 的运行环境安装依赖
 
@@ -154,8 +150,8 @@ docker exec -it ros2 bash
 ```sh
 source /opt/ros/humble/setup.bash
 cd /home/wheeltec/ros2_shared_dir/senior-robot-control
-python3 -m venv --system-site-packages .ros-venv
-.ros-venv/bin/python -m pip install -e '.[agent,safety,ros,video]'
+python3 -m venv --system-site-packages .venv
+.venv/bin/python -m pip install -e '.[agent,safety,ros,video]'
 
 # 通过 rosdep 补齐这些实车 ROS 包缺少的依赖；不安装 Gazebo 仿真包：
 rosdep install --from-paths \
@@ -164,7 +160,7 @@ rosdep install --from-paths \
   --ignore-src -r -y --rosdistro humble
 
 cd ros2
-../.ros-venv/bin/python -m colcon build --packages-up-to senior_robot \
+../.venv/bin/python -m colcon build --packages-up-to senior_robot \
   --cmake-args -DBUILD_TESTING=OFF
 source install/setup.bash
 ```
@@ -175,7 +171,7 @@ source install/setup.bash
 
 ### 非容器模式
 
-本机的 `<project_dir>/.ros-venv` 同时承载 Agent 与适配器。按上面的 ROS 安装与构建步骤在本机准备环境，不执行 `docker exec`。只装宿主机 CLI 依赖不足以运行此模式。
+本机的 `<project_dir>/.venv` 同时承载 Agent 与适配器。按上面的 ROS 安装与构建步骤在本机准备环境，不执行 `docker exec`。只装宿主机 CLI 依赖不足以运行此模式。
 
 ## 6. 准备实车 ROS 适配器和安全链
 
@@ -194,38 +190,40 @@ source install/setup.bash
 ### 已有 Docker 容器模式
 
 ```sh
-.venv/bin/senior-robot doctor \
+senior-robot docker doctor \
   --control-dir /home/wheeltec/ros2_shared_dir/senior-control --container ros2
 
-.venv/bin/senior-robot deploy \
+senior-robot docker deploy \
   --control-dir /home/wheeltec/ros2_shared_dir/senior-control --container ros2 --dry-run
 
-sudo .venv/bin/senior-robot deploy \
+sudo senior-robot docker deploy \
   --control-dir /home/wheeltec/ros2_shared_dir/senior-control --container ros2
 
-sudo .venv/bin/senior-robot start \
+sudo senior-robot docker start \
   --control-dir /home/wheeltec/ros2_shared_dir/senior-control
 
-sudo .venv/bin/senior-robot status \
+sudo senior-robot docker status \
   --control-dir /home/wheeltec/ros2_shared_dir/senior-control
 ```
 
-只写 `--container`、不跟名称时，默认容器为 `ros2`。也可以把 `"container": "ros2"` 写入 `config.json`，供 deploy 和 doctor 使用；命令行值优先。start、stop、status 使用已生成的宿主机服务，不能靠给 start 临时添加 `--container` 来切换模式。
+不传容器名时读取配置 container，缺省为 `ros2`；`--container` 可显式指定，不改变持久配置，和已有配置冲突会拒绝。Docker 仿真不在本次实现内。
 
-`--dry-run` 会只读 inspect Docker、推导路径并打印计划，不创建文件、不启动容器或服务。正式 deploy 还检查凭据、权限和容器内 Python。生成的服务通过 `docker_start_helper run/stop` 联合托管适配器与 Agent；宿主机 systemd 在 start 时通过 `docker start` 确保已有容器运行，二者在容器内执行。容器内不需要 systemd，宿主机不需要第二套 ROS。宿主机服务的隔离配置不等同于对 Docker 内进程的隔离。
+容器停止时 `deploy --dry-run` 与 start 只读 inspect 后明确失败，不 exec、不启动容器、不写配置/unit、不触发 systemctl。运行中的预览用容器项目 `.venv` 完整生成原渲染内容，不写入、不启动。正式 deploy 由容器 Python 使用原防覆盖原子写入器生成绑定目录内文件，Shell 在宿主机 link/reload；失败只回滚本次拥有的文件/确切链接，回滚遇到身份改变会拒绝并报错。共享容器生命周期由管理员独立管理，本项目生成的新 unit 不含 docker start。
+
+start/stop/status 核对部署文件和链接；stop/status 仍可管理已核对的旧 Docker unit。start 另核对当前选择和新 unit 内容，旧自动启动容器的 unit 需先 stop，再按升级章节归档并重新 deploy，不会悄悄改写。容器内无 systemd，宿主机无 Python；服务隔离配置不等同于容器内进程隔离。
 
 ### 非容器模式
 
 `config.json` 不设置 `container`，部署时不传 `--container`：
 
 ```sh
-.venv/bin/senior-robot deploy --control-dir /home/wheeltec/ros2_shared_dir/senior-control --dry-run
-sudo .venv/bin/senior-robot deploy --control-dir /home/wheeltec/ros2_shared_dir/senior-control
-sudo .venv/bin/senior-robot start --control-dir /home/wheeltec/ros2_shared_dir/senior-control
-sudo .venv/bin/senior-robot status --control-dir /home/wheeltec/ros2_shared_dir/senior-control
+senior-robot deploy --control-dir /home/wheeltec/ros2_shared_dir/senior-control --dry-run
+sudo senior-robot deploy --control-dir /home/wheeltec/ros2_shared_dir/senior-control
+sudo senior-robot start --control-dir /home/wheeltec/ros2_shared_dir/senior-control
+sudo senior-robot status --control-dir /home/wheeltec/ros2_shared_dir/senior-control
 ```
 
-服务按目录属主身份，以本机 `<project_dir>/.ros-venv/bin/python` 执行历史命名的 `senior_control.docker_start_helper run` 联合入口，并使用 `KillMode=mixed`，以便按顺序关闭子进程。这个模块名不表示 native 模式需要 Docker。
+服务按目录属主身份，以本机 `<project_dir>/.venv/bin/python` 执行历史命名的 `senior_control.docker_start_helper run` 联合入口，并使用 `KillMode=mixed`，以便按顺序关闭子进程。这个模块名不表示 native 模式需要 Docker。
 
 ### 两种模式共有的行为
 
@@ -237,19 +235,21 @@ sudo .venv/bin/senior-robot status --control-dir /home/wheeltec/ros2_shared_dir/
 ## 8. 停止与排障
 
 ```sh
-sudo .venv/bin/senior-robot stop \
+sudo senior-robot stop \
   --control-dir /home/wheeltec/ros2_shared_dir/senior-control
 ```
+
+Docker 模式改用 `senior-robot docker stop --control-dir ...`，restart 同样加 docker 分组；两者只管理项目服务。
 
 两种模式都先停止 Agent 和本次适配器，再关闭本次共享运动栈及其子进程；Docker 模式保留已有 `run/stop` 接口，同时停止本次 launch 启动的厂家驱动，不停止整个容器或外部独立运行的节点。入口不覆盖活动或未知 socket，只回收身份记录一致、明确属于己方的陈旧 socket；不要盲删 socket、owner 记录或锁文件。
 
 | 现象 | 先检查 |
 | --- | --- |
-| `senior-robot: command not found` | 已安装项目；使用 `.venv/bin/senior-robot` 或激活宿主机 `.venv` |
+| `senior-robot: command not found` | 安装单 Shell 到 `/usr/local/bin` 并检查 `type -a senior-robot` |
 | `Could not read a valid vehicle profile` | `config.json` 是否存在且 JSON 合法；project_dir、云地址、挂载、凭据与权限是否满足条件。当前 CLI 会把多类部署失败折叠成这条通用错误 |
 | `device.json` 不存在 | 先配对；克隆仓库不包含设备凭据 |
-| 容器内 Python 不可用 | 容器运行状态、容器内 project_dir、`.ros-venv` 与本项目安装是否正确 |
-| `Process: activating`、`ROS IPC: unavailable`，日志 `adapter_unreachable` 且约每 5 秒重启 | 先核对实际安装版本及 unit 是否仍是旧 Agent-only 入口；再检查适配器启动日志、ROS overlay、容器内项目路径、`.ros-venv`、目录权限、robot ID 与配置 ROS 域。每 5 秒是失败重启间隔，不是已经上线 |
+| 容器内 Python 不可用 | 容器运行状态、容器内 project_dir、`.venv` 与本项目安装是否正确 |
+| `Process: activating`、`ROS IPC: unavailable`，日志 `adapter_unreachable` 且约每 5 秒重启 | 先核对实际安装版本及 unit 是否仍是旧 Agent-only 入口；再检查适配器启动日志、ROS overlay、容器内项目路径、`.venv`、目录权限、robot ID 与配置 ROS 域。每 5 秒是失败重启间隔，不是已经上线 |
 | ROS IPC unavailable / Agent 无法上线 | 本次启动的适配器是否成功，是否存在其他进程占用，双方路径和权限、robot ID 是否匹配；禁止盲删端点 |
 | 服务 active 但不能运动 | 检查实车参数、驱动、共享运动栈及安全许可；导航还需有效地图和定位。启动不会清除安全锁定 |
 
@@ -274,7 +274,7 @@ docker inspect --format '{{.State.Status}} {{json .Mounts}}' ros2
 仅更新代码不会自动改写 unit。尤其旧 native unit 直接执行 Agent 时，必须重新生成 unit 才能采用联合入口：
 
 1. 记录当前提交、实际 unit 名、控制目录及运行环境映射；停止该服务，确认已无本服务写入，再备份整个控制目录（含 SQLite WAL/SHM、凭据与急停状态），备份也须私有保存。
-2. 在宿主机更新 CLI 的 `.venv`，在实际运行环境更新 `.ros-venv` 的项目依赖并重建 ROS 包；按第 5 节加载正确 underlay。Docker 内外分别操作，不共用虚拟环境。
+2. 更新独立 Shell；只在实际运行位置（native 宿主机或 Docker 容器）更新项目 `.venv` 并重建 ROS 包，按第5节加载正确 underlay。Docker 宿主机不安装 Python。
 3. 对照 `config.json` 和 dry-run 输出审阅计划。如果需要重新生成，管理员先核对旧服务身份和链接目标；如曾启用则停用它，移除 `/etc/systemd/system` 中指向本目录旧 unit 的确切链接，并将本目录旧生成 unit 和 `agent.env` 归档到私有备份目录。不得操作其他同名前缀服务，不得移除 `device.json`、`agent.db`、急停状态或 socket 来绕过检查。
 4. 执行宿主机 `systemctl daemon-reload`，再按第 7 节正式 deploy（它会重新 link 和 reload），审阅生成文件后显式 start。若需要开机自启，由管理员对已核对的实际 unit 另行 enable；deploy 自身不 enable。
 5. 检查日志、Process、IPC、Cloud 与现场完整安全链。回退前核对数据兼容性，恢复已记录的代码/环境和生成文件；不要用旧凭据覆盖新配对身份。
@@ -299,3 +299,14 @@ Agent 会校验完整小写 SHA-256、地图包内容与来源车辆。只读包
 本项目直接接收标准 `/scan`、配置中的 Odometry/Imu 及 Image/CameraInfo，不要求厂家时间补丁或 `/timed` 话题。首次接入使用原始整数 `header.stamp` 和本地 ROS/单调时钟保留测量年龄，排队与控制期限使用单调时钟。最终执行消息为 `geometry_msgs/Twist`，话题固定 `/cmd_vel`，由项目唯一输出 owner 发布；Nav2 使用私有运行话题，厂家底盘/串口 owner 只启动一次。
 
 更新含消息接口变更的版本时按[干净接口重建](ros-interface-rebuild.md)清理已核对的本项目生成物，避免旧安装库掩盖接口变化。不要安装已退役的 sensor/Nav2/simulation 时间 overlay，不修改厂家组件。通用 profile 不再包含 `simulation_only` 字段，仍须提供明确数值依据；导航配置缺失时保持可选导航不可用的原行为。真实 ROS 构建、DDS 和车端只读状态验证须独立完成，便携单测通过不等于现场链路通过。
+
+### restart 与日志
+
+```sh
+senior-robot restart --control-dir /absolute/control
+senior-robot logs --control-dir /absolute/control --lines 100 --follow
+senior-robot docker restart --control-dir /absolute/control
+senior-robot docker logs --control-dir /absolute/control --follow
+```
+
+restart 必须等原 systemd/联合入口停止成功才启动，停止非零直接返回。logs 读取宿主项目 journal；仿真用 user scope。docker exec 的输出由宿主 unit 收集，不使用只展示容器 PID1的 docker logs；Docker 项目日志可在容器停止时读取，不需要宿主 Python或容器 exec。语法错误返回2，业务错误保持非零，缺解释器/工具127，原系统工具退出码保留（GNU timeout 超时124）；不会把 active 当作 IPC/云/运动资格。

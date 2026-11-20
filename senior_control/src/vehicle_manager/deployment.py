@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlsplit
@@ -101,11 +102,18 @@ def environment(profile: VehicleProfile, runtime_root: Path) -> str:
     return "".join(f"{key}={value}\n" for key, value in values.items())
 
 
-def render_service(profile: VehicleProfile, user: str, *, container_root: Path | None) -> str:
+def render_service(
+    profile: VehicleProfile,
+    user: str,
+    *,
+    container_root: Path | None,
+    docker_executable: str | None = None,
+    start_container: bool = True,
+) -> str:
     assert profile.control_dir is not None
     root = profile.control_dir
     project = _project(profile)
-    python = project / ".ros-venv/bin/python"
+    python = project / ".venv/bin/python"
     env_file = root / "agent.env"
     lines = ["[Unit]", "Description=Senior Control robot agent", "After=network-online.target"]
     lines += [
@@ -119,13 +127,14 @@ def render_service(profile: VehicleProfile, user: str, *, container_root: Path |
         if not re.fullmatch(r"[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}", profile.container):
             raise ValueError("invalid container name")
         assert container_root is not None
-        docker = shutil.which("docker") or "/usr/bin/docker"
+        docker = docker_executable or shutil.which("docker") or "/usr/bin/docker"
         lines.insert(2, "Requires=docker.service")
         lines[3] = "After=docker.service network-online.target"
-        lines += [
-            "User=root",
-            "ExecStartPre=" + _command([docker, "start", profile.container]),
-        ]
+        lines.append("User=root")
+        # //Compatible: original Python deploy keeps its existing container startup.
+        # The Shell CLI explicitly requires an already-running shared container.
+        if start_container:
+            lines.append("ExecStartPre=" + _command([docker, "start", profile.container]))
         run = [
             docker,
             "exec",
@@ -231,16 +240,16 @@ def deploy(profile: VehicleProfile, unit: str, *, dry_run: bool, ports: Deployme
     if (root / "device.json").stat().st_uid != root.stat().st_uid:
         raise ValueError("credentials and control directory must have the same owner")
     if profile.container is None:
-        python = _project(profile) / ".ros-venv/bin/python"
+        python = _project(profile) / ".venv/bin/python"
         if not os.access(python, os.X_OK):
-            raise ValueError("project .ros-venv/bin/python is unavailable")
+            raise ValueError("project .venv/bin/python is unavailable")
     else:
         check = subprocess.run(
             [
                 "docker",
                 "exec",
                 profile.container,
-                str(_project(profile) / ".ros-venv/bin/python"),
+                str(_project(profile) / ".venv/bin/python"),
                 "-c",
                 "import senior_control.docker_start_helper",
             ],
@@ -255,12 +264,13 @@ def deploy(profile: VehicleProfile, unit: str, *, dry_run: bool, ports: Deployme
     written = []
     linked = False
     try:
-        for file, data, mode in (
-            (root / "agent.env", environment(profile, runtime_root), 0o600),
-            (unit_file, contents, 0o644),
-        ):
-            ports.install_once(file, data, mode)
-            written.append(file)
+        written = install_artifacts(
+            root,
+            unit,
+            environment(profile, runtime_root),
+            contents,
+            install_once=ports.install_once,
+        )
         subprocess.run(["systemctl", "link", str(unit_file)], check=True, timeout=10)
         linked = True
         subprocess.run(["systemctl", "daemon-reload"], check=True, timeout=10)
@@ -286,7 +296,7 @@ def doctor(profile: VehicleProfile, *, ports: DeploymentPorts) -> int:
         root = _runtime_root(profile)
         _validate_paths(profile, root, max_path=ports.max_path)
         argv = [
-            str(_project(profile) / ".ros-venv/bin/python"),
+            str(_project(profile) / ".venv/bin/python"),
             "-c",
             (
                 "from pathlib import Path; "
@@ -310,8 +320,7 @@ def doctor(profile: VehicleProfile, *, ports: DeploymentPorts) -> int:
         if isinstance(exc, ValueError):
             print(str(exc))
         print(
-            "Agent unavailable. Check the runtime, bind mount, "
-            "private directory and project .ros-venv."
+            "Agent unavailable. Check the runtime, bind mount, private directory and project .venv."
         )
         return 1
     print("Agent Python and control directory verified; ROS IPC is checked at startup.")
@@ -319,3 +328,27 @@ def doctor(profile: VehicleProfile, *, ports: DeploymentPorts) -> int:
         "Explicit hardware motion configuration passed preflight; physical runtime is unverified."
     )
     return 0
+
+
+def install_artifacts(
+    root: Path,
+    unit: str,
+    env: str,
+    contents: str,
+    *,
+    install_once: Callable[[Path, str, int], None],
+) -> list[Path]:
+    """Original artifact transaction, separate from host systemd effects."""
+    written = []
+    try:
+        for file, data, mode in (
+            (root / "agent.env", env, 0o600),
+            (root / unit, contents, 0o644),
+        ):
+            install_once(file, data, mode)
+            written.append(file)
+    except BaseException:
+        for file in reversed(written):
+            file.unlink()
+        raise
+    return written

@@ -12,7 +12,7 @@ Humble 为当前消息列表构建转换库，另为包级注册入口构建扩�
 
 先由操作者停止实际管理该实例的服务并确认退出；保持停止直到检查通过。本页不提供自动启动命令。命令在实际运行 ROS 的环境执行：Docker 部署应在原容器内执行，不在宿主机另建一份。
 
-使用未加载本项目 overlay 的干净 shell，只加载 `/opt/ros/humble/setup.bash` 和现场必需的厂商 underlay。旧 shell 中再次 source 不会移除旧 `PYTHONPATH`/`LD_LIBRARY_PATH` 条目；不要加载备份的 setup 文件。确认源码已更新到待部署版本，复用现有 `.ros-venv`，无需再次 pip 安装。
+使用未加载本项目 overlay 的干净 shell，只加载 `/opt/ros/humble/setup.bash` 和现场必需的厂商 underlay。旧 shell 中再次 source 不会移除旧 `PYTHONPATH`/`LD_LIBRARY_PATH` 条目；不要加载备份的 setup 文件。确认源码已更新到待部署版本，复用 ABI 匹配的现有 `.venv`，无需重复 pip 安装；若现场仍使用旧 `.ros-venv` 名称，先按部署指南重建项目 `.venv`，不能直接改名。
 
 下列命令要求默认 `build/`、`install/` 路径及 isolated 布局；自定义 base 路径需对应调整。执行前，将临时 shell 变量 `ROS_INTERFACE_BACKUP_DIR` 设为操作者选定的工作空间外备份目录；这不是产品配置。命令不移动或删除任何既有备份。
 
@@ -29,7 +29,7 @@ cd /home/wheeltec/ros2_shared_dir/senior-robot-control/ros2
   printf '备份位置：%s\n' "$msgs_backup"
   mv build/senior_motion_msgs "$msgs_backup/build-senior_motion_msgs"
   mv install/senior_motion_msgs "$msgs_backup/install-senior_motion_msgs"
-  ../.ros-venv/bin/python -m colcon build --packages-up-to senior_robot \
+  ../.venv/bin/python -m colcon build --packages-up-to senior_robot \
     --cmake-force-configure --cmake-args -DBUILD_TESTING=OFF -Usenior_motion_msgs_DIR
 )
 ```
@@ -42,7 +42,7 @@ cd /home/wheeltec/ros2_shared_dir/senior-robot-control/ros2
 
 ```bash
 source install/local_setup.bash
-../.ros-venv/bin/python - <<'PY'
+../.venv/bin/python - <<'PY'
 from pathlib import Path
 from ament_index_python.packages import get_package_prefix
 from rosidl_generator_py import import_type_support

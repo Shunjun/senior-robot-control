@@ -11,14 +11,17 @@ import subprocess
 import sys
 from importlib.util import find_spec
 from pathlib import Path
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from vehicle_manager.agent.pairing import read_credentials
 from vehicle_manager.platform_ports import OperatorPorts
 from vehicle_manager.profile import VehicleProfile, load_profile
 
 
-def _pair(profile: VehicleProfile, cloud_url: str, name: str, *, ports: OperatorPorts) -> None:
+def validate_pair(
+    profile: VehicleProfile, cloud_url: str, name: str, *, ports: OperatorPorts
+) -> SplitResult:
+    """Run the original preflight before either CLI requests a secret."""
     if profile.control_dir is not None:
         ports.private_directory(profile.control_dir)
     if not profile.credentials.is_absolute():
@@ -30,6 +33,11 @@ def _pair(profile: VehicleProfile, cloud_url: str, name: str, *, ports: Operator
         raise ValueError("cloud URL must use TLS")
     if not name.strip():
         raise ValueError("device name is required")
+    return url
+
+
+def _pair(profile: VehicleProfile, cloud_url: str, name: str, *, ports: OperatorPorts) -> None:
+    url = validate_pair(profile, cloud_url, name, ports=ports)
     code = ports.getpass("Pairing code: ")
     asyncio.run(
         ports.pair_device(url._replace(scheme="wss").geturl(), code, name, profile.credentials)
@@ -178,7 +186,7 @@ def _deploy(
     if credential.st_uid != account.pw_uid or stat.S_IMODE(credential.st_mode) != 0o600:
         raise ValueError("credential must belong to senior-control with mode 0600")
     read_credentials(profile.credentials)
-    if not os.access(ports.service_root / ".ros-venv/bin/python", os.X_OK):
+    if not os.access(ports.service_root / ".venv/bin/python", os.X_OK):
         raise ValueError("service Python is unavailable")
     template = (ports.service_root / "deploy/senior-agent.service").read_text(encoding="utf-8")
     unit_contents = template.replace("/etc/senior-control/agent.env", str(env_file))
@@ -201,6 +209,7 @@ def _deploy(
 
 
 def main(argv: list[str] | None = None, *, ports: OperatorPorts) -> int:
+    """//Compatible: original Python CLI syntax; Shell calls execute directly."""
     parser = argparse.ArgumentParser(prog="senior-robot")
     commands = parser.add_subparsers(dest="command", required=True)
     simulation_default = argparse.ArgumentParser(add_help=False)
@@ -240,50 +249,113 @@ def main(argv: list[str] | None = None, *, ports: OperatorPorts) -> int:
                 help="run simulation without a Gazebo window (default: true)",
             )
     args = parser.parse_args(argv)
+    return execute(
+        args.command,
+        profile_path=args.profile,
+        control_dir=args.control_dir,
+        container=getattr(args, "container", None),
+        headless=getattr(args, "headless", "true"),
+        dry_run=getattr(args, "dry_run", False),
+        cloud_url=getattr(args, "cloud_url", ""),
+        name=getattr(args, "name", ""),
+        ports=ports,
+    )
+
+
+def execute(
+    command: str,
+    *,
+    profile_path: Path | None = None,
+    control_dir: Path | None = None,
+    container: str | None = None,
+    headless: str = "true",
+    dry_run: bool = False,
+    cloud_url: str = "",
+    name: str = "",
+    native_only: bool = False,
+    ports: OperatorPorts,
+) -> int:
+    """Execute a normalized action; operator syntax belongs to the caller."""
+    if command not in {
+        "pair",
+        "pair-preflight",
+        "doctor",
+        "deploy",
+        "start",
+        "stop",
+        "status",
+        "log-route",
+    }:
+        raise ValueError("unknown operator action")
+    explicit_profile = profile_path is not None
     try:
         control_dir = (
-            (args.control_dir or Path.home() / "senior-control").expanduser().absolute()
-            if args.profile is None
+            (control_dir or Path.home() / "senior-control").expanduser().absolute()
+            if profile_path is None
             else None
         )
-        if args.profile is not None:
-            profile_path = args.profile
-        else:
+        if profile_path is None:
             assert control_dir is not None
             profile_path = control_dir / "config.json"
         profile = load_profile(profile_path, control_dir=control_dir)
-        if getattr(args, "container", None) is not None:
+        if container is not None:
             if control_dir is None:
                 raise ValueError("container deployment requires --control-dir")
             if profile.kind != "real":
                 raise ValueError("container deployment requires a real profile")
-            profile = profile.model_copy(update={"container": args.container})
-        if args.command == "doctor":
+            profile = profile.model_copy(update={"container": container})
+        if native_only and profile.container is not None:
+            raise ValueError("use the Docker command group for a Docker profile")
+        if command == "pair-preflight":
+            validate_pair(profile, cloud_url, name, ports=ports)
+            return 0
+        if command == "log-route":
+            import json
+
+            from vehicle_manager.simulation import _unit as simulation_unit
+
+            print(
+                json.dumps(
+                    {
+                        "unit": simulation_unit(profile_path)
+                        if profile.kind == "simulation"
+                        else _unit(profile_path),
+                        "user": profile.kind == "simulation",
+                    }
+                )
+            )
+            return 0
+        if command == "doctor":
             return ports.doctor(profile)
-        if args.command == "deploy":
-            return ports.deploy(profile, profile_path, dry_run=args.dry_run)
-        if args.command != "pair":
+        if command == "deploy":
+            return ports.deploy(profile, profile_path, dry_run=dry_run)
+        if command != "pair":
             if profile.kind == "simulation":
-                if args.command == "start" and args.headless == "false":
-                    return ports.lifecycle(args.command, profile_path, profile, headless=False)
-                return ports.lifecycle(args.command, profile_path, profile)
+                if command == "start" and headless == "false":
+                    return ports.lifecycle(command, profile_path, profile, headless=False)
+                return ports.lifecycle(command, profile_path, profile)
             if profile.kind != "real" or sys.platform != "linux":
                 raise ValueError("systemd lifecycle requires a real Linux profile")
             unit = _unit(profile_path)
             if not (ports.unit_root / unit).is_file():
                 raise ValueError("deploy the selected profile first")
-            if args.command == "status":
+            if (
+                native_only
+                and "Requires=docker.service" in (ports.unit_root / unit).read_text().splitlines()
+            ):
+                raise ValueError("selected unit is Docker-managed; use the Docker command group")
+            if command == "status":
                 return ports.service_status(unit, profile, user=False)
             return subprocess.run(
-                ["systemctl", args.command, unit],
+                ["systemctl", command, unit],
                 check=False,
                 timeout=30,
             ).returncode
-        ports.pair(profile, args.cloud_url, args.name)
+        ports.pair(profile, cloud_url, name)
     except FileExistsError:
         message = (
             "Pairing skipped. Credential file already exists."
-            if args.command == "pair"
+            if command in {"pair", "pair-preflight"}
             else "Deployment skipped. A destination file already exists."
         )
         print(message, file=sys.stderr)
@@ -291,11 +363,11 @@ def main(argv: list[str] | None = None, *, ports: OperatorPorts) -> int:
     except (OSError, ValueError, EOFError, KeyboardInterrupt, KeyError, subprocess.SubprocessError):
         message = (
             "Could not read a valid vehicle profile."
-            if args.command != "pair"
+            if command not in {"pair", "pair-preflight"}
             else "Pairing failed. Check the profile, TLS URL and pairing code."
         )
         print(message, file=sys.stderr)
-        if args.profile is None:
+        if not explicit_profile:
             print(
                 "Check <control-dir>/config.json (default: ~/senior-control/config.json).",
                 file=sys.stderr,

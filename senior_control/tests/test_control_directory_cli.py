@@ -78,13 +78,13 @@ def test_profile_and_directory_cannot_be_selected_together(control_dir):
     assert error.value.code == 2
 
 
-def test_native_plan_uses_one_root_and_ros_venv(control_dir):
+def test_native_plan_uses_one_root_and_project_venv(control_dir):
     from senior_control.vehicle_deploy import render_service
 
     config = configure(control_dir)
     profile = cli.load_profile(config, control_dir=control_dir)
     unit = render_service(profile, "wheeltec", container_root=None)
-    assert "/opt/robot/.ros-venv/bin/python" in unit
+    assert "/opt/robot/.venv/bin/python" in unit
     assert "senior_control.docker_start_helper run" in unit
     assert "KillMode=mixed" in unit
     assert f"EnvironmentFile={control_dir}/agent.env" in unit
@@ -102,7 +102,7 @@ def test_docker_plan_passes_host_env_file_and_stops_only_agent(control_dir):
     profile = cli.load_profile(config, control_dir=control_dir)
     unit = render_service(profile, "wheeltec", container_root=Path("/state/senior-control"))
     assert f"--env-file {control_dir}/agent.env" in unit
-    assert "/opt/robot/.ros-venv/bin/python" in unit
+    assert "/opt/robot/.venv/bin/python" in unit
     assert "senior_control.docker_start_helper run" in unit
     assert "senior_control.docker_start_helper stop" in unit
     assert "docker stop" not in unit
@@ -133,7 +133,7 @@ def test_dry_run_prints_plan_without_writing_or_starting(control_dir, monkeypatc
     monkeypatch.setattr(cli_owner.subprocess, "run", lambda *a, **k: pytest.fail("mutated system"))
     assert cli.main(["deploy", "--control-dir", str(control_dir), "--dry-run"]) == 0
     text = capsys.readouterr().out
-    assert "/opt/robot/.ros-venv/bin/python" in text
+    assert "/opt/robot/.venv/bin/python" in text
     assert str(control_dir / "agent.env") in text
     assert sorted(p.name for p in control_dir.iterdir()) == ["config.json"]
 
@@ -151,7 +151,7 @@ def test_native_deploy_writes_only_into_control_root_and_links_unit(control_dir,
     from types import SimpleNamespace
 
     project = control_dir / "project"
-    python = project / ".ros-venv/bin/python"
+    python = project / ".venv/bin/python"
     python.parent.mkdir(parents=True)
     python.write_text("#!/bin/sh\nexit 0\n")
     python.chmod(0o700)

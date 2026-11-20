@@ -108,16 +108,20 @@ def service_status(
     *,
     user: bool,
     probe: Callable[..., Coroutine[Any, Any, bool]],
+    host_properties: str | None = None,
+    host_event: str | None = None,
 ) -> int:
     scope = ["--user"] if user else []
-    result = subprocess.run(
-        ["systemctl", *scope, "show", "-p", "ActiveState", "-p", "InvocationID", unit],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    properties = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+    if host_properties is None:
+        result = subprocess.run(
+            ["systemctl", *scope, "show", "-p", "ActiveState", "-p", "InvocationID", unit],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        host_properties = result.stdout
+    properties = dict(line.split("=", 1) for line in host_properties.splitlines() if "=" in line)
     active = properties.get("ActiveState", "unknown")
     print(f"Process: {active}")
     print(f"ROS IPC: {'verified' if asyncio.run(probe(profile)) else 'unavailable'}")
@@ -131,24 +135,26 @@ def service_status(
     cloud = "unverified"
     if active == "active" and invocation and invocation != "0" * 32:
         try:
-            event = subprocess.run(
-                [
-                    "journalctl",
-                    *scope,
-                    "--no-pager",
-                    "-n",
-                    "1",
-                    "-o",
-                    "cat",
-                    '--grep="event": "connection_(opened|closed)"',
-                    f"_SYSTEMD_INVOCATION_ID={invocation}",
-                ],
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=10,
-            )
-            message = json.loads(event.stdout)
+            if host_event is None:
+                event = subprocess.run(
+                    [
+                        "journalctl",
+                        *scope,
+                        "--no-pager",
+                        "-n",
+                        "1",
+                        "-o",
+                        "cat",
+                        '--grep="event": "connection_(opened|closed)"',
+                        f"_SYSTEMD_INVOCATION_ID={invocation}",
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                host_event = event.stdout
+            message = json.loads(host_event)
             cloud = {
                 "connection_opened": "last event connected",
                 "connection_closed": "last event disconnected",

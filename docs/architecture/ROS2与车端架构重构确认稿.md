@@ -43,3 +43,13 @@
 ## 实施计划待更新
 
 先拆职责和接口，再按功能分批实现，最后联调。按新版边界重新核对目标包、生产调用链、配置和安装入口、测试影响与具体文件范围。Python 导入布局、独立契约的具体目录和各功能接口的传输选择随迁移清单确定。旧迁移盘点的范围估算仅供参考。本次记录阶段只更新设计文档。
+
+
+## 操作入口确认：单文件 Shell CLI（2026-11-20）
+
+- 源文件为根目录 `bin/senior-robot.sh`，独立安装为 PATH 命令 `senior-robot`；Shell 拥有命令、help、参数解析和凭据交互，不把整串 argv 转给原 Python argparse。
+- `senior-robot start/stop/restart/status/logs` 操作宿主机；`senior-robot docker start/stop/restart/status/logs` 操作 Docker 模式的本项目进程和 systemd unit，不停止共享容器。pair/doctor/deploy 使用相同分组，未新增 Docker 仿真。
+- 宿主机模式使用项目 `.venv`；Docker 模式只使用容器内项目 `.venv`，宿主机不要求 Python。ROS 的 Python ABI/system-site-packages 仍需真实环境验证，不能通过重命名旧虚拟环境代替重建。
+- Python 提供固定动作接口并逐次绑定现有 owner；原 CLI、服务、IPC、guard 拓扑和停止屏障保留，restart 只有原停止成功后才启动。日志可由 Shell 直接读取正确 systemd scope 的 journal。
+- 单 Shell 可复制到 PATH，不依赖源码相对位置；解释器来自显式路径或配置中的项目 `.venv`，不猜测全局 Python。无 Python 时 help 和参数诊断可用。
+- 已决：容器停止时 Docker `deploy --dry-run` 和 start 在只读 inspect 后明确非零退出，无 exec/start/run、配置/unit写入或 systemctl；容器运行时以容器 `.venv` 完整生成预览。新 Shell 不自动启动共享容器，旧 Python 入口的原流程显式 Compatible 保留。
