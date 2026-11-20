@@ -2,7 +2,7 @@
 
 设置、车辆日志、SQLite技术设施、任务核心与TaskStore已从原根 SDK 迁入；其他管理职责仍待各片迁移。本项目目录 `senior_control/`，
 导入名 `vehicle_manager`，发行名 `vehicle-manager`。没有新增CLI/服务入口，也未迁导航或ROS执行。
-下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，具体配置/诊断装配见末尾「R5 具体Agent依赖绑定」。
+下文各片记录按当时范围保留；当前发行依赖见「R0/R5 发行DAG切换」，任务执行/路线IPC装配见末尾本片记录。
 
 ## 实际目录与调用
 
@@ -2763,3 +2763,101 @@ cd /tmp
 本片未重新尝试空环境agent extra安装；前片原版本缓存缺口仍未收尾，预装依赖测试不替代它。
 未验证Linux/Humble ABI、ROS/实车、完整独立生产agent或手动控制，未运行任何仿真验证，
 未启动开发/ROS/车辆/仿真服务，未发实车运动、部署或推送；固定功能分支提交待审核。
+
+
+## R5 任务执行和路线IPC装配
+
+基线`feat/vehicle-architecture-refactor@d445b12`，开始时干净；实际15文件，
+产品新增2、修改10，工具文档修改3，测试/配置/删除0。无新依赖或WS/IPC字段，发行/锁不改。
+
+`vehicle_core/route_plan.py`持有原RoutePlan/RouteRejected唯一原定义，字段、校验、类别、
+错误码和文本逐字保持。senior_navigation.route与旧Root navigation显式 //Compatible
+导出同对象，QualifiedRoute执行类仍原样留在senior_navigation；没有移动导航进程或资格owner。
+三处adapter仅改共享类型导入，robot agent_adapter原CRLF字节风格保留，其他业务AST相同。
+
+`vehicle_manager/tasks/execution_bindings.py`持有原TaskExecutor、QualificationUnavailable、
+_error_code、NavigationEffects薄构造，定义文本逐字保持；引用既有manager Database、TaskStore、
+LifecycleStore/Service和共享RouteRejected，原generic方法、300ms默认、错误与实际store不变。
+旧两模块显式重导原公开/现用辅助名；ProcessCrash/NavigationFailure等仍为原generic对象。
+现有manager local_adapters持有唯一具体IpcNavigation，原NavigationValues构造与generic方法
+不变；其waypoints仅需要route_poses，使用精确内部结构接口，向原generic构造的类型cast
+只返回同一实例，不包装store、不新增waypoint值或schema。返回姿态类型仍为core Pose2D。
+旧agent/ports全部同对象出口；composition只换TaskExecutor/NavigationEffects/IpcNavigation
+三个实际绑定和已有TaskNavigation导入，其余组合、九client、mapping/media均未改。
+
+### 实际命令与结果
+
+macOS arm64，Python3.12.15、pytest8.4.2、Ruff0.17.3、uv0.12.23。
+测试工具复用原主检出.venv，本项目运行.venv未改。
+已阅读指定三份manager测试和navigation_collision_qualification完整用例：仅SQLite、
+临时数据和受控Executor/ROS ModuleType/Server/Controller替身，Controller.open明确禁止，
+fake rclpy.ok=False；无仿真功能执行、真实ROS或控制器进程。原命令：
+
+```sh
+python -m pytest senior_control/tests/test_task_runner.py \
+  senior_control/tests/test_terminal_release_outbox.py senior_control/tests/test_agent_ports.py \
+  ros2/tests/test_navigation_collision_qualification.py -q --tb=short
+```
+
+首轮87 passed in 1.66s；精确waypoint接口类型收尾后同命令复跑**87 passed in 1.68s**。
+覆盖原持久任务/不确定取消/终端release与settlement outbox、进程重启恢复、原Home/停车/learning、
+路线授权撤回和状态查询不重复诊断。没有原用例失败，无需基线对照，测试与保护断言未改。
+
+离线构建和仓库外命令（`UV_CACHE_DIR=/tmp/vehicle-uv-cache`，`<checkout>`为本工作区）：
+
+```sh
+uv build --offline --wheel --out-dir /tmp/vehicle-route-execution-wheels
+uv build --offline --wheel --out-dir /tmp/vehicle-route-execution-wheels senior_control
+uv build --offline --wheel --out-dir /tmp/vehicle-route-execution-wheels ros2/src/senior_navigation
+uv build --offline --wheel --out-dir /tmp/vehicle-route-execution-wheels ros2/src/senior_robot
+python3.12 -m venv /tmp/vehicle-route-execution-base
+uv pip install --offline --python /tmp/vehicle-route-execution-base/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-route-execution-wheels/senior_control-*.whl \
+  /tmp/vehicle-route-execution-wheels/vehicle_manager-*.whl /tmp/m5c-wheels/senior_contracts-*.whl
+uv pip install --offline --python /tmp/vehicle-dag-sdk/bin/python \
+  -c /tmp/vehicle-dag-constraints.txt /tmp/vehicle-route-execution-wheels/*.whl
+/tmp/vehicle-route-execution-base/bin/python -m pip check
+/tmp/vehicle-dag-sdk/bin/python -m pip check
+cd /tmp
+/tmp/vehicle-route-execution-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-route-only
+/tmp/vehicle-route-execution-base/bin/python <checkout>/tools/verify_batch_one_install.py --manager-tasks-only
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --manager-route-compatible
+/tmp/vehicle-dag-sdk/bin/python <checkout>/tools/verify_batch_one_install.py --navigation-only
+```
+
+四个真实非editable wheel构建通过；manager接口收尾后重建manager并重装base/SDK再验。
+全新base12包、SDK26包，均pip check通过；冻结约束复用5988c42根锁导出，未升级registry。
+SDK本片重建root/manager/navigation/robot四项目，其余7项目wheel复用前片：
+contracts/localization/mapping/motion-control/motion-estimation/perception来自`/tmp/m5c-wheels`，
+cloud来自`/tmp/cloud-build-9cafe01`，不声称本片全量重建所有项目或colcon/ROS安装。
+
+安装检查新增验证：
+
+- shared RoutePlan/RouteRejected的core模块、site-packages与根wheel RECORD归属；
+  原schema严格校验、JSON roundtrip、map_ref、非法身份/版本/pose维度/非有限值/额外字段、
+  action数目与唯一性拒绝，原UNAVAILABLE拒绝类型和文本不变。
+- manager-only真实Database/TaskStore，原TASK_STATEMENTS与core migration准备SQLite，
+  原TaskStorePorts注入实际MapRef/DomainError；通过既有build_task_runtime函数和新具体factory
+  直接装配真实TaskRuntime/TaskExecutor/LifecycleStore/Service/NavigationEffects/IpcNavigation，
+  同store/connection/write_lock、原300ms、异常factory、rejected分派和generic方法身份通过。
+  仅组装/本地SQLite与AsyncMock，不发送导航或实车请求，不启动执行循环。
+- base不加载senior_control/cloud/rclpy/launch/Nav2/mapping/navigation/robot，且无这些
+  ROS/cloud项目wheel安装；不靠隐藏同wheel旧namespace证明隔离。
+- SDK旧Root/导航/robot三层类型均同一core对象，QualifiedRoute仍原导航模块；旧执行类/
+  helper和ports与canonical同对象。实际旧TaskStore/WaypointStore仍原实例注入，原composition
+  build_task_runtime实际返回新具体执行器与effects；全部原bound!=generic/method保护保留。
+
+新增安装检查初轮误写不存在的claim方法名，改用实际current_context后base/SDK通过；
+未改产品来迎合检查。原manager-tasks-only继续通过，无网络库/旧SDK加载；
+--navigation-only类型/历史入口检查通过，但明确输出ament/ROS prefix不存在，
+导航ROS executable/share安装**UNVERIFIED**，没有把纯wheel导入当ROS运行验收。
+
+临时git show对照：RoutePlan/RouteRejected、QualifiedRoute、四个执行类/函数文本完全相同；
+IpcNavigation仅waypoint接口/cast类型边界变化，实际实例身份和通用方法不变；composition和
+三个adapter除import外业务AST相同，robot agent_adapter的CRLF全部保留。
+13个Python文件Ruff/format通过，CRLF约定diff check与15文件自审通过。
+提交禁hooks避免未授权全量/仿真检查，上述范围验证手动执行。
+
+未验agent网络extra完整安装、Linux/Humble ABI、ROS进程/真实Nav2、实车和完整生产Agent。
+前片extra缓存缺口不在本片收尾；无仿真验证、任何开发/ROS/实车/仿真服务启动，
+无实车运动请求、部署或推送；仅固定功能分支提交待审核。

@@ -19,6 +19,7 @@ from vehicle_manager.agent.config import AgentConfig as AgentConfig
 from vehicle_manager.agent.local_adapters import (
     IpcHomePort,
     IpcMapPort,
+    IpcNavigation,
     IpcState,
     TaskAwareMotion,
 )
@@ -33,15 +34,15 @@ from vehicle_manager.agent.snapshot_state import SnapshotState as _SnapshotState
 from vehicle_manager.agent.state_ports import SnapshotPorts
 from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
 from vehicle_manager.storage.bindings import Database
+from vehicle_manager.tasks.execution_bindings import NavigationEffects, TaskExecutor
+from vehicle_manager.tasks.navigation_port import TaskNavigation
 
 from senior_control.agent.dispatcher import LifecycleNavigationOperations, StoreTaskPort
 from senior_control.agent.main import Agent
 from senior_control.agent.manual_control import vehicle_frame
-from senior_control.agent.ports import IpcNavigation
 from senior_control.agent.workspace import WorkspaceReader
-from senior_control.tasks import TaskExecutor, TaskStore
+from senior_control.tasks import TaskStore
 from senior_control.tasks.lifecycle_store import Admission
-from senior_control.tasks.navigation_port import NavigationEffects, TaskNavigation
 from senior_control.tasks.runtime import TaskRuntime
 from senior_control.vision.simulation_video import LatestFrameFile
 from senior_control.waypoints.store import WaypointStore

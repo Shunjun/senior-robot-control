@@ -2,22 +2,28 @@
 
 import time
 from collections.abc import Callable
+from typing import Any, Protocol, cast
 
 from pydantic import ValidationError
 
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.ipc import IpcClient, IpcError
+from vehicle_core.route_plan import RoutePlan, RouteRejected
 from vehicle_core.values import MapRef, Pose2D
 from vehicle_manager.agent.ipc_motion import IpcMotion as _IpcMotion
 from vehicle_manager.agent.ipc_motion import TaskAwareMotion as _TaskAwareMotion
 from vehicle_manager.agent.ipc_navigation import IpcMapPort as _IpcMapPort
+from vehicle_manager.agent.ipc_navigation import IpcNavigation as _IpcNavigation
 from vehicle_manager.agent.ipc_state import IpcState as _IpcState
-from vehicle_manager.agent.local_ports import MotionErrors
+from vehicle_manager.agent.local_ports import MotionErrors, NavigationValues
 from vehicle_manager.agent.local_state import RuntimeState, StateReply
 from vehicle_manager.agent.pose_reply import PoseReply
 from vehicle_manager.agent.request_ports import Requester
+from vehicle_manager.tasks.ports import MapReference
+from vehicle_manager.tasks.store import TaskStore
 from vehicle_manager.waypoints.home_capture import HomeCapture as _HomeCapture
 from vehicle_manager.waypoints.ports import HomeWriter, WaypointValuePorts
+from vehicle_manager.waypoints.store import WaypointStore
 
 
 class MotionRejected(IpcError):
@@ -88,3 +94,27 @@ class IpcHomePort(_HomeCapture[MapRef, Pose2D]):
 
 class TaskAwareMotion(_TaskAwareMotion, IpcMotion):
     """//Compatible: original constructor/MRO; task/manual methods have one manager owner."""
+
+
+class _RouteWaypoints(Protocol):
+    async def route_poses(
+        self, ref: MapReference, waypoint_ids: tuple[str, ...]
+    ) -> tuple[Pose2D, ...]: ...
+
+
+class IpcNavigation(_IpcNavigation):
+    """//Compatible: original values and Store instances; one request implementation."""
+
+    def __init__(
+        self,
+        client: Requester,
+        waypoints: _RouteWaypoints | None = None,
+        *,
+        tasks: TaskStore | None = None,
+    ) -> None:
+        super().__init__(
+            client,
+            cast(WaypointStore[Any, Any, Pose2D] | None, waypoints),
+            tasks=tasks,
+            values=NavigationValues(DomainError, IpcError, Pose2D, RoutePlan, RouteRejected),
+        )

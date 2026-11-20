@@ -18,10 +18,10 @@ from senior_navigation.navigation_adapter import (
 )
 from senior_navigation.navigation_adapter import main as main
 from senior_navigation.route import QualifiedRoute as QualifiedRoute
-from senior_navigation.route import RoutePlan as RoutePlan
 from senior_navigation.route import RouteProgress as RouteProgress
 from senior_navigation.route import RouteStatus as RouteStatus
 
+from vehicle_core.route_plan import RoutePlan as RoutePlan
 from vehicle_core.values import MapRef as MapRef
 from vehicle_core.values import OperationResult as OperationResult
 from vehicle_core.values import OperationStatus as OperationStatus

@@ -272,7 +272,7 @@ def verify_navigation() -> None:
     assert route.MapRef is MapRef and route.Pose2D is Pose2D
     assert issubclass(route.RouteRejected, DomainError)
     assert route.RouteRejected().code is ErrorCode.UNAVAILABLE
-    assert route.RoutePlan.__module__ == "senior_navigation.route"
+    assert route.RoutePlan.__module__ == "vehicle_core.route_plan"
     assert navigation_adapter.RouteService.__module__ == "senior_navigation.navigation_adapter"
     print("installed navigation canonical route and historical SDK identities: PASS")
     try:
@@ -524,6 +524,230 @@ def verify_manager_config(*, compatible: bool = False) -> None:
         for name in ("senior_control", "cloud", "rclpy", "senior_robot"):
             assert name not in sys.modules, name
         print("installed manager config/PoseReply without legacy SDK or ROS: PASS")
+
+
+def verify_route_execution(*, compatible: bool = False) -> None:
+    """Assemble actual manager execution types and check shared route validation offline."""
+    import asyncio
+    import inspect
+    import tempfile
+    from unittest.mock import AsyncMock
+
+    from pydantic import ValidationError
+    from vehicle_manager.agent.composition import build_task_runtime
+    from vehicle_manager.agent.ipc_navigation import IpcNavigation as GenericNavigation
+    from vehicle_manager.agent.local_adapters import IpcNavigation
+    from vehicle_manager.storage.bindings import Database
+    from vehicle_manager.storage.core_schema import migrate_core
+    from vehicle_manager.storage.migrations import Migration, migrate
+    from vehicle_manager.tasks import execution_bindings
+    from vehicle_manager.tasks.executor import TaskExecutor as GenericExecutor
+    from vehicle_manager.tasks.navigation_port import NavigationEffects as GenericEffects
+    from vehicle_manager.tasks.ports import TaskStorePorts
+    from vehicle_manager.tasks.store import TASK_STATEMENTS, TaskStore
+
+    from vehicle_core.errors import DomainError, ErrorCode
+    from vehicle_core.ipc import IpcError
+    from vehicle_core.route_plan import RoutePlan, RouteRejected
+    from vehicle_core.values import MapRef, Pose2D
+
+    for value in (RoutePlan, RouteRejected, IpcNavigation, execution_bindings.TaskExecutor):
+        assert "site-packages" in inspect.getfile(value), value
+    assert RoutePlan.__module__ == RouteRejected.__module__ == "vehicle_core.route_plan"
+    assert Path("vehicle_core/route_plan.py") in (
+        importlib.metadata.distribution("senior-control").files or []
+    )
+    assert RouteRejected().code is ErrorCode.UNAVAILABLE
+    assert str(RouteRejected()) == "qualified route was not admitted"
+    packet = {
+        "execution_id": "execution",
+        "map_id": "yard",
+        "reference_revision": 1,
+        "task_epoch": 1,
+        "effect_id": "plan",
+        "map_generation": "generation",
+        "action_ids": ["point"],
+        "poses": [[1.0, 2.0, 0.0]],
+    }
+    plan = RoutePlan.model_validate(packet)
+    assert plan.map_ref == MapRef("yard", 1) and plan.task_id is None
+    assert RoutePlan.model_validate_json(plan.model_dump_json()) == plan
+    for change in (
+        {"execution_id": ""},
+        {"effect_id": "x" * 129},
+        {"reference_revision": -1},
+        {"task_epoch": 0},
+        {"poses": []},
+        {"poses": [[1.0, 2.0]]},
+        {"poses": [[float("nan"), 2.0, 0.0]]},
+        {"poses": [["1", 2.0, 0.0]]},
+        {"action_ids": []},
+        {"action_ids": ["same", "same"], "poses": [[0.0] * 3] * 2},
+        {"unknown": 1},
+    ):
+        try:
+            RoutePlan.model_validate({**packet, **change})
+        except ValidationError:
+            pass
+        else:
+            raise AssertionError(change)
+    for bound, generic, methods in (
+        (
+            IpcNavigation,
+            GenericNavigation,
+            ("_call", "task_poses", "task_effect", "task_effect_status"),
+        ),
+        (
+            execution_bindings.TaskExecutor,
+            GenericExecutor,
+            ("control", "current_context", "manual_handoff_matches"),
+        ),
+        (execution_bindings.NavigationEffects, GenericEffects, ("execute", "query", "resolve")),
+    ):
+        assert bound is not generic and issubclass(bound, generic)
+        for method in methods:
+            assert getattr(bound, method) is getattr(generic, method)
+
+    async def verify(directory):
+        async with Database(directory / "execution.db") as database:
+
+            async def prepare_schema():
+                await migrate(database, [Migration(1, TASK_STATEMENTS)])
+                await migrate_core(database)
+
+            store = TaskStore(
+                database,
+                robot_id="robot",
+                ports=TaskStorePorts(
+                    prepare_schema=prepare_schema,
+                    map_reference=MapRef,
+                    error=DomainError,
+                ),
+            )
+            await store.prepare()
+            connection, lock = database.connection, database.write_lock
+            client = AsyncMock()
+            navigation = IpcNavigation(client, tasks=store)
+            assert navigation._client is client and navigation._tasks is store
+            assert navigation._values.route_plan is RoutePlan
+            assert navigation._values.route_rejected is RouteRejected
+            assert navigation._values.pose is Pose2D
+            assert (
+                navigation._values.error is DomainError and navigation._values.ipc_error is IpcError
+            )
+            runtime, executor = build_task_runtime(
+                database,
+                store,
+                navigation,
+                boot_id="installed-execution",
+                executor_factory=execution_bindings.TaskExecutor,
+                navigation_effects=execution_bindings.NavigationEffects,
+            )
+            assert type(executor) is execution_bindings.TaskExecutor
+            assert runtime._executor is executor and runtime._store is store
+            assert executor._database is database and executor._store is store
+            assert (
+                executor.errors.domain is DomainError
+                and executor.errors.route_rejected is RouteRejected
+            )
+            assert (
+                executor.errors.qualification_unavailable
+                is execution_bindings.QualificationUnavailable
+            )
+            assert executor.errors.code is execution_bindings._error_code
+            assert executor.errors.code(RouteRejected()) is ErrorCode.UNAVAILABLE
+            effects = executor.lifecycle.port
+            assert type(effects) is execution_bindings.NavigationEffects
+            assert effects.navigation is navigation and effects._rejection_type is RouteRejected
+            assert effects.timeout == 0.3
+            assert effects.store.database is database and effects.store.tasks is store
+            await effects.store.prepare()
+            assert database.connection is connection and database.write_lock is lock
+            client.request.return_value = {
+                "ok": False,
+                "error": "rejected",
+                "execution_id": "execution",
+            }
+            try:
+                await navigation._call("navigation.task_start", "execution")
+            except RouteRejected as exc:
+                assert type(exc) is RouteRejected
+            else:
+                raise AssertionError("route refusal did not retain its original type")
+            assert (
+                inspect.signature(execution_bindings.NavigationEffects)
+                .parameters["timeout_ms"]
+                .default
+                == 300.0
+            )
+
+    with tempfile.TemporaryDirectory(prefix="installed-execution-", dir="/tmp") as directory:
+        asyncio.run(verify(Path(directory)))
+    if compatible:
+        from senior_navigation import navigation_adapter, route
+        from senior_robot import agent_adapter
+        from senior_robot import navigation_adapter as old_adapter
+
+        from senior_control import navigation as old_route
+        from senior_control.agent import composition, ports
+        from senior_control.tasks import executor as old_executor
+        from senior_control.tasks import navigation_port as old_effects
+        from senior_control.tasks.store import TaskStore as LegacyStore
+        from senior_control.waypoints.store import WaypointStore
+
+        for owner in (old_route, route):
+            assert owner.RoutePlan is RoutePlan and owner.RouteRejected is RouteRejected
+        assert route.QualifiedRoute.__module__ == "senior_navigation.route"
+        assert (
+            navigation_adapter.RoutePlan
+            is agent_adapter.RoutePlan
+            is old_adapter.RoutePlan
+            is RoutePlan
+        )
+        assert ports.IpcNavigation is composition.IpcNavigation is IpcNavigation
+        assert (
+            old_executor.TaskExecutor is composition.TaskExecutor is execution_bindings.TaskExecutor
+        )
+        assert old_executor.QualificationUnavailable is execution_bindings.QualificationUnavailable
+        assert old_executor._error_code is execution_bindings._error_code
+        assert (
+            old_effects.NavigationEffects
+            is composition.NavigationEffects
+            is execution_bindings.NavigationEffects
+        )
+        database = Database(Path("/tmp/installed-execution-not-opened"))
+        tasks, points = (
+            LegacyStore(database, robot_id="robot"),
+            WaypointStore(database, robot_id="robot"),
+        )
+        navigation = IpcNavigation(AsyncMock(), points, tasks=tasks)
+        assert navigation._waypoints is points and navigation._tasks is tasks
+        runtime, executor = composition.build_task_runtime(
+            database, tasks, navigation, boot_id="installed"
+        )
+        assert type(executor) is execution_bindings.TaskExecutor and runtime._executor is executor
+        assert type(executor.lifecycle.port) is execution_bindings.NavigationEffects
+    else:
+        assert not any(
+            name == "senior_control"
+            or name.startswith(
+                (
+                    "senior_control.",
+                    "cloud",
+                    "rclpy",
+                    "launch",
+                    "nav2",
+                    "senior_mapping",
+                    "senior_navigation",
+                    "senior_robot",
+                )
+            )
+            for name in sys.modules
+        )
+    print(
+        "installed core route schema, concrete execution and real manager-only assembly: PASS",
+        compatible,
+    )
 
 
 def verify_production_bindings(*, compatible: bool = False) -> None:
@@ -1006,6 +1230,7 @@ def verify_manager_agent(*, network: bool = False) -> None:
     )
     verify_local_ipc()
     verify_production_bindings()
+    verify_route_execution()
     if network:
         import httpx
         import websockets
@@ -2146,7 +2371,7 @@ def main() -> None:
     assert old_serialize is serialize_envelope and old_validate is validate_envelope
     for local in (DomainError, Velocity, MotionRuntimeState):
         assert local.__module__.startswith("senior_control."), local
-    assert RoutePlan.__module__ == "senior_navigation.route"
+    assert RoutePlan.__module__ == "vehicle_core.route_plan"
     assert DrivingSettings.__module__ == "vehicle_manager.settings.models"
     assert LegacyDrivingSettings is DrivingSettings
     assert LegacySettingsService is SettingsService
@@ -2400,6 +2625,11 @@ def main() -> None:
 if __name__ == "__main__":
     if sys.argv[1:] == ["--lazy-shared-only"]:
         verify_lazy_shared_imports()
+    elif sys.argv[1:] == ["--manager-route-only"]:
+        verify_manager_core_distribution()
+        verify_route_execution()
+    elif sys.argv[1:] == ["--manager-route-compatible"]:
+        verify_route_execution(compatible=True)
     elif sys.argv[1:] == ["--manager-production-only"]:
         verify_manager_core_distribution()
         verify_manager_config()

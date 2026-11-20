@@ -1,20 +1,7 @@
-"""//Compatible: original navigation construction over the sole manager adapter."""
+"""//Compatible: original effect binding and navigation protocol retain canonical identity."""
 
-from vehicle_manager.tasks.navigation_port import NavigationEffects as _NavigationEffects
+from vehicle_manager.tasks.execution_bindings import NavigationEffects as NavigationEffects
+from vehicle_manager.tasks.lifecycle_store import LifecycleStore as LifecycleStore
 from vehicle_manager.tasks.navigation_port import TaskNavigation as TaskNavigation
 
-from senior_control.navigation import RouteRejected
-from senior_control.tasks.lifecycle_store import LifecycleStore
-
-
-class NavigationEffects(_NavigationEffects):
-    """//Compatible: original signature and rejection identity; inherited effect methods."""
-
-    def __init__(
-        self,
-        store: LifecycleStore,
-        navigation: TaskNavigation,
-        *,
-        timeout_ms: float = 300.0,
-    ):
-        super().__init__(store, navigation, rejection_type=RouteRejected, timeout_ms=timeout_ms)
+from vehicle_core.route_plan import RouteRejected as RouteRejected

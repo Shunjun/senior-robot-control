@@ -1158,3 +1158,34 @@ websocket link（本地测试网络替身/临时监听，非开发服务，记�
 完整命令与未验限制见[manager本片记录](../../../senior_control/README.md#r5-具体agent依赖绑定)。
 固定分支提交禁hooks，不启动服务/仿真、不发实车运动、不部署推送；agent extra缓存缺口
 仍按前片保留，不称完整生产agent、ROS或实车通过。
+
+
+### R5 任务执行和路线IPC装配（基线d445b12）
+
+15文件：产品增2改10、工具文档改3，测试/配置/删除0。RoutePlan/RouteRejected原定义迁
+vehicle_core/route_plan，QualifiedRoute仍归senior_navigation执行owner，WS契约不增。
+导航route/旧Root navigation显式 //Compatible 同对象，ROS adapter三处仅换共享类型引用，
+保持robot agent_adapter原CRLF。具体TaskExecutor/QualificationUnavailable/_error_code/
+NavigationEffects归manager/tasks/execution_bindings，旧两模块显式重导并保留辅助名；
+具体IpcNavigation归现有local_adapters，引用既有manager store且保留原对象注入和方法。
+composition只改三个实际绑定导入，其余运行组合/九client/mapping/media不动。
+
+验收：指定task_runner/terminal_release_outbox/agent_ports与navigation_collision_qualification
+先读确认不涉及仿真：后者只用authority/Executor/Server/ROS ModuleType替身，controller.open
+明确禁止，无真实ROS调用。限定原用例，若失败按d445b12最小基线复现，不改断言。
+仓库外真实root/manager/navigation/robot wheel构建与base/SDK安装：新旧类型/方法同对象、
+路线schema/独立manager实际store/执行装配、不加载旧业务/ROS/nav/mapping/cloud。
+Ruff/format/CRLF diff和实际15文件自审后固定分支提交，不启动任何服务/仿真、不发实车
+运动、不部署推送，不增加依赖/协议/功能；其他旧wheel复用情况如实记录。
+
+本片实际15文件符合预算，产品增2改10、工具文档改3，测试/配置/锁0。
+原路线类/执行构造文本不变，QualifiedRoute留原导航owner，adapter/composition业务AST及
+robot agent_adapter CRLF保持；IpcNavigation只收窄waypoint接口并在generic类型边界保留同实例。
+指定非仿真用例87通过，接口收尾后复跑87通过（1.68s），无基线失败或断言修改。
+四个真实root/manager/navigation/robot wheel构建及base12包/SDK26包pip check通过，
+manager-only真实SQLite/store/生命周期/执行类型装配及无旧业务/nav/ROS加载通过；
+SDK旧新同对象/generic方法和实际composition装配通过。导航类型安装检查通过，
+ament/ROS prefix不存在故ROS executable/share明确UNVERIFIED；其余7个旧wheel复用。
+Ruff/format、CRLF diff及15文件自审通过，完整命令和未验限制见
+[manager本片记录](../../../senior_control/README.md#r5-任务执行和路线ipc装配)。
+固定分支提交禁hooks，未启动服务/仿真、不发实车运动、不部署推送，不声称实车通过。
