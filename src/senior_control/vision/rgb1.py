@@ -7,7 +7,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from senior_control.vision.synchronizer import ImageFrame
+from senior_control.image_frame import ImageFrame
 
 _HEADER = struct.Struct("!4sBHHQ")
 _MAGIC = b"RGB1"

@@ -10,6 +10,62 @@ import sys
 from pathlib import Path
 
 
+def verify_lazy_shared_imports() -> None:
+    """Fresh processes check the actual installed import graph and public identities."""
+    import subprocess
+
+    scripts = (
+        """
+import sys
+from senior_control.image_frame import ImageFrame
+from senior_control.vision import rgb1
+assert rgb1.ImageFrame is ImageFrame
+for name in ('depth', 'detector', 'tracking', 'synchronizer'):
+    assert 'senior_control.vision.' + name not in sys.modules, name
+assert 'senior_control.runtime.diagnostics' not in sys.modules
+assert 'senior_control.sensors.policy' not in sys.modules
+""",
+        """
+import sys
+from senior_control.agent.manual_control import ManualIngress, ManualTarget, MotionRuntimeReceiver
+assert all(callable(c) for c in (ManualIngress, ManualTarget, MotionRuntimeReceiver))
+assert 'senior_control.agent.main' not in sys.modules
+assert 'vehicle_manager.agent.frame_projection' not in sys.modules
+assert 'vehicle_manager.agent.state_ports' not in sys.modules
+""",
+        """
+from importlib import import_module
+from senior_control import agent, vision
+from senior_control.agent import main, snapshots
+from senior_control.image_frame import ImageFrame
+from senior_control.vision.synchronizer import ImageFrame as OldFrame
+assert agent.Agent is main.Agent
+assert agent.RobotSnapshot is snapshots.RobotSnapshot
+assert vision.ImageFrame is OldFrame is ImageFrame
+owners = {
+    'senior_control.image_frame': ('ImageFrame',),
+    'senior_control.vision.depth': (
+        'CalibrationError', 'CameraCalibration', 'CameraExtrinsic', 'ColumnStatus',
+        'GeometryConfig', 'GeometryObservation', 'GeometryPoint', 'project_depth'),
+    'senior_control.vision.detector': (
+        'Detection', 'DetectionBatch', 'Detector', 'DetectorDisabled', 'DisabledDetector',
+        'InferenceWorker', 'load_detector'),
+    'senior_control.vision.synchronizer': (
+        'AlignedRgbdFrame', 'DepthFrame', 'FrameSyncError', 'RgbdSynchronizer', 'align'),
+    'senior_control.vision.tracking': ('DynamicMask', 'Tracker', 'TrackingConfig', 'track'),
+}
+assert set(vision.__all__) == {name for names in owners.values() for name in names}
+for owner, names in owners.items():
+    module = import_module(owner)
+    for name in names:
+        assert getattr(vision, name) is getattr(module, name), name
+""",
+    )
+    for script in scripts:
+        subprocess.run([sys.executable, "-c", script], cwd="/tmp", check=True, timeout=15)
+    print("isolated legacy execution/media imports and unchanged public identities: PASS")
+
+
 def verify_navigation() -> None:
     """Verify the real SDK aliases, then ROS prefix paths when ROS is installed."""
     from senior_navigation import navigation_adapter, route
@@ -1207,6 +1263,7 @@ def main() -> None:
     verify_manager_task_store()
     verify_manager_lifecycle()
     verify_legacy_task_store()
+    verify_lazy_shared_imports()
     verify_legacy_operator()
     verify_navigation()
     verify_legacy_media()
@@ -1364,7 +1421,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--navigation-only"]:
+    if sys.argv[1:] == ["--lazy-shared-only"]:
+        verify_lazy_shared_imports()
+    elif sys.argv[1:] == ["--navigation-only"]:
         verify_navigation()
     elif sys.argv[1:] == ["--platform-runtime-only"]:
         verify_platform_runtime()

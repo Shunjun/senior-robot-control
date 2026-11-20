@@ -3,7 +3,7 @@
 from senior_robot.ros_video import RosCameraSource as _RosCameraSource
 from senior_robot.ros_video import logger as logger
 
-from senior_control.vision.synchronizer import ImageFrame
+from senior_control.image_frame import ImageFrame
 
 
 class RosCameraSource(_RosCameraSource[ImageFrame]):

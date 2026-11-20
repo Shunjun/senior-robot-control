@@ -120,3 +120,9 @@ M5D1 将实车 ROS 命令构造和可选视频环境探针归入已有
 旧 helper 保留 Compatible 签名和逐次恢复效果绑定。systemd、CLI、IPC、诊断及学习 owner 不变。
 实际文件和验证见[管理批次记录](senior_control/README.md#m5d1-实车平台命令与视频探针)。
 独立 Robot wheel 的 provider 导入检查不代表 ROS 启动或管理独立部署验收。
+
+
+共享导入准备片将唯一 `ImageFrame` 放在 [image_frame.py](src/senior_control/image_frame.py)，
+原 vision/agent 公开名字按需加载并保留对象身份；ROS所用手动执行类不再连带导入Agent主循环或管理投影。
+本片不改变Root发行依赖、生产入口或公共IPC/诊断/DrivingSettings，不表示独立部署完成。
+实际14文件、原失败基线和仓库外wheel证据见[管理记录](senior_control/README.md#共享导入准备片-imageframe与按需公开)。

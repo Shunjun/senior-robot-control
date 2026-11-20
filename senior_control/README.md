@@ -1750,3 +1750,65 @@ peer身份、权限、0.5秒校验、IPC、关闭、学习/events及Agent/module
 实际ROS/ament安装、vendor overlay sourcing、ROS域/命名空间/相机设备与真实systemd/docker执行未验；
 native/SLAM安装仍UNVERIFIED，Python3.10及CI未执行。这里的Robot独立导入与完整旧SDK安装
 分别报告，均不冒充管理独立生产部署；公共IPC/诊断/Clock/进程/帧owner归属仍待定。
+
+
+## 共享导入准备片 ImageFrame与按需公开
+
+基线 `c11703f`；固定功能分支直接提交，实际增1改13删0：产品增1改9、测试及配置0、工具文档改4。
+仅拆公开导入边界，不新增项目/发行/算法/WS字段，不改Root依赖/入口、DrivingSettings、IPC或诊断owner。
+
+```text
+src/senior_control/image_frame.py               # 新增，原frozen ImageFrame及校验唯一实现
+src/senior_control/vision/
+  __init__.py                                 # 改，原__all__对象/四原子模块按需公开
+  synchronizer.py                             # 改，ImageFrame显式Compatible同对象；其余算法原样
+  rgb1.py, stream.py, ros_video.py,
+  simulation_video.py                         # 改，读取同一叶子Frame
+src/senior_control/agent/
+  __init__.py                                 # 改，原Agent/RobotSnapshot按需公开
+  manual_control.py                           # 改，只有vehicle_frame调用时加载原管理投影
+  composition.py                              # 改，原真实媒体factory使用同一Frame
+README.md, senior_control/README.md             # 改，实际边界和验证
+docs/superpowers/plans/2026-11-19-vehicle-architecture-refactor.md # 改，完成和待定记录
+tools/verify_batch_one_install.py              # 改，原完整检查/新进程隔离与原公开身份
+```
+
+ImageFrame仍归原Root发行，只从同步算法模块移到纯值叶子；其字段、冻结、尺寸/编码/数据校验逐字保留。
+原 `vision.synchronizer.ImageFrame`、`vision.ImageFrame`、媒体旧公开Frame与真实frame_factory均为同一类。
+类的 `__module__` 现在是 `senior_control.image_frame`，没有复制一个兼容类或假frame。
+RGB1 header/尺寸/权限/时刻/读写和关闭规则不改；DepthFrame、同步配准/识别算法不迁移。
+
+两个原 `__all__` 名单和顺序保持；显式公开请求才导入真实owner，返回并缓存原对象。
+vision原depth/detector/synchronizer/tracking子模块名仍可按需访问，原公开Literal/Protocol/类/函数均同身份。
+manual_control的全部执行类及函数签名/逻辑保持；原manager projection与ProjectionPorts仅移入
+实际vehicle_frame调用内，仍每次构造原ports，不复制业务状态或造另一个投影实现。
+ROS command_node仍从原路径读取这些执行类；没有改变ROS节点、控制权限、学习/导航或停止链。
+DrivingSettings仍是原manager公开值，不宣称完全消除了所有manager发行入边。
+
+### 命令、结果与限制
+
+环境：macOS26.4 arm64、CPython3.12.15、pytest8.4.2、ruff0.17.3、mypy2.4.0、uv0.12.23。
+python/ruff/mypy来自主仓库原 `.venv/bin`，uv使用 `UV_CACHE_DIR=/tmp/vehicle-uv-cache`。
+
+- 安装工具新增的 `--lazy-shared-only` 先在源发现路径运行，因缺少新叶子模块失败；实现后3个独立子进程通过。
+  每个子进程是实际Python导入，没有ROS/队列/Frame替身：只导入叶子/RGB1不加载深度/识别/同步/诊断/帧龄策略，
+  只导入原ManualIngress/ManualTarget/MotionRuntimeReceiver不加载agent.main或manager frame_projection/state_ports，
+  第三个进程逐项比对原25个vision公开对象和Agent/RobotSnapshot/旧新Frame身份。
+  初版工具试图由对象__module__/__name__推导Literal归属，对ColumnStatus不适用；已改为按原公开owner逐项比较同一对象。
+- `python -m pytest tests/unit/test_simulation_video.py tests/unit/test_rgbd_sync_ordering.py tests/unit/test_rgbd_runtime.py tests/integration/test_video.py tests/integration/test_manual_wire.py tests/unit/test_degraded_manual_speed.py senior_control/tests/test_agent_config.py -q --tb=short`：97通过、53失败，10.14秒。
+- `git archive c11703f` 至 `/tmp/m6-baseline-source`，原同解释器/同清单：97通过、相同53失败，11.09秒；失败ID逐条相同。
+  旧3个manual_wire夹具访问已退役CommandNode._output_incarnation，旧50个degraded_manual_speed访问MotionCoreOutput._snapshot。
+  没有补假属性/删弱断言，也没有把旧失败说成通过；可用原视频含真实aiortc回环、RGB1、同步/几何及Agent同DB/九客户端原回归保持。
+- MYPYPATH取原pytest pythonpath；`mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud`：
+  当前270源码与c11703f归档269源码均相同39旧错误，归一行号后诊断完全一致。
+- 原Frame class AST一致；剩余synchronizer定义、全部manual执行类/签名/投影调用体、RGB1/media/composition定义AST一致，
+  只改变Frame引用和投影局部import；两份__all__列表与顺序不变；测试源、原settings/IPC/Clock/diagnostics/policy/资源/发行配置未改。
+- `uv build --offline --out-dir /tmp/m6-wheels`：根sdist和wheel通过，原packages声明已包含新叶子，无需配置/锁变化。
+- 新建 `/tmp/m6-sdk`、安装新Root wheel及原其他10个闭包wheel，共26包；从 `/tmp` 运行
+  `python <仓库>/tools/verify_batch_one_install.py` 原完整检查和 `--lazy-shared-only`：原CLI/module help、真实原装配/SQLite/媒体及3个隔离导入检查通过。
+  `uv pip check --python /tmp/m6-sdk/bin/python`通过；这是一套完整旧SDK兼容安装，不是无ROS业务wheel的独立管理部署。
+- 11份变更Python的ruff check/format --check及git diff --check通过。
+
+本轮仅原受控测试RTC/socket/SQLite夹具，没有启动开发/实车/仿真服务或VM，没有部署/推送。
+实际ROS/rclpy/ament/Linux/厂商加载与设备、Python3.10和CI未验；安装工具导航ROS和原native/SLAM仍UNVERIFIED。
+独立manager生产安装仍需核定Root发行定位和共享诊断/值/原媒体学习与地图读取边界，不提前变更已定目录或生产入口。

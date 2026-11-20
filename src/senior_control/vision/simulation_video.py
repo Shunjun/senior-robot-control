@@ -4,6 +4,7 @@ from pathlib import Path
 
 from vehicle_manager.media.latest_frame import LatestFrameFile as _LatestFrameFile
 
+from senior_control.image_frame import ImageFrame as ImageFrame
 from senior_control.vision.rgb1 import _ENCODINGS as _ENCODINGS
 from senior_control.vision.rgb1 import _HEADER as _HEADER
 from senior_control.vision.rgb1 import _MAGIC as _MAGIC
@@ -14,7 +15,6 @@ from senior_control.vision.rgb1 import _POLL_SECONDS as _POLL_SECONDS
 from senior_control.vision.rgb1 import _read_frame as _read_frame
 from senior_control.vision.rgb1 import _size as _size
 from senior_control.vision.rgb1 import publish_image as publish_image
-from senior_control.vision.synchronizer import ImageFrame as ImageFrame
 
 
 class LatestFrameFile(_LatestFrameFile):

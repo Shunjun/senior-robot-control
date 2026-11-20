@@ -111,6 +111,7 @@ B0当时默认生产构建/launch未引用新骨架；后续真实入口与根SD
 | B6.M5C 管理媒体与执行接入已迁 | stream/signaling/turn/最新帧消费 → manager/media；原ROS camera → senior_robot；sim直接用原共享RGB1 | 原帧类/codec唯一、诊断真实注入、旧Compatible和logger保持，23文件与原43/7及安装4项结果见M5C；ROS实测和独立部署后置 |
 | B6.M5D1 实车平台构造已归组合包 | 原helper五份命令/视频探针 → senior_robot.platform_runtime | 原只读配置/五签名Compatible、ServicePorts与逐次恢复效果保持；9文件、原回归/安装及旧失败见M5D1记录，公共owner及独立入口后置 |
 | B7 既有导航已迁，ROS实测待补；新算法后置 | 原Root navigation、robot navigation_adapter/DedicatedController、导航launch和四资产 → senior_navigation；hardware_navigation定位别名不重复迁移 | 实车/仿真Include与参数读取已接canonical，原值/异常/恢复和控制/定位owner保持；35逻辑文件、原回归和旧失败/安装见B7记录；新探索等算法仍后置 |
+| B6共享导入准备片 已完成，独立部署未完成 | 原ImageFrame → Root image_frame叶子；agent/vision公开API按需加载 | 14文件；执行类导入不连带Agent主循环/管理投影，RGB1不连带深度识别/帧龄诊断；原业务/发行/入口/IPC不改，完整独立安装仍待owner决定 |
 | B8 待联调 | 各功能包与原实车/仿真组合、车端/云端独立项目 | 依赖各前项验收；实际 ROS 图、构建安装、仿真/实车与地图导航整链验收，未验能力逐项登记，不靠骨架或占位宣称可用 |
 
 每批实施前重新核对实际文件清单及测试候选，预报范围后再动手。迁移先复用现有算法和同名用例；
@@ -759,3 +760,18 @@ Root与robot旧Python对象Compatible同身份，旧ROS executable保留，旧la
 公共IPC/诊断/Clock/帧与管理独立安装收尾不是本片既有导航迁移前置，但其owner决策仍未完成。
 缺失地图操作/每图Home/定位协作留相应模块实现；新的前沿探索等算法在接口稳定后的模块阶段实施，
 当前仅迁既有行为，B8真实ROS/仿真/实车联调验收未完成。
+
+
+### 共享导入准备片：唯一ImageFrame与按需公开
+
+基线c11703f；不改变发行或入口，只清理真实的父包急切导入。
+原frozen ImageFrame归Root image_frame.py，vision/synchronizer显式Compatible同对象，
+原RGB1/媒体/真实composition消费者接同一叶子；agent/vision原公开名字按需访问同owner。
+manual_control只在实际vehicle_frame投影时加载原manager投影，ROS所用执行类/签名和控制逻辑原样。
+实际14文件、基线53旧失败/39旧类型错误对照及完整仓库外wheel验证见
+[管理共享导入记录](../../../senior_control/README.md#共享导入准备片-imageframe与按需公开)。
+
+Root依赖/CLI/systemd、DrivingSettings公开值、IPC/诊断/Clock/策略均未变；本片不代表独立manager部署。
+Root发行是否最终作为公共core、共享值/诊断单实例及真实媒体/学习/地图读取执行边界仍为待定，
+未新增顶层项目/发行，也不把提案写成决定；后片需负责人审核与预报后实施。
+B8实际ROS/Humble/Linux与真实仿真/设备验收仍待环境，缺失新算法留原模块实现阶段。

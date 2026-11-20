@@ -8,9 +8,6 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-from vehicle_manager.agent.frame_projection import vehicle_frame as _vehicle_frame
-from vehicle_manager.agent.state_ports import ProjectionPorts
-
 from senior_control.models import Velocity
 from senior_control.motion.contracts import (
     AcceptedManualIntent,
@@ -194,6 +191,10 @@ def vehicle_frame(
     now: float,
     observation: RuntimeObservation | None = None,
 ) -> dict[str, object]:
+    # //Compatible: only the management projection needs these original owners.
+    from vehicle_manager.agent.frame_projection import vehicle_frame as _vehicle_frame
+    from vehicle_manager.agent.state_ports import ProjectionPorts
+
     return _vehicle_frame(
         runtime,
         ports=ProjectionPorts(RuntimeObservation, MotionState, MotionMode, MotionMode.ESTOP),

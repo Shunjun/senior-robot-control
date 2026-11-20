@@ -33,4 +33,4 @@ from vehicle_manager.media.stream import negotiate_codec as negotiate_codec
 from vehicle_manager.media.turn import IceCredentials as IceCredentials
 from vehicle_manager.media.turn import TurnCredentialIssuer as TurnCredentialIssuer
 
-from senior_control.vision.synchronizer import ImageFrame as ImageFrame
+from senior_control.image_frame import ImageFrame as ImageFrame
