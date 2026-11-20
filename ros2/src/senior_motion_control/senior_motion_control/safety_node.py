@@ -516,17 +516,12 @@ class SafetyGate(Node):
         self._scan_generation += 1
         try:
             steady = time.monotonic()
-            stamp = Time.from_msg(msg.stamp).nanoseconds / 1e9
-            capture = capture_from_message(msg.raw_capture)
+            stamp = capture.stamp_ns / 1e9
             if (
                 not self._clock_ok(steady)
                 or not msg.valid
-                or not msg.raw_source
                 or msg.raw_source != self._scan_source
-                or not msg.frame_id
                 or not 1 <= len(msg.ranges) <= 2048
-                or not all(math.isfinite(v) for v in (msg.ingress_steady, msg.ingress_ros))
-                or not 0 <= steady - msg.ingress_steady <= self._freshness.max_age
                 or not self._freshness.scan(capture.measurement_steady, msg.ingress_steady, steady)
             ):
                 raise ValueError("bounded scan unqualified")

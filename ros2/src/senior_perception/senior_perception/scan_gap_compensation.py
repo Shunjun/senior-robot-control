@@ -177,13 +177,16 @@ class ScanGapCompensator:
             return index if 0 <= index < count else None
 
         slots = {}
-        for seed in self._seeds:
-            point = (np.asarray(seed.point) - origin) @ rotation
-            index = _index(
-                math.atan2(point[1], point[0]), scan.angle_min, scan.angle_increment, count
-            )
-            if index is not None and ranges[index] == math.inf:
-                slots.setdefault(index, []).append(seed)
+        # Historical projections can only supply positive-infinity cells.
+        # Still establish this acquisition's real seeds below when there are no gaps.
+        if np.any(ranges == math.inf):
+            for seed in self._seeds:
+                point = (np.asarray(seed.point) - origin) @ rotation
+                index = _index(
+                    math.atan2(point[1], point[0]), scan.angle_min, scan.angle_increment, count
+                )
+                if index is not None and ranges[index] == math.inf:
+                    slots.setdefault(index, []).append(seed)
         retained, predictions = [], []
         for index, seeds in slots.items():
             if len(seeds) != 1:
