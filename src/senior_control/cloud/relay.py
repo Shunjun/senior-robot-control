@@ -36,7 +36,7 @@ from cloud.relay import logger as logger
 from cloud.relay import serve_connection as serve_connection
 from cloud.snapshots import SnapshotCache
 
-from senior_control.runtime.diagnostics import DiagnosticDeque
+from vehicle_core.diagnostics import DiagnosticDeque
 
 
 class Outbox(_Outbox):

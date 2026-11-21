@@ -18,8 +18,6 @@ from queue import Empty, Full, Queue
 from threading import Event, Thread
 from typing import Any, Protocol, cast
 
-from senior_control.runtime.diagnostics import QueueSnapshot, process_diagnostics
-from senior_control.sensors.policy import default_policy, sensor_current
 from senior_control.vision.independent_motion import (
     Frame,
     IndependentMotion,
@@ -29,6 +27,8 @@ from senior_control.vision.independent_motion import (
 from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_control.vision.rgbd_frame_builder import CameraInfoSnapshot, ImageLayoutSnapshot
 from senior_control.vision.static_tf_binding import Receipt
+from vehicle_core.diagnostics import QueueSnapshot, process_diagnostics
+from vehicle_core.sensor_policy import default_policy, sensor_current
 
 
 @dataclass(frozen=True)

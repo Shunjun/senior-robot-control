@@ -3,8 +3,6 @@
 from dataclasses import dataclass
 from typing import TypeAlias
 
-from senior_control.models import Pose2D
-from senior_control.sensors.sample_time import SampleTime, StampInterval, interval_ns
 from senior_motion_estimation.observations import (
     Covariance,
     Frame,
@@ -12,6 +10,8 @@ from senior_motion_estimation.observations import (
     Source,
     SourceStatus,
 )
+from vehicle_core.sample_time import SampleTime, StampInterval, interval_ns
+from vehicle_core.values import Pose2D
 
 
 @dataclass(frozen=True)

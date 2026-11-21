@@ -10,16 +10,16 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from senior_control.models import Velocity
 from senior_control.motion.acceleration_model import AccelerationModel
 from senior_control.motion.constraints import NoReturnPolicy
 from senior_control.motion.controller import ControllerConfig
 from senior_control.motion.fusion import FusionConfig
 from senior_control.motion.observations import AdmissionConfig, Source, SourceRule
 from senior_control.motion.temporal import TemporalConfig
-from senior_control.runtime.diagnostics import DiagnosticsSettings
 from senior_control.sensors.input_config import OptionalMotionInput
-from senior_control.sensors.policy import default_policy
+from vehicle_core.diagnostics import DiagnosticsSettings
+from vehicle_core.sensor_policy import default_policy
+from vehicle_core.values import Velocity
 
 
 class HardwareMotionProfile(BaseModel):

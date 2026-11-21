@@ -66,7 +66,7 @@ def test_example_has_no_real_credentials() -> None:
 
 def test_agent_entry_reports_missing_configuration() -> None:
     completed = subprocess.run(
-        (sys.executable, "-m", "senior_control.agent.main"),
+        (sys.executable, "-m", "vehicle_manager.agent"),
         cwd=ROOT,
         capture_output=True,
         text=True,

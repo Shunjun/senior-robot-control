@@ -1,261 +1,56 @@
-"""Configuration and composition for the robot agent."""
+"""//Compatible: historical production assembly names share the canonical implementation."""
 
-import asyncio
-import logging
-import re
-import time
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
-from importlib.util import find_spec
-from pathlib import Path
-from urllib.parse import urlsplit
-
-from senior_mapping.workspace_export import load_exported_grid
-from senior_robot.ros_video import RosCameraSource
-from vehicle_manager.agent.bootstrap_ports import AgentBootstrapPorts, MediaBinding
-from vehicle_manager.agent.composition import build_task_runtime as _build_task_runtime
-from vehicle_manager.agent.composition import pause_failed_tasks as pause_failed_tasks
-from vehicle_manager.agent.composition import run_agent as _run_agent
-from vehicle_manager.agent.snapshot_state import SnapshotState as _SnapshotState
-from vehicle_manager.agent.state_ports import SnapshotPorts
-from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
-
-from senior_control.agent.dispatcher import LifecycleNavigationOperations, StoreTaskPort
-from senior_control.agent.journal import AgentJournal
-from senior_control.agent.logs_wire import AgentLogConnection
-from senior_control.agent.main import Agent
-from senior_control.agent.manual_control import vehicle_frame
-from senior_control.agent.ports import (
-    IpcHomePort,
-    IpcMapPort,
-    IpcNavigation,
-    IpcState,
-    TaskAwareMotion,
+# //Compatible: original optional camera symbol remains available to SDK callers.
+from senior_robot.ros_video import RosCameraSource as RosCameraSource
+from vehicle_manager.agent.production import READ_FD as READ_FD
+from vehicle_manager.agent.production import Admission as Admission
+from vehicle_manager.agent.production import Agent as Agent
+from vehicle_manager.agent.production import AgentBootstrapPorts as AgentBootstrapPorts
+from vehicle_manager.agent.production import AgentConfig as AgentConfig
+from vehicle_manager.agent.production import AgentJournal as AgentJournal
+from vehicle_manager.agent.production import AgentLogConnection as AgentLogConnection
+from vehicle_manager.agent.production import AiortcPeerFactory as AiortcPeerFactory
+from vehicle_manager.agent.production import Callable as Callable
+from vehicle_manager.agent.production import Database as Database
+from vehicle_manager.agent.production import DomainError as DomainError
+from vehicle_manager.agent.production import ImageFrame as ImageFrame
+from vehicle_manager.agent.production import IpcClient as IpcClient
+from vehicle_manager.agent.production import IpcHomePort as IpcHomePort
+from vehicle_manager.agent.production import IpcMapPort as IpcMapPort
+from vehicle_manager.agent.production import IpcNavigation as IpcNavigation
+from vehicle_manager.agent.production import IpcState as IpcState
+from vehicle_manager.agent.production import LatestFrameFile as LatestFrameFile
+from vehicle_manager.agent.production import (
+    LifecycleNavigationOperations as LifecycleNavigationOperations,
 )
-from senior_control.agent.settings_wire import SettingsRuntime
-from senior_control.agent.websocket import WebSocketConnector
-from senior_control.agent.workspace import WorkspaceReader
-from senior_control.errors import DomainError
-from senior_control.image_frame import ImageFrame
-from senior_control.protocol import RuntimeObservation
-from senior_control.runtime.diagnostics import (
-    DiagnosticsSettings,
-    configure_diagnostics,
-    diagnostics_from_environment,
-)
-from senior_control.runtime.ipc import IpcClient
-from senior_control.runtime.lifecycle_events import READ_FD, observe
-from senior_control.storage.database import Database
-from senior_control.tasks import TaskExecutor, TaskStore
-from senior_control.tasks.lifecycle_store import Admission
-from senior_control.tasks.navigation_port import NavigationEffects, TaskNavigation
-from senior_control.tasks.runtime import TaskRuntime
-from senior_control.vehicle_logs.service import VehicleLogService
-from senior_control.vision.simulation_video import LatestFrameFile
-from senior_control.waypoints.store import WaypointStore
+from vehicle_manager.agent.production import MediaBinding as MediaBinding
+from vehicle_manager.agent.production import NavigationEffects as NavigationEffects
+from vehicle_manager.agent.production import SettingsRuntime as SettingsRuntime
+from vehicle_manager.agent.production import SnapshotState as SnapshotState
+from vehicle_manager.agent.production import StoreTaskPort as StoreTaskPort
+from vehicle_manager.agent.production import TaskAwareMotion as TaskAwareMotion
+from vehicle_manager.agent.production import TaskExecutor as TaskExecutor
+from vehicle_manager.agent.production import TaskNavigation as TaskNavigation
+from vehicle_manager.agent.production import TaskRuntime as TaskRuntime
+from vehicle_manager.agent.production import TaskStore as TaskStore
+from vehicle_manager.agent.production import VehicleLogService as VehicleLogService
+from vehicle_manager.agent.production import VideoSession as VideoSession
+from vehicle_manager.agent.production import WaypointStore as WaypointStore
+from vehicle_manager.agent.production import WebSocketConnector as WebSocketConnector
+from vehicle_manager.agent.production import _build_task_runtime as _build_task_runtime
+from vehicle_manager.agent.production import _ControlViewer as _ControlViewer
+from vehicle_manager.agent.production import _media_binding as _media_binding
+from vehicle_manager.agent.production import _run_agent as _run_agent
+from vehicle_manager.agent.production import build_task_runtime as build_task_runtime
+from vehicle_manager.agent.production import configure_diagnostics as configure_diagnostics
+from vehicle_manager.agent.production import dataclass as dataclass
+from vehicle_manager.agent.production import find_spec as find_spec
+from vehicle_manager.agent.production import load_exported_grid as load_exported_grid
+from vehicle_manager.agent.production import logger as logger
+from vehicle_manager.agent.production import observe as observe
+from vehicle_manager.agent.production import pause_failed_tasks as pause_failed_tasks
+from vehicle_manager.agent.production import run_agent as run_agent
+from vehicle_manager.agent.production import vehicle_frame as vehicle_frame
 
-logger = logging.getLogger("senior_control.agent")
-
-
-@dataclass(frozen=True)
-class AgentConfig:
-    robot_id: str
-    cloud_url: str
-    device_token: str = field(repr=False)
-    database_path: Path
-    socket_path: Path
-    workspace_map_bundle: Path | None = None
-    workspace_map_sha256: str | None = None
-    simulation_video_frame: Path | None = None
-    ros_video_topic: str | None = None
-    # //Compatible: accepted from old simulation environments; no longer gates settings.
-    simulation_settings: bool = False
-    diagnostics: DiagnosticsSettings = field(default_factory=DiagnosticsSettings)
-
-    def __post_init__(self) -> None:
-        url = urlsplit(self.cloud_url)
-        if not self.robot_id.strip() or not self.device_token.strip():
-            raise ValueError("robot id and credential are required")
-        if url.scheme != "wss" or not url.hostname or url.username or url.password:
-            raise ValueError("cloud URL must use authenticated TLS")
-        if not self.database_path.is_absolute() or not self.socket_path.is_absolute():
-            raise ValueError("database and socket paths must be absolute")
-        if (self.workspace_map_bundle is None) != (self.workspace_map_sha256 is None):
-            raise ValueError("workspace map bundle and SHA-256 must be configured together")
-        if self.workspace_map_bundle is not None and not self.workspace_map_bundle.is_absolute():
-            raise ValueError("workspace map bundle path must be absolute")
-        if self.workspace_map_sha256 is not None and not re.fullmatch(
-            r"[0-9a-f]{64}", self.workspace_map_sha256
-        ):
-            raise ValueError("workspace map SHA-256 must be 64 lowercase hexadecimal digits")
-        if (
-            self.simulation_video_frame is not None
-            and not self.simulation_video_frame.is_absolute()
-        ):
-            raise ValueError("simulation video slot must have an absolute path")
-
-    @classmethod
-    def from_environment(cls, environment: Mapping[str, str]) -> "AgentConfig":
-        try:
-            bundle = environment.get("SENIOR_WORKSPACE_MAP_BUNDLE")
-            video = environment.get("SENIOR_SIMULATION_VIDEO_FRAME")
-            return cls(
-                robot_id=environment["SENIOR_ROBOT_ID"],
-                cloud_url=environment["SENIOR_CLOUD_URL"],
-                device_token=environment["SENIOR_DEVICE_TOKEN"],
-                database_path=Path(environment["SENIOR_DATABASE_PATH"]),
-                socket_path=Path(environment["SENIOR_AGENT_SOCKET"]),
-                workspace_map_bundle=Path(bundle) if bundle is not None else None,
-                workspace_map_sha256=environment.get("SENIOR_WORKSPACE_MAP_SHA256"),
-                simulation_video_frame=Path(video) if video is not None else None,
-                ros_video_topic=environment.get("SENIOR_ROS_VIDEO_TOPIC"),
-                simulation_settings=environment.get("SENIOR_SIMULATION_SETTINGS") == "1",
-                diagnostics=diagnostics_from_environment(environment),
-            )
-        except KeyError as exc:
-            raise ValueError(f"missing environment variable {exc.args[0]}") from exc
-
-
-@dataclass(frozen=True)
-class _ControlViewer:
-    robot_id: str
-    role: str = "control"
-
-
-# //Compatible: original construction, canonical safety-frontier/display owner.
-
-
-class SnapshotState(_SnapshotState):
-    def __init__(
-        self,
-        state: IpcState,
-        tasks: TaskStore,
-        waypoints: WaypointStore,
-        workspace: WorkspaceReader | None = None,
-        *,
-        navigation: LifecycleNavigationOperations | None = None,
-        connected: Callable[[], bool] = lambda: True,
-        epoch: Callable[[], int] = lambda: 0,
-        manual_enabled: bool = False,
-        clock: Callable[[], float] = time.monotonic,
-        settings_enabled: bool = False,
-        logs_enabled: Callable[[], bool] = lambda: False,
-    ) -> None:
-        super().__init__(
-            state,
-            tasks,
-            waypoints,
-            workspace,
-            ports=SnapshotPorts(vehicle_frame, RuntimeObservation, DomainError),
-            navigation=navigation,
-            connected=connected,
-            epoch=epoch,
-            manual_enabled=manual_enabled,
-            clock=clock,
-            settings_enabled=settings_enabled,
-            logs_enabled=logs_enabled,
-        )
-
-
-def build_task_runtime(
-    database: Database,
-    tasks: TaskStore,
-    navigation: TaskNavigation,
-    *,
-    boot_id: str,
-    connected: Callable[[], bool] | None = None,
-    admission: Admission | None = None,
-) -> tuple[TaskRuntime, TaskExecutor]:
-    """//Compatible: same database/stores and original concrete execution/error constructors."""
-    return _build_task_runtime(
-        database,
-        tasks,
-        navigation,
-        boot_id=boot_id,
-        connected=connected,
-        admission=admission,
-        executor_factory=TaskExecutor,
-        navigation_effects=NavigationEffects,
-    )
-
-
-# //Compatible: the task pause policy is the same canonical function.
-
-
-def _media_binding(config: AgentConfig) -> MediaBinding:
-    """Original media ownership; ROS camera and peer backends remain here."""
-    video_factory: AiortcPeerFactory | None = None
-
-    def video_session() -> VideoSession | None:
-        nonlocal video_factory
-        if config.ros_video_topic is None and config.simulation_video_frame is None:
-            return None
-        if find_spec("aiortc") is None:
-            logger.warning("video disabled because the video extra is unavailable")
-            return None
-        if video_factory is None:
-            video_factory = AiortcPeerFactory()
-        if config.ros_video_topic is not None:
-            source = RosCameraSource(config.ros_video_topic, frame_factory=ImageFrame)
-
-            class RosVideoSession(VideoSession):
-                async def close(self) -> None:
-                    try:
-                        await super().close()
-                    finally:
-                        await source.close()
-
-            return RosVideoSession(
-                robot_id=config.robot_id,
-                viewer=_ControlViewer(config.robot_id),
-                source=source,
-                factory=video_factory,
-            )
-        assert config.simulation_video_frame is not None
-        return VideoSession(
-            robot_id=config.robot_id,
-            viewer=_ControlViewer(config.robot_id),
-            source=LatestFrameFile(config.simulation_video_frame),
-            factory=video_factory,
-        )
-
-    async def close() -> None:
-        if video_factory is not None:
-            await asyncio.to_thread(video_factory.close)
-
-    return MediaBinding(video_session, close)
-
-
-async def run_agent(config: AgentConfig) -> int:
-    """//Compatible: construct explicit original owners for this invocation only."""
-    return await _run_agent(
-        config,
-        ports=AgentBootstrapPorts(
-            configure_diagnostics=lambda: configure_diagnostics(config.diagnostics),
-            database=Database,
-            tasks=TaskStore,
-            waypoints=WaypointStore,
-            journal=AgentJournal,
-            ipc=IpcClient,
-            motion=TaskAwareMotion,
-            state=IpcState,
-            workspace=WorkspaceReader,
-            home=IpcHomePort,
-            maps=IpcMapPort,
-            navigation=IpcNavigation,
-            build_task_runtime=build_task_runtime,
-            settings_runtime=SettingsRuntime,
-            log_service=VehicleLogService,
-            log_connection=AgentLogConnection,
-            navigation_actions=LifecycleNavigationOperations,
-            snapshot_state=SnapshotState,
-            connector=WebSocketConnector,
-            store_task_port=StoreTaskPort,
-            agent=Agent,
-            load_exported_grid=load_exported_grid,
-            media=lambda: _media_binding(config),
-            observe=observe,
-            read_fd=READ_FD,
-            error=DomainError,
-        ),
-    )
+# //Compatible: original exported-map constructor retains its explicit mapping effect.
+from senior_control.agent.workspace import WorkspaceReader as WorkspaceReader

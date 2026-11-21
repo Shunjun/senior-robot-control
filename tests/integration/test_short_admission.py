@@ -12,8 +12,8 @@ from typing import Any
 import pytest
 from agent_fakes import FakeConnector, FakeLink, until
 from test_manual_wire import envelope, runtime
+from vehicle_manager.agent import production as composition
 
-from senior_control.agent import composition
 from senior_control.agent.main import Agent
 from senior_control.models import MapRef, Pose2D
 from senior_control.runtime.ipc import IpcClient, IpcError

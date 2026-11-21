@@ -3,7 +3,7 @@
 import multiprocessing as mp
 import os
 
-from senior_control.motion.process_resources import LatestSnapshot, child_lifetime, stop_process
+from vehicle_core.process_resources import LatestSnapshot, child_lifetime, stop_process
 
 
 def _publish(parameters, slot, status_slot, stop, parent_pid):

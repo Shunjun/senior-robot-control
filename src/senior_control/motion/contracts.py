@@ -9,19 +9,12 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Literal
 
-from senior_control.models import BodyTwist, Velocity
 from senior_control.motion.manual_target import ManualLinearTarget
 
-
-class MotionMode(str, Enum):
-    IDLE = "idle"
-    MANUAL = "manual"
-    TASK = "task"
-    BRAKING = "braking"
-    OBSTACLE_HOLD = "obstacle_hold"
-    FEEDBACK_STOP = "feedback_stop"
-    EXECUTION_FAULT = "execution_fault"
-    ESTOP = "estop"
+# //Compatible: original control imports retain the same shared value classes.
+from vehicle_core.motion_state import MotionMode as MotionMode
+from vehicle_core.motion_state import MotionState as MotionState
+from vehicle_core.values import BodyTwist, Velocity
 
 
 class MotionEventKind(str, Enum):
@@ -147,17 +140,6 @@ class MotionEvent:
     source_id: str
     revision: int
     sequence: int
-
-
-@dataclass(frozen=True)
-class MotionState:
-    mode: MotionMode
-    reason: str
-    task_id: str | None
-    estop_revision: int
-    fault_revision: int
-    stationary: bool
-    allowed_actions: tuple[str, ...]
 
 
 @dataclass(frozen=True)

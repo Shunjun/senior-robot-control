@@ -22,5 +22,5 @@ from vehicle_manager.tasks.lifecycle_store import _json_default as _json_default
 from vehicle_manager.tasks.models import ExecutionRecord as ExecutionRecord
 from vehicle_manager.tasks.models import TaskDefinition as TaskDefinition
 
-from senior_control.models import Pose2D as Pose2D
 from senior_control.tasks.store import TaskStore as TaskStore
+from vehicle_core.values import Pose2D as Pose2D

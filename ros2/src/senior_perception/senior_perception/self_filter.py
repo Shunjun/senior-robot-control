@@ -7,8 +7,8 @@ from typing import Literal
 from shapely.geometry import LineString, Point, Polygon
 
 from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
 from senior_perception.geometry_bounds import mask_bounds, segment_bounds, strictly_disjoint
+from vehicle_core.values import Pose2D
 
 Point2D = tuple[float, float]
 

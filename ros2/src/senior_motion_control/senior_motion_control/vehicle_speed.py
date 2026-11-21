@@ -2,7 +2,7 @@
 
 import math
 
-from senior_control.models import Velocity
+from vehicle_core.values import Velocity
 
 
 def _approach(current, target, rate, dt):

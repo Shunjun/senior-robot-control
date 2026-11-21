@@ -394,7 +394,7 @@ def main(argv: list[str] | None = None, *, ports: ServicePorts) -> int:
         return asyncio.run(
             ports.supervise(
                 args.control_dir,
-                [sys.executable, "-m", "senior_control.agent.main"],
+                [sys.executable, "-m", "vehicle_manager.agent"],
                 env,
                 profile=profile,
             )

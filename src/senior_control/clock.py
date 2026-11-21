@@ -1,13 +1,4 @@
-"""Injectable monotonic time source."""
+"""//Compatible: historical imports forward to the single vehicle_core owner."""
 
-import time
-from typing import Protocol
-
-
-class Clock(Protocol):
-    def monotonic(self) -> float: ...
-
-
-class SystemClock:
-    def monotonic(self) -> float:
-        return time.monotonic()
+from vehicle_core.clock import Clock as Clock
+from vehicle_core.clock import SystemClock as SystemClock

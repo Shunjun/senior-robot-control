@@ -4,11 +4,11 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-from senior_control.errors import ErrorCode
-from senior_control.models import Velocity
 from senior_control.protocol import (
     Envelope,
 )
+from vehicle_core.errors import ErrorCode
+from vehicle_core.values import Velocity
 
 ModeName = Literal["navigation", "idle"]
 _ZERO = Velocity(0.0, 0.0)

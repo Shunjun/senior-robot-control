@@ -36,6 +36,18 @@ using namespace std::chrono_literals;
 using Gid = std::array<uint8_t, RMW_GID_STORAGE_SIZE>;
 static_assert(RMW_GID_STORAGE_SIZE == 24, "SDR2 requires the supported 24-byte RMW GID");
 constexpr size_t MAX_PAYLOAD = 20 * 1024 * 1024;
+// Keep these failure codes aligned with the Python parent's failure-only labels.
+enum class ExitCode : int {
+  write_deadline = 10,
+  send_failure = 11,
+  poll_failure = 12,
+  oversize_payload = 13,
+  retired_source_exhaustion = 14,
+  invalid_arguments = 15,
+  invalid_fd_or_parent = 16,
+  parent_death_setup = 17,
+  unexpected_exception = 18,
+};
 static void number(std::vector<uint8_t> &v, uint64_t n, size_t bytes) {
   for (size_t i = bytes; i > 0; --i) v.push_back(static_cast<uint8_t>(n >> (8 * (i - 1))));
 }
@@ -96,12 +108,12 @@ class NativeReceipt : public rclcpp::Node {
 
   void write_all(const uint8_t *p, size_t size, uint64_t deadline) {
     while (size) {
-      if (senior_motion_msgs::time::monotonic_ns() >= deadline) _exit(2);
+      if (senior_motion_msgs::time::monotonic_ns() >= deadline) _exit(static_cast<int>(ExitCode::write_deadline));
       const auto sent = ::send(fd_, p, size, MSG_DONTWAIT | MSG_NOSIGNAL);
       if (sent > 0) { p += sent; size -= sent; continue; }
-      if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) _exit(2);
+      if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) _exit(static_cast<int>(ExitCode::send_failure));
       pollfd event{fd_, POLLOUT, 0};
-      if (::poll(&event, 1, 5) < 0 && errno != EINTR) _exit(2);
+      if (::poll(&event, 1, 5) < 0 && errno != EINTR) _exit(static_cast<int>(ExitCode::poll_failure));
     }
   }
   void frame(size_t id, uint8_t kind, uint64_t received,
@@ -109,7 +121,7 @@ class NativeReceipt : public rclcpp::Node {
              const std::optional<senior_motion_msgs::time::SampleTime> &sample = std::nullopt) {
     const auto &in = inputs_[id];
     const size_t size = message ? message->size() : 0;
-    if (size > MAX_PAYLOAD) _exit(2);
+    if (size > MAX_PAYLOAD) _exit(static_cast<int>(ExitCode::oversize_payload));
     std::vector<uint8_t> header{'S','D','R','2', kind, static_cast<uint8_t>(id)};
     number(header, in.generation, 8); number(header, in.sequence, 8);
     number(header, received, 8);
@@ -143,7 +155,7 @@ class NativeReceipt : public rclcpp::Node {
     if (!good) next.fill(0);
     if (in.generation == 0 || in.valid != good || in.gid != next) {
       if (in.valid && in.gid != next) in.retired_gids.insert(in.gid);
-      if (in.retired_gids.size() >= 256) _exit(2);
+      if (in.retired_gids.size() >= 256) _exit(static_cast<int>(ExitCode::retired_source_exhaustion));
       in.latest_stamp.reset();
       in.valid = good; in.gid = next; ++in.generation;
       frame(id, 0, senior_motion_msgs::time::monotonic_ns(), nullptr, nullptr);  // invalidate before any new sample
@@ -274,14 +286,14 @@ int main(int argc, char **argv) {
     rclcpp::init(argc, argv);
     const auto arguments = rclcpp::remove_ros_arguments(argc, argv);
     if (arguments.size() < 8 || (arguments.size() - 3) % 5 != 0 ||
-        (arguments.size() - 3) / 5 > 16) return 2;
+        (arguments.size() - 3) / 5 > 16) return static_cast<int>(ExitCode::invalid_arguments);
     const int fd = std::stoi(arguments[1]), parent = std::stoi(arguments[2]);
-    if (fd < 3 || parent != ::getppid()) return 2;
+    if (fd < 3 || parent != ::getppid()) return static_cast<int>(ExitCode::invalid_fd_or_parent);
     // The socket has no filesystem listener; only this exec inherits its endpoint.
-    if (::prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 || parent != ::getppid()) return 2;
+    if (::prctl(PR_SET_PDEATHSIG, SIGTERM) != 0 || parent != ::getppid()) return static_cast<int>(ExitCode::parent_death_setup);
     rclcpp::spin(std::make_shared<NativeReceipt>(fd,
       std::vector<std::string>(arguments.begin() + 3, arguments.end())));
     rclcpp::shutdown();
-  } catch (const std::exception &) { return 2; }
+  } catch (const std::exception &) { return static_cast<int>(ExitCode::unexpected_exception); }
   return 0;
 }

@@ -7,7 +7,7 @@ plus sensor_error once. Learned self returns are excluded without pose/sweep exp
 import math
 from dataclasses import dataclass
 
-from senior_control.sensors.policy import default_policy
+from vehicle_core.sensor_policy import default_policy
 
 
 @dataclass(frozen=True)

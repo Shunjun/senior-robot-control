@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 import aiosqlite
 from senior_mapping.persistence import MapPersistence
 
-from senior_control.models import MapRef, Pose2D
+from vehicle_core.values import MapRef, Pose2D
 
 if TYPE_CHECKING:
     from senior_control.storage.database import Database

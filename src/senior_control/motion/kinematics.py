@@ -2,7 +2,7 @@
 
 import math
 
-from senior_control.models import Pose2D
+from vehicle_core.values import Pose2D
 
 
 def compose(a: Pose2D, b: Pose2D) -> Pose2D:

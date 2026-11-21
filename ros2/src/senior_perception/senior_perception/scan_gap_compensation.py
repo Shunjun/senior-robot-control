@@ -5,10 +5,10 @@ from dataclasses import dataclass, replace
 
 import numpy as np
 
-from senior_control.sensors.policy import default_policy
-from senior_control.sensors.sample_time import SampleTime
 from senior_control.vision.raw_capture import RawCaptureHeader, capture_from_message
 from senior_perception.raw_safety_observation import PredictedReturn
+from vehicle_core.sample_time import SampleTime
+from vehicle_core.sensor_policy import default_policy
 
 
 @dataclass(frozen=True)
@@ -177,13 +177,16 @@ class ScanGapCompensator:
             return index if 0 <= index < count else None
 
         slots = {}
-        for seed in self._seeds:
-            point = (np.asarray(seed.point) - origin) @ rotation
-            index = _index(
-                math.atan2(point[1], point[0]), scan.angle_min, scan.angle_increment, count
-            )
-            if index is not None and ranges[index] == math.inf:
-                slots.setdefault(index, []).append(seed)
+        # Historical projections can only supply positive-infinity cells.
+        # Still establish this acquisition's real seeds below when there are no gaps.
+        if np.any(ranges == math.inf):
+            for seed in self._seeds:
+                point = (np.asarray(seed.point) - origin) @ rotation
+                index = _index(
+                    math.atan2(point[1], point[0]), scan.angle_min, scan.angle_increment, count
+                )
+                if index is not None and ranges[index] == math.inf:
+                    slots.setdefault(index, []).append(seed)
         retained, predictions = [], []
         for index, seeds in slots.items():
             if len(seeds) != 1:

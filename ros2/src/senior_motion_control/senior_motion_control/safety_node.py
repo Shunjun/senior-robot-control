@@ -33,13 +33,11 @@ from senior_motion_msgs.msg import (
 )
 from senior_perception.raw_safety_observation import RawSafetyObservation
 
-from senior_control.models import Velocity
 from senior_control.motion.source_fences import (
     ProducerTopology,
     SourceEpochFence,
 )
 from senior_control.safety.freshness import SafetyFreshness
-from senior_control.sensors.policy import default_policy
 from senior_control.vision.egress_receipt import (
     EgressAdmission,
     depth_capture_headers,
@@ -51,6 +49,8 @@ from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 from senior_motion_control.arbiter import FinalCommandFence
 from senior_motion_control.motion_lifecycle import MotionExecutor, run
 from senior_motion_control.native import native_executable
+from vehicle_core.sensor_policy import default_policy
+from vehicle_core.values import Velocity
 
 
 class SafetyGate(Node):
@@ -184,7 +184,7 @@ class SafetyGate(Node):
             from senior_perception.scan_gap_compensation import ScanGapCompensator
             from tf2_ros import Buffer, TransformListener
 
-            from senior_control.runtime.diagnostics import configure_diagnostics
+            from vehicle_core.diagnostics import configure_diagnostics
 
             self._scan_compensator = ScanGapCompensator(candidate_profile)
             from pathlib import Path
@@ -516,17 +516,12 @@ class SafetyGate(Node):
         self._scan_generation += 1
         try:
             steady = time.monotonic()
-            stamp = Time.from_msg(msg.stamp).nanoseconds / 1e9
-            capture = capture_from_message(msg.raw_capture)
+            stamp = capture.stamp_ns / 1e9
             if (
                 not self._clock_ok(steady)
                 or not msg.valid
-                or not msg.raw_source
                 or msg.raw_source != self._scan_source
-                or not msg.frame_id
                 or not 1 <= len(msg.ranges) <= 2048
-                or not all(math.isfinite(v) for v in (msg.ingress_steady, msg.ingress_ros))
-                or not 0 <= steady - msg.ingress_steady <= self._freshness.max_age
                 or not self._freshness.scan(capture.measurement_steady, msg.ingress_steady, steady)
             ):
                 raise ValueError("bounded scan unqualified")

@@ -3,7 +3,6 @@
 import math
 from dataclasses import dataclass, replace
 
-from senior_control.models import MapRef, Pose2D
 from senior_mapping.evidence import (
     CellEvidence,
     ChangeSource,
@@ -14,6 +13,7 @@ from senior_mapping.evidence import (
     OccupancyThresholds,
     RangeRay,
 )
+from vehicle_core.values import MapRef, Pose2D
 
 _WRITABLE_HITS: frozenset[HitKind] = frozenset({"static", "unknown_static"})
 

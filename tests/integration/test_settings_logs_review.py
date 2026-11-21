@@ -9,8 +9,8 @@ import pytest
 from agent_fakes import FakeConnector, FakeLink, until
 from cloud.limits import CloudLimits
 from test_manual_wire import envelope, runtime
+from vehicle_manager.agent import production as composition
 
-from senior_control.agent import composition
 from senior_control.agent.connection import HeartbeatFrame
 from senior_control.agent.main import Agent
 from senior_control.cloud.relay import Hub

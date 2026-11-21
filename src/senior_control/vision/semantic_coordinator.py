@@ -5,7 +5,6 @@ import uuid
 from collections import OrderedDict
 from dataclasses import dataclass
 
-from senior_control.sensors.policy import default_policy, sensor_current
 from senior_control.vision.depth_runtime import CameraInfoFrame
 from senior_control.vision.detector import Detection
 from senior_control.vision.semantic_runtime import (
@@ -22,6 +21,7 @@ from senior_control.vision.spawn_detector import (
     RetainedFrame,
     SpawnInferenceWorker,
 )
+from vehicle_core.sensor_policy import default_policy, sensor_current
 
 
 @dataclass(frozen=True)

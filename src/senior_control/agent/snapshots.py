@@ -25,8 +25,8 @@ from vehicle_manager.agent.snapshots import (
     snapshot_from_envelope as _snapshot_from_envelope,
 )
 
-from senior_control.models import MapRef
 from senior_control.protocol import SnapshotEnvelope
+from vehicle_core.values import MapRef
 
 
 def snapshot_from_envelope(envelope: SnapshotEnvelope) -> RobotSnapshot:

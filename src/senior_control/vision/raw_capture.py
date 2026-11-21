@@ -4,8 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import Any
 
-from senior_control.sensors.policy import sensor_current
-from senior_control.sensors.sample_time import SampleTime
+from vehicle_core.sample_time import SampleTime
+from vehicle_core.sensor_policy import sensor_current
 
 
 @dataclass(frozen=True)

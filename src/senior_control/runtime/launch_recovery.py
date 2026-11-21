@@ -17,7 +17,7 @@ import threading
 import time
 from typing import Any
 
-from senior_control.motion.process_resources import child_lifetime
+from vehicle_core.process_resources import child_lifetime
 
 _LOG = logging.getLogger(__name__)
 _RETRY_DELAY = 2.0

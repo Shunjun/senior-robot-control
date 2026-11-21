@@ -12,10 +12,10 @@ from shapely.geometry import GeometryCollection
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from senior_control.models import Pose2D
 from senior_control.motion.estimator import Origin, validate_origins
 from senior_control.motion.kinematics import compose, inverse
-from senior_control.sensors.policy import default_policy
+from vehicle_core.sensor_policy import default_policy
+from vehicle_core.values import Pose2D
 
 
 @dataclass(frozen=True)

@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Literal
 
-from senior_control.models import MapRef, Pose2D
+from vehicle_core.values import MapRef, Pose2D
 
 HitKind = Literal["static", "unknown_static", "person", "moving", "unknown_dynamic"]
 ChangeSource = Literal["geometric_confirmation", "observed_free_space"]

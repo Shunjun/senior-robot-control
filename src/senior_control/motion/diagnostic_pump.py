@@ -3,7 +3,7 @@
 import threading
 import time
 
-from senior_control.runtime.diagnostics import RuntimeDiagnostics
+from vehicle_core.diagnostics import RuntimeDiagnostics
 
 
 class DiagnosticPump:

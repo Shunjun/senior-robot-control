@@ -6,12 +6,10 @@ from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
 from typing import Any, Literal
 
-from senior_control.models import Velocity
 from senior_control.motion.contracts import MotionMode
 from senior_control.motion.hardware_profile import HardwareMotionProfile
 from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.safety.startup_visibility import startup_visibility
-from senior_control.sensors.policy import default_policy
 from senior_control.vision.raw_capture import capture_from_message
 from senior_perception.learning_client import LearningClient
 from senior_perception.learning_record import LearningGeometry
@@ -22,6 +20,8 @@ from senior_perception.scan_decode import (
     scan_observation,
 )
 from senior_perception.startup_learning import StartupLearning
+from vehicle_core.sensor_policy import default_policy
+from vehicle_core.values import Velocity
 
 
 @dataclass(frozen=True)

@@ -5,13 +5,13 @@ import math
 from dataclasses import dataclass, field
 from typing import TypeVar
 
-from senior_control.runtime.diagnostics import DiagnosticPending
-from senior_control.sensors.policy import default_policy, sensor_current
 from senior_control.vision.depth import GeometrySample
 from senior_control.vision.depth_runtime import CameraInfoFrame, _intrinsics
 from senior_control.vision.detector import Detection
 from senior_control.vision.raw_capture import capture_from_message
 from senior_control.vision.synchronizer import ImageFrame
+from vehicle_core.diagnostics import DiagnosticPending
+from vehicle_core.sensor_policy import default_policy, sensor_current
 
 
 @dataclass(frozen=True)

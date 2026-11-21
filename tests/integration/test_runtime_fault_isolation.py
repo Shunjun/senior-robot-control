@@ -10,10 +10,10 @@ from types import SimpleNamespace
 
 import pytest
 from agent_fakes import FakeConnector, FakeLink, until
+from vehicle_manager.agent import production as composition
+from vehicle_manager.agent.runtime_bindings import Agent
 
-from senior_control.agent import composition
 from senior_control.agent.logs_wire import AgentLogConnection
-from senior_control.agent.main import Agent
 from senior_control.agent.pairing import Credentials
 from senior_control.runtime.ipc import IpcClient
 from senior_control.runtime.lifecycle_events import READ_FD, LifecycleEvents, report_ros_exit
@@ -121,7 +121,7 @@ async def test_supervise_local_fault_keeps_actual_agent_and_log_transport(
         monkeypatch.setattr(simulation_cli, "_wait_for_adapter", ready)
 
         async def spawn(*args, env, **options):
-            is_agent = args[0] == "agent" or "senior_control.agent.main" in args
+            is_agent = args[0] == "agent" or "vehicle_manager.agent" in args
             name = (
                 "agent"
                 if is_agent
@@ -494,9 +494,9 @@ async def test_retired_straggler_cannot_issue_new_motion_or_reply(tmp_path):
 @pytest.mark.parametrize("capacity", [False, True])
 async def test_safety_delivery_fault_preserves_cloud_and_never_claims_success(tmp_path, capacity):
     from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, simple
+    from vehicle_manager.agent.main import MAX_SAFETY_PENDING
 
     from senior_control.agent.journal import AgentJournal
-    from senior_control.agent.main import MAX_SAFETY_PENDING
     from senior_control.runtime.ipc import IpcError
     from senior_control.storage.database import Database
 

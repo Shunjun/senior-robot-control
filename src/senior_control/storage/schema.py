@@ -1,17 +1,10 @@
-"""Ordered domain migrations. Task 9 owns version 1.
+"""//Compatible: historical domain migration and SQL names retain canonical identity."""
 
-Later tasks append their own Migration after this one. They must not renumber
-these statements or add waypoint and schedule tables to version 1.
-"""
+from vehicle_manager.storage.domain_bindings import DOMAIN_MIGRATIONS as DOMAIN_MIGRATIONS
+from vehicle_manager.storage.migrations import Migration as Migration
+from vehicle_manager.tasks.store import TASK_STATEMENTS as TASK_STATEMENTS
+from vehicle_manager.waypoints.store import WAYPOINT_STATEMENTS as WAYPOINT_STATEMENTS
 
-from senior_mapping.schema import OPERATION_JOURNAL_STATEMENTS
-
-from senior_control.storage.migrations import Migration
-from senior_control.tasks.store import TASK_STATEMENTS
-from senior_control.waypoints.store import WAYPOINT_STATEMENTS
-
-DOMAIN_MIGRATIONS: tuple[Migration, ...] = (
-    Migration(1, OPERATION_JOURNAL_STATEMENTS),
-    Migration(2, WAYPOINT_STATEMENTS),
-    Migration(3, TASK_STATEMENTS),
+from vehicle_core.map_journal_schema import (
+    OPERATION_JOURNAL_STATEMENTS as OPERATION_JOURNAL_STATEMENTS,
 )

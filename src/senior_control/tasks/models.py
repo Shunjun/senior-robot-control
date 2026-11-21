@@ -8,4 +8,4 @@ from vehicle_manager.tasks.models import SkipRecord as SkipRecord
 from vehicle_manager.tasks.models import TaskDefinition as TaskDefinition
 from vehicle_manager.tasks.models import TaskIntent as TaskIntent
 
-from senior_control.models import MapRef as MapRef
+from vehicle_core.values import MapRef as MapRef

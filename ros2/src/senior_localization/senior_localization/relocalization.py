@@ -5,9 +5,9 @@ from dataclasses import dataclass
 
 from senior_mapping.archive import Georeference
 
-from senior_control.errors import DomainError
-from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
 from senior_localization.geo import AlignedPose, GeoAlignment, QualifiedFix
+from vehicle_core.errors import DomainError
+from vehicle_core.values import MapRef, OperationResult, OperationStatus, Pose2D
 
 ScanMatch = Callable[[Pose2D | AlignedPose | None], tuple[Pose2D, bool] | None]
 

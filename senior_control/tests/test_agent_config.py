@@ -1,8 +1,7 @@
 from pathlib import Path
 
 import pytest
-
-from senior_control.agent.composition import AgentConfig
+from vehicle_manager.agent.config import AgentConfig
 
 
 def test_agent_config_uses_explicit_environment_and_ignores_other_senior_keys() -> None:
@@ -31,9 +30,10 @@ def test_agent_config_requires_encrypted_remote_transport() -> None:
 async def test_composition_opens_and_closes_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from senior_control.agent import composition
+    from vehicle_manager.agent import production as composition
+    from vehicle_manager.agent.production import run_agent
+
     from senior_control.agent import main as agent_module
-    from senior_control.agent.composition import run_agent
     from senior_control.runtime.ipc import IpcClient
     from senior_control.storage.database import Database
 
@@ -142,7 +142,8 @@ async def test_composition_starts_reporting_without_adapter_identity(
     import asyncio
     import tempfile
 
-    from senior_control.agent import composition
+    from vehicle_manager.agent import production as composition
+
     from senior_control.agent.main import Agent
     from senior_control.runtime.ipc import IpcServer
     from tests.integration.agent_fakes import FakeConnector, FakeLink, until

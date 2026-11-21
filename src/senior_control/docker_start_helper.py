@@ -15,12 +15,12 @@ from vehicle_manager.service import _terminate as _terminate
 from vehicle_manager.service import _terminate_motion_stack as _terminate_motion_stack
 
 from senior_control.agent.pairing import read_credentials
-from senior_control.runtime.ipc import IpcClient, IpcError, IpcServer
+from vehicle_core.ipc import IpcClient, IpcError, IpcServer
 
 # //Compatible: shared socket ownership has one implementation at the existing IPC boundary.
-from senior_control.runtime.ipc import _identity as _identity
-from senior_control.runtime.ipc import _prepare_socket as _prepare_socket
-from senior_control.runtime.ipc import _record as _record
+from vehicle_core.ipc import _identity as _identity
+from vehicle_core.ipc import _prepare_socket as _prepare_socket
+from vehicle_core.ipc import _record as _record
 
 if TYPE_CHECKING:
     from senior_control.cli import VehicleProfile
@@ -102,7 +102,7 @@ def _cleanup_learning(
 
 
 def _events() -> Events:
-    from senior_control.runtime.lifecycle_events import LifecycleEvents
+    from vehicle_core.lifecycle_events import LifecycleEvents
 
     return LifecycleEvents()
 

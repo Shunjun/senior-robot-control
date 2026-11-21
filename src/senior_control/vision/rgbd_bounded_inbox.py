@@ -4,7 +4,7 @@ from collections.abc import Callable
 from threading import Lock
 from typing import Any
 
-from senior_control.runtime.diagnostics import DiagnosticDeque
+from vehicle_core.diagnostics import DiagnosticDeque
 
 
 class BoundedInbox:

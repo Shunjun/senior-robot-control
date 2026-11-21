@@ -4,7 +4,6 @@ from importlib import import_module
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from senior_control.image_frame import ImageFrame as ImageFrame
     from senior_control.vision.depth import (
         CalibrationError,
         CameraCalibration,
@@ -32,6 +31,7 @@ if TYPE_CHECKING:
         align,
     )
     from senior_control.vision.tracking import DynamicMask, Tracker, TrackingConfig, track
+    from vehicle_core.image_frame import ImageFrame as ImageFrame
 
 __all__ = [
     "AlignedRgbdFrame",
@@ -80,7 +80,7 @@ _EXPORTS = {
     "AlignedRgbdFrame": "senior_control.vision.synchronizer",
     "DepthFrame": "senior_control.vision.synchronizer",
     "FrameSyncError": "senior_control.vision.synchronizer",
-    "ImageFrame": "senior_control.image_frame",
+    "ImageFrame": "vehicle_core.image_frame",
     "RgbdSynchronizer": "senior_control.vision.synchronizer",
     "align": "senior_control.vision.synchronizer",
     "DynamicMask": "senior_control.vision.tracking",
