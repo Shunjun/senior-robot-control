@@ -279,6 +279,66 @@ aiosqlite 0.22.1、Pydantic 2.14.1、Ruff 0.17.3、uv 0.12.23。
 最后接 snapshot 独立数据版本、WS、网页刷新/目录及 Home/车位分开的操作。
 本组件没有持久化、全局活动图选择或生产定位授权，E/G 的生产、自动落盘/重启、UI 项仍未勾选。
 
+
+### E 启动片：显式选择单图里程计帧（实现完成，待亲审，2026-11-21）
+
+基线 `feat/vehicle-architecture-refactor@29680d9`；前一片五文件活动会话组件已完成并提交，
+仍是保守只读组件，生产 transport、自动一致落盘/重启和网页未接通。
+本片严格修改四文件：`ros2/src/senior_robot/launch/mapping.launch.py`、
+`ros2/tests/test_mapping.py`、`docs/operations/slam-backend.md` 与本计划；
+新增、删除、配置文件修改均为零。
+
+为正式 mapping launch 增加 `odom_frame` 参数，默认保持 `odom`；stock graph 与 Python
+adapter、native capture 与 verified 分支显式共用同一选定值，保留参数文件和原安全/来源断言。
+仓库无可复用的共享 frame 校验函数，沿本 launch 已有 frame 命名校验（非空、最多128个可打印
+非空白 ASCII 字符）并拒绝与固定 map frame `map` 重合，不增加正则或自动猜测来源。
+先写三个参数化的显式 `odom_combined` 传递场景（stock/capture/verified），运行观察失败，
+再实现并复用默认/分支/输入拒绝的既有测试；无 ROS 节点构建或运行。
+不更改 `slam.yaml`、其他部署默认或解释器，不把 TF 连通/临时出图当作已认证活动图。
+实际命令、环境、结果和剩余生产前置在完成时补记。
+
+负责人已检查前片 `29680d9`，其活动会话组件完成状态不等于生产接通；本片仅补正式启动参数。
+实际产品改动为一份 launch：先解析并校验所选 frame，将其放在参数文件之后的覆盖字典中，
+所有 graph 分支及 stock adapter 一致使用；不改静态 TF/receipt 来源、capture 目录约束、
+唯一原生 graph owner 或任何原配置默认。
+
+实际新增一个参数化测试函数
+`test_mapping_passes_explicit_odom_frame_to_selected_graph_and_adapter[stock/capture/verified]`，
+恰为三个显式 `odom_combined` 场景；原默认/capture/verified 测试只加强默认 `odom` 断言，
+原 `test_verified_static_lidar_rejects_unqualified_inputs` 保留既有两个坏输入并补
+odom 为空、误设 `map`、纯空白三项。原有保护和断言均保留，未新增其它测试文件或 fixture。
+
+执行环境与前片相同：macOS 26.4 arm64、CPython 3.12.15、pytest 8.4.2、Ruff 0.17.3，
+使用主仓库已有虚拟环境解释器（本工作区虚拟环境仍无 pytest）。先改测试运行，因缺少
+`odom_frame` launch 声明在 fixture 产生13项 `KeyError`；实现参数与传递后，同命令转绿：
+
+```sh
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m pytest \
+  ros2/tests/test_mapping.py -q -k 'not mapping_node_does_not_publish_cmd_vel'
+```
+
+实际 **13 passed, 1 deselected**：默认stock1、capture1、capture路径约束1、
+原verified分支2、坏输入5、显式帧传递3；真实 ROS 节点测试明确 deselect，不尝试导入/运行
+rclpy，所有通过项仅用原 Action/Node 替身检查真正 launch 函数生成的节点及参数结构。
+不能把替身结构测试算作实际 ROS 参数传递、SLAM 出图或实车验证。
+
+```sh
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m ruff check \
+  ros2/src/senior_robot/launch/mapping.launch.py ros2/tests/test_mapping.py
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m ruff format --check \
+  ros2/src/senior_robot/launch/mapping.launch.py ros2/tests/test_mapping.py
+git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check
+```
+
+Ruff 检查及格式检查通过，适用 CRLF diff check 通过；launch、测试和操作文档均保留原 CRLF。
+实际四文件皆修改：产品/启动1、测试1、工具文档2，配置文件/新增/删除0；作者已核对diff范围。
+未构建任何包、未运行 ROS/实车/仿真/服务、未修改 `slam.yaml` 或解释器、未部署或推送。
+现场 2.6.8 的临时 `odom_combined` 出图证据保留在上方 E/G 和操作文档，默认仍 `odom`。
+后续仍需生产来源认证与会话令牌、可信观测转换、旧图可靠重新匹配、自动一致持久与恢复、
+独立 Home 和网页刷新；更改 launch 参数不授予现有地图、TF 或位姿任何可信身份，
+活动地图生产/自动落盘重启/UI 完成项继续保持未勾选。
+
+
 ## 第三阶段　联调和验收
 
 - [ ] 移除阶段一仅用于迁移的旧入口、兼容路径和测试占位组装。核对实车与仿真组装共用模块，核对 ROS 图和底盘唯一发布者。
