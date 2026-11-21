@@ -59,6 +59,8 @@ def _adapter_command(profile: RuntimeProfile, robot_id: str) -> list[str]:
         "/bin/bash",
         "-c",
         'source "$1" || exit; source "$2" || exit; shift 2; '
+        # //Compatible: env-shebang ROS nodes must use the launch virtualenv after setup.
+        'export PATH="${1%/*}${PATH:+:$PATH}"; '
         'if [ -n "${SENIOR_EXPECTED_ROS_DOMAIN:-}" ]; then '
         'export ROS_DOMAIN_ID="$SENIOR_EXPECTED_ROS_DOMAIN"; fi; exec "$@"',
         "senior-vehicle-ros",
