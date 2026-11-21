@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from vehicle_core.lidar_diagnostic import ENVIRONMENT_KEY, from_file, selected
+from vehicle_core.video_diagnostic import TEMPORARY_VIDEO_DISABLED
 from vehicle_manager.deployment import private_directory
 from vehicle_manager.platform_ports import ServicePorts
 from vehicle_manager.profile import VehicleProfile
@@ -266,6 +267,9 @@ async def supervise(
                     peer_lock_name=".senior-simulator.lock",
                 )
             events.report("motion", "ready", "adapter verified; cloud status independent")
+            if TEMPORARY_VIDEO_DISABLED:
+                events.report("camera", "unavailable", "temporary_video_disabled")
+                return
             try:
                 camera_stack = await asyncio.create_subprocess_exec(
                     *ports.camera_command(profile, robot_id),
@@ -287,7 +291,7 @@ async def supervise(
                 loop.add_signal_handler(number, stopping.set)
             # //Compatible: profile=None still propagates a single arbitrary child's exit.
             agent_env = events.agent_environment(environment) if events else environment
-            if profile is not None:
+            if profile is not None and not TEMPORARY_VIDEO_DISABLED:
                 agent_env = await ports.video_environment(profile, agent_env)
             process = await asyncio.create_subprocess_exec(
                 *command, env=agent_env, pass_fds=(events.reader,) if events else ()

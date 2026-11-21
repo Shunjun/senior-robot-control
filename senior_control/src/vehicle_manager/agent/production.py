@@ -13,6 +13,7 @@ from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.image_frame import ImageFrame
 from vehicle_core.ipc import IpcClient
 from vehicle_core.lifecycle_events import READ_FD, observe
+from vehicle_core.video_diagnostic import TEMPORARY_VIDEO_DISABLED
 from vehicle_manager.agent.bootstrap_ports import AgentBootstrapPorts, MediaBinding
 from vehicle_manager.agent.composition import build_task_runtime as _build_task_runtime
 from vehicle_manager.agent.composition import pause_failed_tasks as pause_failed_tasks
@@ -91,6 +92,8 @@ def _media_binding(config: AgentConfig) -> MediaBinding:
 
     def video_session() -> VideoSession | None:
         nonlocal video_factory
+        if TEMPORARY_VIDEO_DISABLED:
+            return None
         if config.ros_video_topic is None and config.simulation_video_frame is None:
             return None
         if find_spec("aiortc") is None:
