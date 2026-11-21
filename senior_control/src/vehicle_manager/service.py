@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from vehicle_manager.deployment import private_directory
+from vehicle_manager.media.camera_demand import CameraDemand
 from vehicle_manager.platform_ports import ServicePorts
 from vehicle_manager.profile import VehicleProfile
 
@@ -166,7 +167,7 @@ async def supervise(
         process: asyncio.subprocess.Process | None = None
         adapter: asyncio.subprocess.Process | None = None
         motion_stack: asyncio.subprocess.Process | None = None
-        camera_stack: asyncio.subprocess.Process | None = None
+        camera_ready = asyncio.Event()
         adapter_identity: list[int] | None = None
         robot_id = (
             ports.read_credentials(root / "device.json").robot_id if profile is not None else ""
@@ -188,7 +189,32 @@ async def supervise(
             environment["ROS_DOMAIN_ID"] = str(profile.ros_domain)
         events = ports.events() if profile is not None else None
 
+        async def start_camera(component: str) -> asyncio.subprocess.Process:
+            assert profile is not None and events is not None
+            events.report("camera", "starting", component=component)
+            arguments = {} if component == "capture" else {"component": component}
+            try:
+                child = await asyncio.create_subprocess_exec(
+                    *ports.camera_command(profile, robot_id, **arguments),
+                    env=events.child_environment(environment),
+                    start_new_session=True,
+                    pass_fds=(events.writer,),
+                )
+            except (OSError, ValueError) as exc:
+                events.report("camera", "unavailable", str(exc))
+                raise
+            return child
+
+        async def stop_camera(child: asyncio.subprocess.Process) -> None:
+            await ports.terminate_motion_stack(child, group_grace=6, budget=10)
+
+        camera = CameraDemand(start=start_camera, stop=stop_camera, ready=camera_ready)
+
         async def handle(request: dict[str, Any]) -> dict[str, Any]:
+            if request["type"].startswith("camera.") and profile is not None:
+                return camera.request(
+                    request["type"], request.get("token"), request.get("capabilities")
+                )
             if request["type"] == "status":
                 return {"ok": True, "running": process is not None and process.returncode is None}
             if request["type"] == "stop":
@@ -206,7 +232,7 @@ async def supervise(
             waiters[asyncio.create_task(child.wait())] = name
 
         async def start_local() -> None:
-            nonlocal adapter, motion_stack, camera_stack, adapter_identity
+            nonlocal adapter, motion_stack, adapter_identity
             assert profile is not None and events is not None
             child_env = events.child_environment(environment)
             try:
@@ -256,17 +282,9 @@ async def supervise(
                     peer_lock_name=".senior-simulator.lock",
                 )
             events.report("motion", "ready", "adapter verified; cloud status independent")
-            try:
-                camera_stack = await asyncio.create_subprocess_exec(
-                    *ports.camera_command(profile, robot_id),
-                    env=child_env,
-                    start_new_session=True,
-                    pass_fds=(events.writer,),
-                )
-                watch(camera_stack, "camera")
-            except (OSError, ValueError) as exc:
-                events.report("camera", "unavailable", str(exc))
+            camera_ready.set()
 
+        camera_task = asyncio.create_task(camera.run())
         try:
             await learning_service.start()
             await ports.prepare_socket(root / "service.sock")
@@ -311,11 +329,6 @@ async def supervise(
                     elif name == "adapter":
                         await ports.terminate_motion_stack(adapter)
                         adapter = None
-                    elif name == "camera":
-                        # Let leaf prefixes finish their bounded five-second
-                        # cleanup, including scheduling margin, before KILL.
-                        await ports.terminate_motion_stack(camera_stack, group_grace=6, budget=10)
-                        camera_stack = None
         finally:
             if startup is not None and not startup.done():
                 startup.cancel()
@@ -329,7 +342,8 @@ async def supervise(
                     try:
                         await ports.terminate_motion_stack(motion_stack)
                     finally:
-                        await ports.terminate_motion_stack(camera_stack, group_grace=6, budget=10)
+                        await camera.close()
+                        await camera_task
             for task in waiters:
                 if not task.done():
                     task.cancel()

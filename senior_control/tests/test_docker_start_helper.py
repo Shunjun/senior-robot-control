@@ -263,7 +263,7 @@ raise SystemExit(subprocess.call([*prefix, sys.executable, '-c', LEAF_CODE, str(
     launch_arguments = []
 
     def launch_command(profile, robot_id, package, filename, *arguments):
-        assert (package, filename) == ("turn_on_wheeltec_robot", "wheeltec_camera.launch.py")
+        assert (package, filename) == ("senior_robot", "camera_demand.launch.py")
         launch_arguments.extend(arguments)
         return [sys.executable, "-c", launcher, str(service_root), *arguments]
 
@@ -289,6 +289,16 @@ raise SystemExit(subprocess.call([*prefix, sys.executable, '-c', LEAF_CODE, str(
     )
     try:
         await wait_for_socket(service_root, task)
+        client = IpcClient(service_root / "service.sock")
+        try:
+            assert (await client.request("camera.acquire", token="recovery-test"))["ok"] is True
+            for _ in range(500):
+                if (service_root / "camera-attempts").exists():
+                    break
+                assert (await client.request("camera.renew", token="recovery-test"))["ok"] is True
+                await asyncio.sleep(0.01)
+        finally:
+            await client.close()
         for _ in range(500):
             assert not task.done()
             path = service_root / "camera-attempts"
@@ -313,7 +323,7 @@ raise SystemExit(subprocess.call([*prefix, sys.executable, '-c', LEAF_CODE, str(
             os.kill(pid, 0)
         assert any(argument.startswith("launch-prefix:=") for argument in launch_arguments)
         assert (
-            "launch-prefix-filter:=^(?:astra_camera_node|usb_cam_node_exe|republish)$"
+            "launch-prefix-filter:=^(?:astra_camera_node|usb_cam_node_exe|republish|camera_rate_limit)$"
             in launch_arguments
         )
         await asyncio.sleep(2.1)

@@ -79,6 +79,7 @@ class PeerRequest:
 
 @dataclass(frozen=True)
 class VideoLimits:
+    max_fps: float = 15.0
     max_bitrate_bps: int = 1_500_000
     max_sdp_bytes: int = 16384
     max_candidates: int = 64
@@ -87,6 +88,8 @@ class VideoLimits:
     push_timeout_ms: float = 500
 
     def __post_init__(self) -> None:
+        if not 0 < self.max_fps <= 15:
+            raise ValueError("preview frame rate must be between 0 and 15 fps")
         if self.max_bitrate_bps <= 0 or self.max_sdp_bytes <= 0 or self.max_candidates <= 0:
             raise ValueError("video limits must be positive")
         if self.max_frame_age_s <= 0 or self.frame_poll_ms <= 0 or self.push_timeout_ms <= 0:
@@ -394,12 +397,20 @@ class VideoSession:
             self._wake.set()
 
     async def _send_loop(self, peer: PeerConnection) -> None:
+        loop = asyncio.get_running_loop()
+        next_push = 0.0
         while True:
             await self._wake.wait()
+            # Wait before consuming the slot so capture can replace obsolete frames.
+            await asyncio.sleep(max(0.0, next_push - loop.time()))
             self._wake.clear()
             frame, self._latest = self._latest, None
             if frame is None:
                 continue
+            if self._now() - frame.stamp > self._limits.max_frame_age_s:
+                self._dropped += 1
+                continue
+            next_push = loop.time() + 1 / self._limits.max_fps
             try:
                 await asyncio.wait_for(peer.push(frame), self._limits.push_timeout_ms / 1000)
             except asyncio.TimeoutError:
@@ -581,6 +592,7 @@ class _EncodeLoop:
                 task.cancel()
             self._loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
             self._loop.run_until_complete(self._loop.shutdown_asyncgens())
+            self._loop.run_until_complete(self._loop.shutdown_default_executor())
             self._loop.close()
 
     def submit(self, coro: Any) -> Any:

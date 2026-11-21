@@ -205,7 +205,10 @@ def _camera_command(
     *,
     restart_prefix: Callable[[], str],
     launch_command: Callable[..., list[str]] = _ros_launch_command,
+    component: str = "capture",
 ) -> list[str]:
+    if component not in {"capture", "jpeg", "depth_compressed"}:
+        raise ValueError("unsupported camera component")
     prefix = restart_prefix()
     # This is a separate launch process: the inherited prefix cannot reach
     # motion/safety. Installed Humble matches the executable basename, not the
@@ -213,8 +216,9 @@ def _camera_command(
     return launch_command(
         profile,
         robot_id,
-        "turn_on_wheeltec_robot",
-        "wheeltec_camera.launch.py",
+        "senior_robot",
+        "camera_demand.launch.py",
+        f"component:={component}",
         f"launch-prefix:={prefix}",
-        "launch-prefix-filter:=^(?:astra_camera_node|usb_cam_node_exe|republish)$",
+        "launch-prefix-filter:=^(?:astra_camera_node|usb_cam_node_exe|republish|camera_rate_limit)$",
     )

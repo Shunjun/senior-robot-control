@@ -57,7 +57,7 @@ function navigationUnavailableMessage(reason: string | null | undefined): string
 export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps): ReactElement {
   const [mapLoad, setMapLoad] = useState(0);
   const [mode, setMode] = useState<WorkspaceMode>("manual");
-  const [manualView, setManualView] = useState<PrimaryView>("video");
+  const [manualView, setManualView] = useState<PrimaryView>("map");
   const [navigationView, setNavigationView] = useState<PrimaryView>("map");
   const view = mode === "manual" ? manualView : mode === "navigation" ? navigationView : "map";
   const setView = mode === "manual" ? setManualView : setNavigationView;

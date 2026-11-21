@@ -29,6 +29,7 @@ setup(
                 "launch/simulation_rgbd.launch.py",
                 "launch/rgbd_diagnostic.launch.py",
                 "launch/safety_motion.launch.py",
+                "launch/camera_demand.launch.py",
             ],
         ),
         (
@@ -39,6 +40,7 @@ setup(
     ],
     entry_points={
         "console_scripts": [
+            "camera_rate_limit = senior_robot.camera_rate_limit:main",
             "scan_adapter = senior_robot.scan_adapter:main",
             "safety_scan_ingress = senior_robot.safety_scan_ingress:main",
             "depth_ingress = senior_robot.depth_ingress:main",

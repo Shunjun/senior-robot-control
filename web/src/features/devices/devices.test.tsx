@@ -789,8 +789,12 @@ describe("cached snapshot delivered by the cloud", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "急停" }));
 
-    await waitFor(() => expect(socket.sent).toHaveLength(1));
-    expect(socket.lastSent()).toMatchObject({ type: "safety.estop", connection_epoch: 9 });
+    await waitFor(() => {
+      const commands = socket.sent.map((raw) => JSON.parse(raw) as Record<string, unknown>)
+        .filter((frame) => frame.type === "safety.estop");
+      expect(commands).toHaveLength(1);
+      expect(commands[0]).toMatchObject({ type: "safety.estop", connection_epoch: 9 });
+    });
     link.disconnect();
   });
 });
@@ -1103,9 +1107,13 @@ describe("operator workspace", () => {
 
   it("test_keeps_manual_controls_mounted_on_primary_view_switch", async () => {
     await openWorkspace();
+    expect(screen.queryByRole("region", { name: "实时视频" })).toBeNull();
     const stick = screen.getByRole("group", { name: "前进后退摇杆" });
     const stop = screen.getByRole("button", { name: "释放控制权" });
+    fireEvent.click(screen.getByRole("button", { name: "视频" }));
+    expect(screen.getByRole("region", { name: "实时视频" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "地图" }));
+    expect(screen.queryByRole("region", { name: "实时视频" })).toBeNull();
     expect(screen.getByRole("group", { name: "前进后退摇杆" })).toBe(stick);
     expect(screen.getByRole("button", { name: "释放控制权" })).toBe(stop);
   });
