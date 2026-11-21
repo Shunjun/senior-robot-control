@@ -123,6 +123,7 @@ class LearnedCatalog(FrozenFact):
 
 class CaptureSummary(FrozenFact):
     state: Literal["open", "complete", "incomplete"] = "open"
+    # Read old persisted records without restoring retired full-stream tracking.
     stream_id: RunId | None = None
     through_index: Nonnegative = 0
     validation_after_steady_ns: Nonnegative | None = None

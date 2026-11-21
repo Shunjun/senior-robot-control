@@ -121,7 +121,7 @@ def test_read_only_observer_keeps_old_view_until_new_active_manifest_is_durable(
         run.close()
 
 
-def test_raw_sender_empty_heartbeat_preserves_index_when_attempt_changes(tmp_path, monkeypatch):
+def test_raw_sender_reopens_when_attempt_changes(tmp_path, monkeypatch):
     from dataclasses import asdict
     from types import SimpleNamespace as N
 
@@ -177,11 +177,9 @@ def test_raw_sender_empty_heartbeat_preserves_index_when_attempt_changes(tmp_pat
                 admitted=True,
             )
             identity = run.rpc(request).data["attempt_id"]
-        until(monitor, lambda: sender._attempt == identity and run.service.stream_id is not None)
-        assert run.service.through_index == 2
+        until(monitor, lambda: sender._attempt == identity and sender._recording)
         offer(3)
         until(monitor, lambda: run.service.accepted_frames == 1)
-        assert not run.service.gap
         assert run.service.frames[0].capture.sequence == 3
         assert run.service.frames[0].ranges[35] == "inf"
     finally:
@@ -254,4 +252,52 @@ def test_live_motion_client_can_observe_next_attempt_after_its_catalog_is_durabl
         assert client.error is None
     finally:
         client.close()
+        run.close()
+
+
+def test_raw_sender_stops_after_completion_and_reopens_only_for_new_attempt(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from senior_perception.learning_wire import BeginAttempt
+
+    from senior_control.protocol import LearningStartPayload
+
+    run = TestRun(tmp_path / "sender-complete")
+    _, lock = wire_owner(monkeypatch, run)
+    sender = learning_client.LearningFrames(run.path, run.profile, "base_link")
+    monitor = SimpleNamespace(poll=lambda: None, error=None)
+    try:
+        with lock:
+            session, _ = run.owner.begin_consumer()
+            run.owner.set_geometry(session, geometry(BOUNDARY))
+            run.owner.reserve_action(session)
+            run.owner.capture(CaptureSummary(state="complete", compute_complete=True))
+            run.owner.complete_model(session, ((0.0, 0.15),))
+            run.pump()
+            run.pump()
+        until(monitor, lambda: not sender._recording)
+        # A stopped recorder must return before looking at message/header/ranges.
+        sender.offer(object())
+        with sender._lock:
+            assert not sender._frames
+        with lock:
+            reply = run.rpc(
+                BeginAttempt(
+                    start_request_id="after-completion",
+                    fingerprint="d" * 64,
+                    payload=LearningStartPayload(
+                        expected_active_revision=run.owner.public_manifest.active_revision,
+                        expected_authority_id=None,
+                    ),
+                    owner_boot_id="b" * 32,
+                    output_boot_id="c" * 32,
+                    generation=1,
+                    deadline_steady=time.monotonic() + 5,
+                    admitted=True,
+                )
+            )
+            identity = reply.data["attempt_id"]
+        until(monitor, lambda: sender._attempt == identity and sender._recording)
+    finally:
+        sender.close()
         run.close()

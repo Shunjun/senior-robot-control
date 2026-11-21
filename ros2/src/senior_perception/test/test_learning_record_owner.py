@@ -349,7 +349,7 @@ def test_orphan_without_raw_or_session_finishes_and_late_retirement_cannot_kill_
     run = TestRun(tmp_path / "orphan")
     try:
         old = run.owner.record
-        assert run.owner._session is None and run.service.stream_id is None
+        assert run.owner._session is None and not run.service.frames
         notice = RetireMotionOwner(
             attempt_id=old.attempt_id,
             owner_epoch=old.owner_epoch,

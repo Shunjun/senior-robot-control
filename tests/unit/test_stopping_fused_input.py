@@ -70,7 +70,7 @@ def test_stationary_and_low_speed_do_not_invent_front_inertia(speed, imu):
 
 def test_repository_hardware_deceleration_is_operator_assumption():
     p = output().profile
-    assert p.decel == 0.5
+    assert p.decel == 0.8
     assert "ASSUMED" in p.evidence_basis and "no physical measurements" in p.evidence_basis
 
 
@@ -299,8 +299,9 @@ def test_hardware_profile_schema_and_launch_resolver_preserve_other_parameters()
     p = select_motion_profile(
         hardware_path=str(ROOT / "config/hardware-motion.json"),
     )
-    assert p.decel == 0.5
-    assert (p.accel, p.yaw_decel, p.jerk, p.horizon_s) == (0.2, 0.15, 0.4, 12)
+    assert p.decel == 0.8
+    assert (p.accel, p.yaw_decel, p.jerk, p.horizon_s) == (0.5, 0.15, 0.4, 12)
+    assert p.reaction_linear_accel == 0.5
 
 
 @pytest.mark.parametrize("fraction", [-1.0, -0.5, 0.5, 1.0])

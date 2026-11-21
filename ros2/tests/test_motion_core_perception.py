@@ -71,14 +71,28 @@ def test_rear_approach_stops_at_boundary_and_still_allows_forward(profile):
     assert forward.vx == pytest.approx(0.015)
 
 
-def test_in_place_turn_uses_yaw_ramp_and_cap_at_linear_obstacle_boundaries(profile):
+def test_in_place_turn_applies_capped_yaw_without_acceleration_at_linear_boundaries(profile):
     clearance = directional_clearance(scan([0.47, 0.47]), profile, 10.0)
     assert clearance.front == clearance.rear == 0.0
-    previous = Velocity(0.0, 0.0)
-    outputs = []
-    for _ in range(25):
-        previous = limit_velocity(Velocity(0.0, 2.0), previous, None, clearance, profile, 0.1)
-        outputs.append(previous)
-    assert outputs[0] == Velocity(0.0, 0.05)
-    assert outputs[-1] == Velocity(0.0, profile.yaw_cap)
-    assert all(output.vx == 0.0 and 0.0 < output.wz <= profile.yaw_cap for output in outputs)
+    first = limit_velocity(Velocity(0.0, 2.0), Velocity(0.0, 0.0), None, clearance, profile, 0.1)
+    assert first == Velocity(0.0, profile.yaw_cap)
+    reversed_yaw = limit_velocity(Velocity(0.0, -2.0), first, None, clearance, profile, 0.1)
+    assert reversed_yaw == Velocity(0.0, -profile.yaw_cap)
+    lowered_yaw = limit_velocity(Velocity(0.0, 0.1), reversed_yaw, None, clearance, profile, 0.1)
+    assert lowered_yaw == Velocity(0.0, 0.1)
+
+
+def test_linear_ramp_does_not_scale_the_requested_turn(profile):
+    clearance = SimpleNamespace(front=math.inf, rear=math.inf)
+    output = limit_velocity(Velocity(0.4, 0.6), Velocity(0.0, 0.0), 0.0, clearance, profile, 0.05)
+    assert output.vx == pytest.approx(profile.accel * 0.05)
+    assert output.wz == 0.6
+    blocked = limit_velocity(
+        Velocity(0.4, 0.6),
+        output,
+        output.vx,
+        SimpleNamespace(front=0.0, rear=math.inf),
+        profile,
+        0.05,
+    )
+    assert blocked == Velocity(0.0, 0.0)
