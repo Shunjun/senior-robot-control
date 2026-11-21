@@ -120,7 +120,7 @@ def test_saved_restored_view_survives_missing_mismatched_occluded_frames_without
         assert restored.record.model == record.model and restored.record.action.consumed
         frozen_bytes, revision = run.path.read_bytes(), run.owner.record.revision
         view = pickle.loads(pickle.dumps(restored.view))
-        from senior_control.runtime import learning_owner
+        from senior_perception import learning_owner
 
         def unexpected_write(*args, **kwargs):
             raise AssertionError("runtime filtering must never submit a record write")

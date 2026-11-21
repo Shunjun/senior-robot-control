@@ -166,6 +166,7 @@ REQUEST = TypeAdapter[Request](Request)
 
 class Reply(FrozenFact):
     ok: bool
+    recording: bool = False
     error: str | None = None
     record: LearningRecord | None = None
     manifest: ProgramManifest | None = None

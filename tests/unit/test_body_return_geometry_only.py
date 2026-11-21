@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 from control_process_test_support import generic_motion_profile
 from learning_test_support import TestRun, geometry
+from senior_perception.startup_learning import StartupLearning
 from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.raw_safety_observation import RawSafetyObservation
 from sensor_time_test_support import capture_fields, sample_time
@@ -15,7 +16,6 @@ from test_startup_learning_feasibility import BOUNDARY
 
 from senior_control.config import DeviceProfile
 from senior_control.motion.learning_record import LearnedCatalog, LearningAnchor
-from senior_control.motion.startup_learning import StartupLearning
 from senior_control.safety.external_motion_features import (
     external_feature_ranges,
 )

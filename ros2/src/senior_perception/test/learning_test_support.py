@@ -93,6 +93,7 @@ class TestRun:
         recorder.profile, recorder.body_frame = self.profile, "base_link"
         recorder._index, recorder._frames = self.index, deque()
         recorder._lock, recorder._gap = threading.Lock(), False
+        recorder._recording, recorder._attempt = True, self.owner.record.attempt_id
         with patch(
             "senior_perception.learning_client.time.monotonic_ns",
             return_value=round(raw.received * 1e9),

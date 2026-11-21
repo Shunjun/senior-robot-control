@@ -521,6 +521,8 @@ class LearningService:
             record = None
         return Reply(
             ok=True,
+            recording=owner.record.capture_summary.state == "open"
+            and owner.record.phase not in {"completed", "failed", "unconfirmed"},
             error=owner.error,
             record=record,
             manifest=owner.public_manifest,

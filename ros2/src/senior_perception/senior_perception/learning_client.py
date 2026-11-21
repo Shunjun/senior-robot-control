@@ -377,6 +377,7 @@ class LearningFrames:
         self._index = 0
         self._frames: deque[RecordedFrame] = deque()
         self._gap = False
+        self._recording = True
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="learning-raw-frames", daemon=True)
@@ -387,6 +388,10 @@ class LearningFrames:
             self._gap = True
 
     def offer(self, raw) -> None:
+        with self._lock:
+            if not self._recording:
+                return  # Do not decode/copy ranges after the capture has closed.
+            attempt = self._attempt
         m = raw.message
         capture = capture_from_message(m.raw_capture)
         x, y = self.profile.length / 2, self.profile.width / 2
@@ -406,6 +411,8 @@ class LearningFrames:
             for v in m.ranges
         )
         with self._lock:
+            if not self._recording or attempt != self._attempt:
+                return  # A reply may close or replace the attempt during decoding.
             self._index += 1
             if len(self._frames) >= 16:
                 self._gap = True
@@ -446,10 +453,13 @@ class LearningFrames:
                     and reply.through_index < frames[-1].index
                 ):
                     raise ValueError("learning_frame_ack_incomplete")
-                if reply.attempt_id is not None and reply.attempt_id != self._attempt:
-                    with self._lock:
+                with self._lock:
+                    if reply.attempt_id is not None and reply.attempt_id != self._attempt:
                         self._attempt = reply.attempt_id
                         self._gap = False
+                    self._recording = reply.recording
+                    if not self._recording:
+                        self._frames.clear()
             except (OSError, ValueError, RuntimeError):
                 if frames:
                     self.mark_gap()

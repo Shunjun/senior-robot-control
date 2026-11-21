@@ -7,11 +7,11 @@ from learning_test_support import (  # noqa: F401
     startup_for,
     write_geometry_record,
 )
+from senior_perception.startup_learning import StartupLearning
 from sensor_time_test_support import sample_time
 from test_startup_learning_feasibility import BOUNDARY, forward_scan
 
 from senior_control.config import DeviceProfile
-from senior_control.motion.startup_learning import StartupLearning
 from senior_control.safety.self_filter import filter_self
 from senior_control.safety.self_learning import SelfReturnModel
 from senior_control.vision.raw_capture import RawCaptureHeader
@@ -105,7 +105,7 @@ def test_consumed_record_restores_without_replaying_possible_motion(tmp_path):
 
 
 def test_program_start_context_is_explicit_and_run_owned(tmp_path):
-    from senior_control.motion.startup_learning import start_environment
+    from senior_perception.startup_learning import start_environment
 
     env = start_environment({}, tmp_path)
     assert "SENIOR_STARTUP_LEARNING_CLAIM" in env
