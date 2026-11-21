@@ -5,6 +5,8 @@ from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from senior_mapping.evidence import OccupancySnapshot
+from senior_mapping.references import GridExtent
 from vehicle_core.values import MapRef, Pose2D
 
 # //Compatible: all map consumers share the same original limit values.
@@ -46,6 +48,41 @@ class WorkspaceGrid:
             )
         ):
             raise ValueError("invalid occupancy grid")
+
+
+def render_stable_grid(
+    map_ref: MapRef,
+    grid_id: str,
+    extent: GridExtent,
+    cell_size_m: float,
+    occupancy: OccupancySnapshot,
+) -> WorkspaceGrid:
+    """Render confirmed occupancy only; absence never proves free space.
+
+    Geometry is bounded before allocating the dense raster. This is a display
+    projection, not a localization result or a navigation permission.
+    """
+    width, height = extent.width, extent.height
+    if (
+        type(width) is not int
+        or type(height) is not int
+        or not 0 < width <= MAX_GRID_SIDE
+        or not 0 < height <= MAX_GRID_SIDE
+        or width * height > MAX_GRID_CELLS
+        or not math.isfinite(cell_size_m)
+        or cell_size_m <= 0
+    ):
+        raise ValueError("invalid exported grid geometry")
+    origin = Pose2D(extent.origin_x, extent.origin_y, 0.0)
+    x0, y0 = math.floor(origin.x / cell_size_m), math.floor(origin.y / cell_size_m)
+    pixels = bytearray(b"\xff") * (width * height)
+    for evidence in occupancy.cells:
+        x, y = evidence.cell[0] - x0, evidence.cell[1] - y0
+        if 0 <= x < width and 0 <= y < height:
+            pixels[y * width + x] = 100
+    return WorkspaceGrid(
+        map_ref, grid_id, width, height, cell_size_m, origin, bytes(pixels), display_only=True
+    )
 
 
 class WorkspaceMap:

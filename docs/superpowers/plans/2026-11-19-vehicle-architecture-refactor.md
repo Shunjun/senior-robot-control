@@ -162,11 +162,122 @@ B0 骨架阶段这些新目录只有职责 README；B1 已随接收实现迁入�
 | B 自车运动融合与 GPS 契约 | 用轮速、雷达运动、可用 IMU 和 GPS 观测综合估计。处理观测时刻、质量和一致性，输出连续本地运动历史。GPS 位置采用 `NavSatFix` 与关联的解状态，区分无解、单点、RTK 浮点、RTK 固定，携带测量时间、天线坐标系和协方差。速度为可选带时间与协方差的向量。定位持有地理原点、地图对齐和天线外参。单点与 RTK 按质量进入融合，GPS 缺席时继续使用现有观测。交付契约和回放接入，硬件驱动留待设备安装。 | 回放轮速与雷达不一致、GPS 缺席及单点／RTK 降级，检查融合结果、连续性和质量。核对未来生产者可替换模拟输入。 |
 | C 碰撞预测与速度计算 | 使用带测量时间的观测和连续自车运动历史，把障碍变换到当前车体坐标系，再计算净距与风险。处理转向、动态障碍与历史不足。速度算法消费融合车速与风险。合法传感器观测保留为历史证据，其信任程度由使用算法决定；传感器时间不随候选速度向后传播。 | 独立回放 150 ms 前的真实时间语义。直行夹具以 1.00 m 初始净距、0.12 m 自车位移得到 0.88 m；用有转动的夹具验证坐标变换。报告观测年龄与算法耗时。 |
 | D 输出守卫与控制节拍 | Python 与 C++ 一起迁移协议，移除合并绝对截止及停止时间屏障。守卫按序号发布最新合格包，用自己的单调时钟从新指令被接受时计断流。默认控制 20 Hz，阈值为五个配置周期，即 250 ms。断流发零，下一条更新的合格包可恢复。计算起点只用于延迟诊断。上游仲裁落实取消、急停和学习结束，必要时主动送零。真实连接断开与协议错误的保护独立保留。 | 用现有 C++ 确定时钟 harness 验证默认 250 ms、队列取新、重复或乱序不续计时、慢计算包仍可发布、断流发零和新包恢复。Python 协议测试核对两端字段与节拍配置，记录计算、发送、接收、发布各段延迟。 |
-| E 地图管理与定位 | 支持实时建图、新建、保存历史、切换和删除；保存继续建图和重定位所需数据及每图 Home 位姿。Home 默认建图开始车位，可拖动修改位置和朝向。切图尝试自动匹配；失败仅在界面将标记放到目标地图 Home，提示待校准，暂停导航和持久写图。用户给出车位和朝向后局部扫描匹配微调；匹配可信才提交真实位姿。将实时障碍、持久地图分开，用稳定结构和独立运动证据纠偏，环境变化由多帧与可见性证据确认后更新地图。 | 回放切图自动定位、失败转 Home 待校准与手动微调。用车被挪动和车辆障碍驶离的录制场景核对纠偏与地图更新由不同模块处理。覆盖地图操作持久化与 Home 独立性。 |
+| E 地图管理与定位 | 支持实时建图、新建、切换和删除。激活地图在运行中持续更新，由地图模块自动、一致地落盘续建和重定位所需的位姿图、栅格、参考版本及每图 Home。重启或切图加载最近一次完整落盘的状态，重新定位后继续更新。Home 默认建图开始车位，可拖动修改位置和朝向。切图尝试自动匹配；失败仅在界面将标记放到目标地图 Home，提示待校准，暂停导航和持久写图。用户给出车位和朝向后局部扫描匹配微调；匹配可信才提交真实位姿。将实时障碍、持久地图分开，用稳定结构和独立运动证据纠偏，环境变化由多帧与可见性证据确认后更新地图。 | 回放切图自动定位、失败转 Home 待校准与手动微调。用车被挪动和车辆障碍驶离的录制场景核对纠偏与地图更新由不同模块处理。覆盖地图操作持久化与 Home 独立性。 |
 | F 导航与前沿探索 | 保留原始任务目标。已知路径可达时直接规划；目标在未知区或暂不可达时，从已知可通行区域选可达前沿，实时建图并重规划，目标可达后回到原始目标。探索评分考虑进展、重复与绕路成本，预算和评分作为导航策略参数。导航依据定位质量、地图版本和当前障碍结果，输出意图。 | 用地图夹具验证目标外、到前沿、地图扩展及切回原目标。覆盖没有可达前沿的停机理由与切图后旧路线失效。 |
-| G 统一诊断与地图交互 | 实现启动选择模块、事件和传感器帧，集中落盘与关联。地图界面实现新建／保存／切换／删除、Home 编辑、手动位姿和待校准流程。界面先在功能原位置提供交互预览，确认后接入真实接口并移除临时代码。 | 验证按启动配置采集、帧与输出关联及拥塞丢失计数。界面回归验证待校准标记、Home 编辑和车位编辑独立。 |
+| G 统一诊断与地图交互 | 实现启动选择模块、事件和传感器帧，集中落盘与关联。地图界面实现新建／切换／删除、活动地图的实时显示、Home 编辑、手动位姿和待校准流程。落盘由车端地图模块自动执行。界面先在功能原位置提供交互预览，确认后接入真实接口并移除临时代码。 | 验证按启动配置采集、帧与输出关联及拥塞丢失计数。界面回归验证待校准标记、Home 编辑和车位编辑独立。 |
 
 每项先只读盘点候选测试，由负责人审核后落实。按仓库约定控制新增／改写场景，优先复用旧用例。每项只执行模块定向检查，报告命令、版本、通过结果和未验证项。负责人亲审 diff 和证据，按依赖顺序正常 merge 回固定功能主分支。当前任务直接在固定功能主分支交付；后续分支/并行安排另行派发，整车可用性由第三阶段验收。
+
+### E / G 活动地图交付状态（2026-11-21）
+
+- [x] **既有组件迁移。** B5.1–B5.3 已迁移原定位接入、SLAM Python/原生后端和地图持久事务。工作区读取与地图引用、栅格分块请求的既有接口已保留，详见下方 B5 与 R5 记录。
+- [x] **实车 SLAM 栅格验证。** 实车 `9b029b7`、Humble SLAM Toolbox 2.6.8。在临时探针中改用实车 EKF 的 `odom_combined`，收到 115 × 188、分辨率 0.05 m 的栅格和 `map → odom_combined`。临时节点已停止，未改部署配置和已存地图。默认配置仍使用 `odom`。
+- [ ] **活动地图生产接通。** 由地图模块持有唯一活动地图，持续接受可信更新。用稳定地图身份和独立栅格数据版本把最新内容提供给车端和网页，不因普通栅格更新使航点失效。实车检查时 `map.active` 返回 `unavailable`，网页未收到当前地图引用。
+- [ ] **自动持久化与恢复。** 在运行中自动、一致地落盘。重启或切图后加载目标地图，先按原流程自动匹配。失败时在该图 Home 显示待校准标记，可信重定位前暂停导航和持久写图。网页没有手动保存步骤。
+- [ ] **地图管理与每图 Home。** 接通新建、切换、删除和独立 Home 编辑，核对线上入口和界面操作。地图包导入导出用于迁移或备份，日常建图按活动地图持续更新。现有地图包面板和单次出图均不算此项完成。
+
+### E 首片：活动会话只读稳定占据组件（组件完成，待亲审，2026-11-21）
+
+基线 `feat/vehicle-architecture-refactor@258eafb6`。本片严格五个逻辑文件：新增
+`ros2/src/senior_mapping/senior_mapping/active.py`、`ros2/src/senior_mapping/test/test_active_map.py`，
+修改同包 `workspace.py`、`workspace_export.py` 与本计划；配置、删除均为零。
+原 E/G 未提交修订保留并随本片提交，不触及实车、ROS、仿真、服务、部署或推送。
+
+1. 先写并运行下列三个获批测试场景，再实现单进程活动会话与共享保守渲染。
+2. 会话自己持有 fresh `MapReferenceStore`，只接受上游已验证的同对象来源令牌；
+   boot/source 字符串仅作元数据，绑定入口本身不认证任何 ROS 来源。
+   复用原 bind/commit/revoke 和完整 anchor/evidence 校验；重复保留当前 cut，
+   GAP/撤销/失败 fence 后不恢复，旧会话令牌不能写入新会话。
+3. 共享导出副本现有渲染：仅 authoritative stable occupied 为 100，其余 unknown，
+   `display_only=True`，不开放航点写入或导航；先限制 extent 再分配。
+   同一份 geometry/cells 重用 grid ID，数据变化换 ID，同 ref 新会话也换 ID；
+   普通栅格增长不变 MapRef/reference nonce，WorkspaceMap 拒绝旧 ID tiles。
+4. 生产 transport 来源令牌、观测转换、旧图加载与可信重新匹配、自动一致 checkpoint、
+   重启恢复、目录/独立 Home、WS 和网页刷新均留后续，既有静态链保持。
+   本片不勾选上述 E/G 生产交付项，也不引入手动保存步骤。
+
+批准新增仅三个测试节点：连续合法提交与稳定引用/独立数据版本及 tile 读取；
+重复/GAP/错令牌与终止隔离；撤销旧 view 和同 ref 重建隔离。
+复用包内九个 ingest/growth/nonce/捕获冻结节点、`tests/unit/test_occupancy.py` 的纯输入场景、
+`senior_control/tests/test_workspace_data.py` 的非仿真读取节点及
+`ros2/tests/test_map_operations.py::test_workspace_bundle_is_pinned_and_displays_only_stable_occupancy`，
+原断言不改；不运行仿真 fixture 或全仓测试。定向 Ruff、适用 CRLF diff check、
+mapping wheel 构建与仓库外模块入包检查，实际命令、环境、结果和局限在完成时补记。
+
+#### 实际接口、验证与局限
+
+`ActiveMap(map_ref, odom_owner, cell_size_m)` 创建私有 fresh store 和随机会话 ID；
+`bind_verified_source(token, backend_boot=..., source_epoch=...)` 只在未绑定会话接收
+上游验证者持有的不透明对象，拒绝字符串/数值令牌；`commit(token, sequence, keyframe_id,
+anchors, changes)` 用 `is` 核对同一对象，再调用原 store 事务。
+`grid` 是提供给 `WorkspaceMap` 的窄只读 callback，`revoke(token)` 终止旧 provider。
+grid ID 为会话 ID 加产生该栅格的提交序号；比较完整渲染 geometry/cells，内容不变保留
+原不可变 WorkspaceGrid。未提交、撤销、GAP、坏批次或渲染失败时不提供 view，
+重复和错误来源不能替换当前 view。超界 extent 在 dense raster 分配前拒绝并终止会话。
+`workspace_export.py` 只提取原渲染到 `workspace.py::render_stable_grid` 复用，
+原 bundle 读取/manifest 检查、digest 作为 grid ID、同车校验和 DomainError 分类保持。
+
+新增测试恰为三个节点，均使用真实 store 和手工可核算的纯 Python 输入，无 ROS/仿真 fixture：
+
+- `test_continuous_cuts_keep_reference_and_version_only_changed_raster`：两个连续提交改变真实
+  occupied/extent，ref 和 nonce 不变、ID 改变，100/unknown 投影及旧 tile conflict；
+  第三个连续提交只有新锚点、无显示数据变化，保留同一 WorkspaceGrid。
+- `test_duplicate_preserves_cut_but_gap_and_invalid_extent_end_session`：拒绝字符串令牌，
+  重复/错对象不替换当前 cut，断号后不恢复；超界 extent 不发布且不能后续续接。
+- `test_revoked_view_cannot_read_or_write_recreated_same_reference`：旧 provider 撤销不可读，
+  旧 token 不可跨会话提交，同 ref 同内容的新会话 ID 不同，旧 tile 不可混入。
+
+TDD 记录：工作区 `.venv/bin/python -m pytest .../test_active_map.py -q` 最初因
+`No module named pytest` 无法执行；改用下列已有解释器，RED 为缺失
+`senior_mapping.active` 的收集错误，组件实现后新增三项通过；同一第二场景补字符串令牌
+断言后观察到 `DID NOT RAISE`（1 failed/2 passed），拒绝标量令牌后转绿。
+
+环境：macOS 26.4 arm64、CPython 3.12.15、pytest 8.4.2、SQLite 3.53.1、
+aiosqlite 0.22.1、Pydantic 2.14.1、Ruff 0.17.3、uv 0.12.23。
+实际定向命令（其中捕获冻结节点原有七项参数化，九个原节点实际为十五项）：
+
+```sh
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m pytest \
+  ros2/src/senior_mapping/test/test_active_map.py \
+  ros2/src/senior_mapping/test/test_map_references.py::test_grid_growth_keeps_reference \
+  ros2/src/senior_mapping/test/test_map_references.py::test_nonce_ignores_obstacle_and_new_anchor_but_tracks_old_anchor \
+  ros2/src/senior_mapping/test/test_map_references.py::test_reference_capture_freeze_fences_mutations \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_progress_commits_real_layers_and_fences_on_gap \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_commit_failure_leaves_corrected_anchors_and_cells_unchanged \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_progress_requires_current_binding_after_clear_and_bypass \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_progress_commits_corrected_removal_and_revokes_during_freeze \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_commit_rejects_oversized_batch_before_touching_store \
+  ros2/src/senior_mapping/test/test_map_references.py::test_first_occupancy_commit_cannot_adopt_a_preexisting_graph \
+  tests/unit/test_occupancy.py \
+  senior_control/tests/test_workspace_data.py::test_workspace_read_is_reference_fenced \
+  senior_control/tests/test_workspace_data.py::test_tile_fits_ipc_frame \
+  senior_control/tests/test_workspace_data.py::test_relay_prioritizes_control_and_correlates_workspace_replies \
+  ros2/tests/test_map_operations.py::test_workspace_bundle_is_pinned_and_displays_only_stable_occupancy -q
+```
+
+结果 **29 passed**：新增 3，原参考层 15，原 occupancy 7，非仿真 workspace 3，pinned bundle 1；
+既有断言未改。workspace 的 simulation waypoint 节点及其它仿真/ROS 测试未选中。
+四个本片 Python 文件的 `python -m ruff check`、`python -m ruff format --check` 通过，
+`git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check` 通过；
+未改原 CRLF 测试。作者按范围、来源隔离、失败路径、完整渲染发布和包边界单独自审，
+未派 helper，仍待负责人独立审查。
+
+`UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build ros2/src/senior_mapping --offline --wheel
+--out-dir /tmp/active-map-480c48d6-wheel` 成功，产物
+`/tmp/active-map-480c48d6-wheel/senior_mapping-0.1.0-py3-none-any.whl`。
+在 `/private/tmp` 用同解释器 `-I -c`、将该 wheel 加入 sys.path 后首次因缺
+`vehicle_core` 失败，补当前 `src` 后因缺 `senior_contracts` 失败；再显式补当前
+`src` 与 `contracts/src` 依赖成功，断言 `active.__file__` 来自 wheel、三个产品模块均入包，
+且 fresh provider 返回 unavailable。此为 mapping wheel 入包/导入检查，依赖使用当前源码，
+不是完整独立发行环境安装验证，也不是 Linux/ament/ROS/实车验证。
+
+实际仍为五文件：产品新增 1/修改 2、测试新增 1/修改 0、工具文档修改 1、配置 0、删除 0。
+后续先由生产 transport 认证 publisher/boot/receipt/current source 并颁发只在本会话有效的令牌，
+补可信 scan/anchor/evidence 转换和 fresh 首图坐标定义；旧图必须另走可靠重新匹配再续建，
+不能调用本片入口直接激活。随后自动 checkpoint 须将 graph、stable/removed/free 与候选维护状态、
+参考/数据版本及独立 Home 同 cut 落盘，沿既有原子恢复/fence 保留前完整代。
+最后接 snapshot 独立数据版本、WS、网页刷新/目录及 Home/车位分开的操作。
+本组件没有持久化、全局活动图选择或生产定位授权，E/G 的生产、自动落盘/重启、UI 项仍未勾选。
 
 ## 第三阶段　联调和验收
 
