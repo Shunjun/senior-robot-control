@@ -7,9 +7,11 @@ import os
 import socket
 import struct
 from collections import deque
+from collections.abc import Iterable
 from pathlib import Path
 
 from senior_control.motion.navigation_clock import monotonic_domain
+from senior_control.safety.self_learning import LEARNING_SAMPLE_COUNT
 from senior_perception.learning_compute import ComputeBatch, LearningCompute
 from senior_perception.learning_owner import LearningRecordOwner
 from senior_perception.learning_record import MAX_RECORD_BYTES, CaptureSummary, attempt_identity
@@ -42,6 +44,34 @@ def address(run_id: str) -> str:
     return "\0senior-learning-" + run_id
 
 
+def select_motion_frames(
+    frames: Iterable[RecordedFrame], start_ns: int, end_ns: int
+) -> tuple[RecordedFrame, ...]:
+    """Select distinct temporal quartiles, preserving original acquisition order."""
+    motion = tuple(
+        frame for frame in frames if start_ns <= frame.capture.time.sample_steady_ns < end_ns
+    )
+    if len(motion) < LEARNING_SAMPLE_COUNT:
+        raise ValueError("learning_samples_insufficient")
+    first = motion[0].capture.time.sample_steady_ns
+    span = motion[-1].capture.time.sample_steady_ns - first
+    selected, previous = [motion[0]], 0
+    for slot in range(1, LEARNING_SAMPLE_COUNT - 1):
+        # Integer comparisons keep nanosecond sample identities exact. Leave
+        # enough later acquisitions for the remaining distinct sample slots.
+        stop = len(motion) - (LEARNING_SAMPLE_COUNT - slot - 1)
+        index = min(
+            range(previous + 1, stop),
+            key=lambda i: abs(
+                (motion[i].capture.time.sample_steady_ns - first) * (LEARNING_SAMPLE_COUNT - 1)
+                - span * slot
+            ),
+        )
+        selected.append(motion[index])
+        previous = index
+    return (*selected, motion[-1])
+
+
 class LearningService:
     def __init__(self, path: Path):
         self.path = path
@@ -72,6 +102,7 @@ class LearningService:
         self._validation: list[RecordedFrame] = []
         self._finish_sent = False
         self._pending_failure = None
+        self._selected_frames: deque[RecordedFrame] | None = None
 
     def _accept_frames(self, batch: FrameBatch) -> None:
         assert self.owner is not None
@@ -222,18 +253,19 @@ class LearningService:
         start, end = record.action.first_submitted_steady_ns, record.action.deadline_steady_ns
         if start is None or end is None or record.geometry is None or record.segment_id is None:
             return
+        if record.capture_summary.state != "complete":
+            return  # Motion and capture proceed independently of CPU computation.
+        if self._selected_frames is None:
+            try:
+                self._selected_frames = deque(select_motion_frames(self.frames, start, end))
+            except ValueError as exc:
+                self._fail_capture(str(exc))
+                return
+            self.frames.clear()
         batch = []
-        while self.frames and len(batch) < 4:
-            frame = self.frames[0]
-            stamp = frame.capture.time.sample_steady_ns
-            if stamp >= end:
-                break
-            self.frames.popleft()
-            if stamp >= start:
-                batch.append(frame)
-        finish = record.capture_summary.state == "complete" and not any(
-            frame.capture.time.sample_steady_ns < end for frame in self.frames
-        )
+        while self._selected_frames and len(batch) < 4:
+            batch.append(self._selected_frames.popleft())
+        finish = not self._selected_frames
         if batch or finish:
             self.compute.submit(
                 ComputeBatch(

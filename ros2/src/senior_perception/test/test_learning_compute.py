@@ -65,7 +65,7 @@ def opened(run):
 
 
 def test_kernel_keeps_complete_raw_identity_and_original_nonfinite_values():
-    frames = tuple(recorded(i, 10 + i / 10) for i in range(1, 13))
+    frames = tuple(recorded(i, 10 + i / 2) for i in range(1, 6))
     decoded = FrameBatch.model_validate_json(
         FrameBatch(
             attempt_id="a" * 32,
@@ -79,15 +79,21 @@ def test_kernel_keeps_complete_raw_identity_and_original_nonfinite_values():
     for offset in range(0, len(frames), 4):
         result = kernel.update(
             ComputeBatch(
-                "a" * 32, "c" * 32, frames[0].geometry, frames[offset : offset + 4], offset == 8
+                "a" * 32, "c" * 32, frames[0].geometry, frames[offset : offset + 4], offset == 4
             )
         )
-    # One continuous run is seeded by the interior hit; original discrete rules retain all 71 hits.
-    assert result.finished and result.processed == 12 and len(result.points) == 71
-    assert kernel.model.frame_keys == [
-        (frame.capture.bridge_boot_id, frame.capture.source_epoch, frame.capture.sequence)
-        for frame in frames
+        if offset == 0:
+            assert not result.finished and result.points is None and not kernel.model.learned
+    # The isolated interior hit cannot connect a separate far wall just because
+    # adjacent scan indices also contain valid hits.
+    assert result.finished and result.processed == 5 and len(result.points) == 1
+    assert [observation.scan.stamp for observation in kernel.observations] == [
+        frame.capture.stamp_ns / 1e9 for frame in frames
     ]
+    assert all(
+        observation.scan.ranges[35] == math.inf and observation.rays[35].kind == "invalid"
+        for observation in kernel.observations
+    )
     assert all(frame.ranges[35] == "inf" for frame in frames)
 
 
@@ -223,12 +229,9 @@ def test_actual_tf_metadata_keeps_stream_open_and_kernel_uses_each_transform(tmp
                 ),
                 kernel.profile,
             )
-            assert kernel.model.frames[-1] == tuple(
-                ray.endpoint for ray in expected.rays if ray.kind == "hit"
-            )
+            assert kernel.observations[-1] == expected
         assert result.processed == 2
-        assert kernel.model.frames[0] != kernel.model.frames[1]
-        assert kernel.model.frame_keys[-1][-1] == second.capture.sequence
+        assert kernel.observations[0] != kernel.observations[1]
         assert first.geometry.sensor_to_body != second.geometry.sensor_to_body
 
         changed = recorded(3, 10.3).model_copy(

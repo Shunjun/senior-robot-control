@@ -5,8 +5,8 @@ import os
 from dataclasses import dataclass
 
 from senior_control.config import DeviceProfile
-from senior_control.safety.self_filter import ScanObservation, filter_self
-from senior_control.safety.self_learning import SelfReturnModel
+from senior_control.safety.self_filter import FilteredObservation, ScanObservation, filter_self
+from senior_control.safety.self_learning import LEARNING_SAMPLE_COUNT, SelfReturnModel
 from senior_perception.learning_record import LearningGeometry
 from senior_perception.learning_wire import RecordedFrame
 from vehicle_core.process_resources import LatestSnapshot, child_lifetime, stop_process
@@ -32,7 +32,7 @@ class ComputeResult:
 
 
 class LearningKernel:
-    """Serial original model, fed only the immutable motion-window raw frames."""
+    """Decode at most five selected frames, then classify once at completion."""
 
     def __init__(self) -> None:
         self.identity: tuple[str, str] | None = None
@@ -40,16 +40,19 @@ class LearningKernel:
         self.geometry: LearningGeometry | None = None
         self.processed = 0
         self.profile = DeviceProfile()
+        self.observations: list[FilteredObservation] = []
 
     def update(self, batch: ComputeBatch) -> ComputeResult:
         identity = batch.attempt_id, batch.segment_id
         if identity != self.identity:
             self.identity, self.geometry = identity, batch.geometry
             self.model = SelfReturnModel(batch.geometry.physical_polygon)
-            self.model.begin_segment(batch.segment_id)
+            self.observations = []
             self.processed = 0
         if not batch.geometry.same_structure(self.geometry):
             raise ValueError("learning_geometry_changed")
+        if self.processed + len(batch.frames) > LEARNING_SAMPLE_COUNT:
+            raise ValueError("learning_sample_count")
         assert self.model is not None
         for frame in batch.frames:
             geometry, capture = frame.geometry, frame.capture
@@ -72,14 +75,14 @@ class LearningKernel:
                 ),
                 self.profile,
             )
-            if not self.model.observe(observation, capture=capture, segment_id=batch.segment_id):
-                raise ValueError("learning_frame_not_in_segment")
+            self.observations.append(observation)
             self.processed += 1
         points = None
         if batch.finish:
-            count = self.model.validate()
-            no_interior = any(self.model.frames) and not any(
-                self.model.interior(point) for frame in self.model.frames for point in frame
+            count = self.model.learn_samples(self.observations)
+            hits = tuple(ray for frame in self.observations for ray in frame.external_hits)
+            no_interior = bool(hits) and not any(
+                self.model.interior(ray.endpoint) for ray in hits if ray.endpoint is not None
             )
             if self.processed and (count or no_interior):
                 points = self.model.learned

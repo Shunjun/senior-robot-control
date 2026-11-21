@@ -15,6 +15,7 @@ from senior_control.vision.raw_capture import RawCaptureHeader
 # User-specified body-return position matching tolerance; not sensor accuracy
 # or a margin on the physical body / external obstacle geometry.
 SELF_RETURN_MATCH_DISTANCE_M = 0.01
+LEARNING_SAMPLE_COUNT = 5
 
 
 def _match_limit(point: Point2D) -> float:
@@ -187,20 +188,72 @@ class SelfReturnModel:
             self.clear()
             self.segment_id = segment_id
 
-    def connected_points(self, observation: FilteredObservation) -> tuple[Point2D, ...]:
-        """Adjacent valid hits form a discrete run; an interior hit seeds it.
+    def learn_samples(self, observations: Sequence[FilteredObservation]) -> int:
+        """Classify five motion samples once; no streaming candidate/fixpoint loop."""
+        if len(observations) != LEARNING_SAMPLE_COUNT:
+            raise ValueError("learning_sample_count")
+        self.learned = ()
+        reference = observations[0]
+        candidates = tuple(
+            dict.fromkeys(
+                ray.endpoint
+                for ray in reference.rays
+                if ray.kind == "hit" and ray.endpoint is not None
+            )
+        )
+        for observation in observations[1:]:
+            points = tuple(
+                ray.endpoint
+                for ray in observation.rays
+                if ray.kind == "hit" and ray.endpoint is not None
+            )
+            if not points or not candidates:
+                return 0
+            tree = STRtree(tuple(Point(point) for point in points))
+            candidates = tuple(p for p in candidates if _matches(p, points, tree))
+        stable = set(candidates)
+        supported = replace(
+            reference,
+            rays=tuple(
+                ray if ray.endpoint in stable else replace(ray, kind="invalid")
+                for ray in reference.rays
+            ),
+        )
+        self.learned = tuple(
+            dict.fromkeys(
+                self.connected_points(
+                    supported, max_connection_gap=2 * SELF_RETURN_MATCH_DISTANCE_M
+                )
+            )
+        )
+        return len(self.learned)
 
-        No distance/angle threshold is added between neighboring samples. An
-        invalid/missing/non-hit ray breaks the run. No sub-beam surface is inferred.
+    def connected_points(
+        self, observation: FilteredObservation, *, max_connection_gap: float | None = None
+    ) -> tuple[Point2D, ...]:
+        """Keep runs seeded inside the body, optionally separating spatial gaps.
+
+        Streaming compatibility retains its historical discrete topology.
+        Sampled learning also checks endpoint separation. Neither fills free space.
         """
         runs: list[list[Point2D]] = []
         run: list[Point2D] = []
         previous: int | None = None
+
+        def connected(first: Point2D, second: Point2D) -> bool:
+            if max_connection_gap is None:
+                return True  # Compatibility for the historical streaming-model API.
+            origin = (observation.scan.sensor_to_body.x, observation.scan.sensor_to_body.y)
+            radius = min(math.dist(origin, first), math.dist(origin, second))
+            spacing = 2 * radius * math.sin(observation.scan.angle_increment / 2)
+            return math.dist(first, second) <= spacing + max_connection_gap
+
         for ray in observation.rays:
             if (
                 ray.kind != "hit"
                 or ray.endpoint is None
                 or (previous is not None and ray.index != previous + 1)
+                or (run and ray.endpoint is not None and not connected(run[-1], ray.endpoint))
             ):
                 if run:
                     runs.append(run)
@@ -237,6 +290,7 @@ class SelfReturnModel:
             and observation.rays[0].kind == observation.rays[-1].kind == "hit"
             and observation.rays[0].endpoint is not None
             and observation.rays[-1].endpoint is not None
+            and connected(runs[-1][-1], runs[0][0])
         ):
             runs = [runs[-1] + runs[0], *runs[1:-1]]
         return tuple(
