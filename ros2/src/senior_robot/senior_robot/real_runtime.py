@@ -7,6 +7,7 @@ import yaml
 from pydantic import ValidationError
 
 from senior_control.motion.hardware_profile import HardwareMotionProfile, load_hardware_profile
+from vehicle_core.lidar_diagnostic import from_file
 
 # Required parameters have no hardware defaults. Sensor and response calibration
 # belongs in this file, not in a simulation YAML or product driving preferences.
@@ -112,6 +113,7 @@ def real_parameter_defaults(
         },
         "safety_gate": {
             **common,
+            "temporary_lidar_bypass": False,
             "wheel_frame": "odom_combined",
             "simulation_rate_hz": 20.0,
             "depth_policy": "laser_only",
@@ -143,6 +145,7 @@ def load_real_parameters(
 ) -> dict[str, dict[str, Any]]:
     if not path.is_absolute():
         raise ValueError("safety_parameters must be an absolute ROS parameter YAML path")
+    bypass = from_file(path)
     value = yaml.safe_load(path.read_bytes())
     if not isinstance(value, dict):
         raise ValueError("safety_parameters must contain per-node ros__parameters")
@@ -183,6 +186,13 @@ def load_real_parameters(
             )
             params["wheel_frame"] = "odom_combined" if frame == "odom" else frame
         result[node] = params
+        if bypass and node in {
+            "scan_receipt",
+            "scan_adapter",
+            "safety_scan_ingress",
+            "scan_motion_node",
+        }:
+            continue
         if profile is not None and node == "scan_motion_node":
             for field in ("max_linear_speed", "max_yaw_rate"):
                 if params.get(field) != defaults[node][field]:

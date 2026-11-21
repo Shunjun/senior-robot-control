@@ -18,6 +18,9 @@ from senior_control.runtime.launch_recovery import restart_prefix
 
 
 def _mapping_nodes(context):
+    from vehicle_core.lidar_diagnostic import require_lidar
+
+    require_lidar("mapping")
     share = FindPackageShare("senior_robot")
     use_sim_time = LaunchConfiguration("use_sim_time")
     params = PathJoinSubstitution([share, "config", "slam.yaml"])

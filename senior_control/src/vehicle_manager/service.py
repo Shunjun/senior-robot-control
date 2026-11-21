@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from vehicle_core.lidar_diagnostic import ENVIRONMENT_KEY, from_file, selected
 from vehicle_manager.deployment import private_directory
 from vehicle_manager.platform_ports import ServicePorts
 from vehicle_manager.profile import VehicleProfile
@@ -158,6 +159,12 @@ async def supervise(
     profile: "VehicleProfile | None" = None,
     ports: ServicePorts,
 ) -> int:
+    bypass = (
+        from_file(profile.safety_parameters, environment=environment)
+        if profile is not None and profile.safety_parameters is not None
+        else selected(environment=environment)
+    )
+    environment = {**environment, ENVIRONMENT_KEY: str(bypass).lower()}
     private_directory(root)
     fd = os.open(root / ".agent-service.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, "wb") as lock:
@@ -172,7 +179,9 @@ async def supervise(
             ports.read_credentials(root / "device.json").robot_id if profile is not None else ""
         )
         environment = ports.start_environment(environment, root)
-        learning_service = ports.learning(Path(environment["SENIOR_STARTUP_LEARNING_CLAIM"]))
+        learning_service = (
+            None if bypass else ports.learning(Path(environment["SENIOR_STARTUP_LEARNING_CLAIM"]))
+        )
         if profile is not None:
             for key in tuple(environment):
                 if key.startswith("SENIOR_SIMULATION_") or key.startswith("SENIOR_MOTION_CORE_"):
@@ -249,6 +258,7 @@ async def supervise(
                 and process is not None
                 and all(child.returncode is None for child in (process, adapter, motion_stack))
                 and not stopping.is_set()
+                and not bypass
             ):
                 ports.cleanup_learning(
                     root,
@@ -268,7 +278,8 @@ async def supervise(
                 events.report("camera", "unavailable", str(exc))
 
         try:
-            await learning_service.start()
+            if learning_service is not None:
+                await learning_service.start()
             await ports.prepare_socket(root / "service.sock")
             await server.start()
             ports.record(root / "service.sock")
@@ -343,7 +354,8 @@ async def supervise(
                 if events:
                     events.close()
                 await server.close()
-                await learning_service.close()
+                if learning_service is not None:
+                    await learning_service.close()
                 for number in signals:
                     loop.remove_signal_handler(number)
 

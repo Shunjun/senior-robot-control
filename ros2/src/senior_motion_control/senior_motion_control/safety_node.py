@@ -49,6 +49,7 @@ from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
 from senior_motion_control.arbiter import FinalCommandFence
 from senior_motion_control.motion_lifecycle import MotionExecutor, run
 from senior_motion_control.native import native_executable
+from vehicle_core.lidar_diagnostic import PARAMETER, selected
 from vehicle_core.sensor_policy import default_policy
 from vehicle_core.values import Velocity
 
@@ -73,6 +74,8 @@ class SafetyGate(Node):
             start_parameter_services=False,
         )
         self._input_channel = input_channel
+        self.declare_parameter(PARAMETER, selected())
+        self._temporary_lidar_bypass = selected(self.get_parameter(PARAMETER).value)
         self._input_process = None
         self._input_scan_ready = False
         from senior_motion_control.cadence import ControlCadence
@@ -186,7 +189,8 @@ class SafetyGate(Node):
 
             from vehicle_core.diagnostics import configure_diagnostics
 
-            self._scan_compensator = ScanGapCompensator(candidate_profile)
+            if not self._temporary_lidar_bypass:
+                self._scan_compensator = ScanGapCompensator(candidate_profile)
             from pathlib import Path
 
             from senior_perception.learning_client import LearningFrames
@@ -194,7 +198,7 @@ class SafetyGate(Node):
             claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
             self._learning_frames = (
                 self._own(LearningFrames(Path(claim), candidate_profile, self._body))
-                if claim
+                if claim and not self._temporary_lidar_bypass
                 else None
             )
             self._input_sensors = MotionSensorRuntime(
@@ -213,6 +217,7 @@ class SafetyGate(Node):
                 sample_sink=self._input_sensors.ingest,
                 source_invalidated=self._input_sensors.invalidate,
                 publish=False,
+                temporary_lidar_bypass=self._temporary_lidar_bypass,
             )
             self._optional_inputs = None
             if candidate_profile.gps_input is not None or candidate_profile.rgbd_input is not None:
@@ -221,9 +226,13 @@ class SafetyGate(Node):
                 self._optional_inputs = OptionalMotionInputs(
                     self, candidate_profile, self._input_sensors
                 )
-            self.create_subscription(
-                FencedSafetyScan, self._bounded_scan_topic, self._on_scan, qos_profile_sensor_data
-            )
+            if not self._temporary_lidar_bypass:
+                self.create_subscription(
+                    FencedSafetyScan,
+                    self._bounded_scan_topic,
+                    self._on_scan,
+                    qos_profile_sensor_data,
+                )
             if self._depth_policy == "required":
                 self.create_subscription(
                     FencedDepthEvidence,
@@ -262,8 +271,8 @@ class SafetyGate(Node):
             # Optional motion estimation cannot suppress the independent scan snapshot.
             reference = None
             sensors.independent = sensors.tracking = None
-        ready = self._scan_topology_ready()
-        if self._scans:
+        ready = False if self._temporary_lidar_bypass else self._scan_topology_ready()
+        if not self._temporary_lidar_bypass and self._scans:
             # Odometry may arrive after scan admission; retry only this current raw identity.
             self._scans[-1] = self._scan_compensator.update(
                 self._scans[-1], self._input_bridge.core.poses, now=now
@@ -425,6 +434,8 @@ class SafetyGate(Node):
             self._freshness.scan_received = None
 
     def _scan_topology_ready(self) -> bool:
+        if self._temporary_lidar_bypass:
+            return False
         if self._input_channel is None:
             return self._input_scan_ready
         endpoints = self.get_publishers_info_by_topic(self._bounded_scan_topic)
@@ -446,6 +457,8 @@ class SafetyGate(Node):
         return ready
 
     def _on_scan(self, envelope: FencedSafetyScan) -> None:
+        if self._temporary_lidar_bypass:
+            return
         if (
             not self._scan_topology_ready()
             or self._freshness is None
@@ -741,6 +754,8 @@ class SafetyGate(Node):
             return
         self._last_status = steady
         values = {
+            "temporary_lidar_bypass": str(self._temporary_lidar_bypass).lower(),
+            "lidar_enabled": str(not self._temporary_lidar_bypass).lower(),
             "buffered_scans": str(len(self._scans)),
             "motion_trace": json.dumps(self._output_transport.trace_status()),
             **{f"count.{key}": str(value) for key, value in self._status_counts.items()},

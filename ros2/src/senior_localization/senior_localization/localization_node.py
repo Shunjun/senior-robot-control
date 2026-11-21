@@ -10,6 +10,7 @@ from senior_localization.geo import GeoAlignment, PositionEstimate, QualifiedFix
 from senior_localization.heading import HeadingObservation, HeadingObserver, MotionSample
 from senior_localization.relocalization import Relocalizer
 from vehicle_core.clock import Clock, SystemClock
+from vehicle_core.lidar_diagnostic import require_lidar
 from vehicle_core.values import MapRef
 
 
@@ -43,6 +44,7 @@ class LocalizationAdapter:
 def create_localization_node() -> type:
     """ROS node type. Imported only when rclpy is installed. Publishes no velocity."""
 
+    require_lidar("localization")
     from rclpy.node import Node
 
     class LocalizationNode(Node):
@@ -77,6 +79,7 @@ def create_localization_node() -> type:
 
 
 def main() -> None:
+    require_lidar("localization")
     import rclpy
 
     rclpy.init()

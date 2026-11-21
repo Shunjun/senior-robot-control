@@ -389,13 +389,13 @@ class LearningRuntime:
                     return
         return self._request(control, "target", velocity=velocity, reason=reason)
 
-    def initialize(self, control: LearningControlInput):
+    def initialize(self, control: LearningControlInput, *, enabled: bool = True):
         import os
         from pathlib import Path
 
         claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
         self._learning_client = None
-        if claim:
+        if enabled and claim:
             if control.launch_recovered:
                 self._learning_client = LearningClient(Path(claim), read_only=True)
             else:
@@ -403,6 +403,8 @@ class LearningRuntime:
         if self._learning_client is not None:
             self.ports.register_close(self._learning_client.close)
         self.startup = StartupLearning(None if control.launch_recovered else self._learning_client)
+        if not enabled:
+            self.startup.reason = "temporary_lidar_bypass"
         self.self_returns = None
         self._learning_geometry = None
         self._retired_learning_owner = False

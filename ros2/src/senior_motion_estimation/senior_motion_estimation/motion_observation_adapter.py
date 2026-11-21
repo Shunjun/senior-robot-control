@@ -31,6 +31,7 @@ from senior_motion_estimation.sample_types import (
 )
 from senior_motion_estimation.source_admission import AdmissionOwner
 from senior_motion_estimation.temporal import TemporalConfig, TemporalResolver
+from vehicle_core.lidar_diagnostic import selected
 from vehicle_core.sample_time import SampleTime
 from vehicle_core.values import Pose2D
 
@@ -445,7 +446,9 @@ class NativeObservationRosBridge:
         sample_sink: Any = None,
         source_invalidated: Any = None,
         publish: bool = True,
+        temporary_lidar_bypass: bool | None = None,
     ):
+        temporary_lidar_bypass = selected(temporary_lidar_bypass)
         from nav_msgs.msg import Odometry
         from rclpy.clock import Clock, ClockType
         from senior_motion_msgs.msg import ScanMotion
@@ -489,6 +492,8 @@ class NativeObservationRosBridge:
                 "scan_motion_node",
             ),
         ):
+            if temporary_lidar_bypass and source is Source.LASER:
+                continue
             self._subscriptions.append(
                 subscribe(
                     node,

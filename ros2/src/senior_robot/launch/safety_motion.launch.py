@@ -15,6 +15,7 @@ from launch.actions import (
     IncludeLaunchDescription,
     OpaqueFunction,
     RegisterEventHandler,
+    SetEnvironmentVariable,
     SetLaunchConfiguration,
 )
 from launch.event_handlers import OnProcessExit
@@ -26,6 +27,7 @@ from senior_robot.real_runtime import load_real_parameters, validate_real_runtim
 
 from senior_control.runtime.launch_recovery import restart_prefix
 from senior_control.sensors.policy import ros_sensor_parameters
+from vehicle_core.lidar_diagnostic import ENVIRONMENT_KEY, from_parameters
 from vehicle_core.lifecycle_events import report_ros_exit
 
 
@@ -35,10 +37,12 @@ def _nodes(context):
     robot_id = LaunchConfiguration("robot_id").perform(context)
     profile = validate_real_runtime(Path(hardware), Path(parameters))
     runtime = load_real_parameters(Path(parameters), profile)
+    bypass = from_parameters(runtime["safety_gate"])
     shared = {"use_sim_time": False, **ros_sensor_parameters(profile.diagnostics)}
     selected = {**shared, "hardware_motion_profile": hardware}
     # Original standard sensor publishers are consumed through native receipts.
     nodes = [
+        SetEnvironmentVariable(ENVIRONMENT_KEY, str(bypass).lower()),
         # Observe every child exit without terminating healthy modules.
         RegisterEventHandler(OnProcessExit(on_exit=report_ros_exit)),
         GroupAction(
@@ -65,35 +69,42 @@ def _nodes(context):
                         ),
                     )
                     for filename in (
-                        "turn_on_wheeltec_robot.launch.py",
-                        "wheeltec_lidar.launch.py",
+                        ("turn_on_wheeltec_robot.launch.py",)
+                        if bypass
+                        else ("turn_on_wheeltec_robot.launch.py", "wheeltec_lidar.launch.py")
                     )
                 ],
             ],
         ),
-        Node(
-            package="senior_sensor_ingress",
-            executable="scan_receipt_node",
-            prefix=restart_prefix(),
-            parameters=[runtime["scan_receipt"], shared],
-        ),
-        Node(
-            package="senior_robot",
-            executable="scan_adapter",
-            prefix=restart_prefix(),
-            parameters=[runtime["scan_adapter"], shared],
-        ),
-        Node(
-            package="senior_robot",
-            executable="safety_scan_ingress",
-            prefix=restart_prefix(),
-            parameters=[runtime["safety_scan_ingress"], shared],
-        ),
-        Node(
-            package="senior_scan_matcher",
-            executable="scan_motion_node",
-            prefix=restart_prefix(),
-            parameters=[runtime["scan_motion_node"], shared],
+        *(
+            []
+            if bypass
+            else [
+                Node(
+                    package="senior_sensor_ingress",
+                    executable="scan_receipt_node",
+                    prefix=restart_prefix(),
+                    parameters=[runtime["scan_receipt"], shared],
+                ),
+                Node(
+                    package="senior_robot",
+                    executable="scan_adapter",
+                    prefix=restart_prefix(),
+                    parameters=[runtime["scan_adapter"], shared],
+                ),
+                Node(
+                    package="senior_robot",
+                    executable="safety_scan_ingress",
+                    prefix=restart_prefix(),
+                    parameters=[runtime["safety_scan_ingress"], shared],
+                ),
+                Node(
+                    package="senior_scan_matcher",
+                    executable="scan_motion_node",
+                    prefix=restart_prefix(),
+                    parameters=[runtime["scan_motion_node"], shared],
+                ),
+            ]
         ),
         Node(
             package="senior_motion_control",
@@ -106,7 +117,7 @@ def _nodes(context):
     ]
 
     navigation = LaunchConfiguration("navigation_parameters").perform(context)
-    if navigation:
+    if navigation and not bypass:
         nodes.append(
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(

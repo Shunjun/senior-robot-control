@@ -18,6 +18,7 @@ from senior_motion_control.vehicle_capabilities import VehicleCapabilities
 from senior_motion_control.vehicle_diagnostics import CoreDiagnostics
 from senior_motion_control.vehicle_speed import SpeedCalculation
 from vehicle_core.diagnostics import configure_diagnostics
+from vehicle_core.lidar_diagnostic import selected
 from vehicle_core.values import Velocity
 
 _OUTPUT_BUDGET_S = 0.25
@@ -25,8 +26,9 @@ _OUTPUT_BUDGET_S = 0.25
 
 class MotionCoreOutput:
     def __init__(self, node: Any, profile: Any):
+        self._temporary_lidar_bypass = selected(getattr(node, "_temporary_lidar_bypass", None))
         self.capabilities = VehicleCapabilities()
-        self.collision = CollisionPrediction(profile)
+        self.collision = None if self._temporary_lidar_bypass else CollisionPrediction(profile)
         self.speed = SpeedCalculation(profile)
         self.sensor_access = SensorAccess(self)
         self.diagnostics = None
@@ -72,7 +74,9 @@ class MotionCoreOutput:
                 )
             )
             self.diagnostics_owner.initialize()
-            self.learning.initialize(self._learning_control_input())
+            self.learning.initialize(
+                self._learning_control_input(), enabled=not self._temporary_lidar_bypass
+            )
         except BaseException:
             self._resources.close()
             raise
@@ -197,15 +201,17 @@ class MotionCoreOutput:
                     expired_deadline=deadline,
                 )
             self.revoke("expiry", now=now)
-        try:
-            filtered = self._learning_observation(now)
-        except (ValueError, TypeError, KeyError) as exc:
-            # Learning cannot withdraw manual/navigation or suppress raw scan handling.
-            self._remember_learning_failure(now, exc)
-            self.learning.startup.hold_motion("learning_scan_unavailable")
-            filtered = None
-        self._trace_mark("learning_end")
-        self._startup_target(now, filtered)
+        filtered = None
+        if not self._temporary_lidar_bypass:
+            try:
+                filtered = self._learning_observation(now)
+            except (ValueError, TypeError, KeyError) as exc:
+                # Learning cannot withdraw manual/navigation or suppress raw scan handling.
+                self._remember_learning_failure(now, exc)
+                self.learning.startup.hold_motion("learning_scan_unavailable")
+                filtered = None
+            self._trace_mark("learning_end")
+            self._startup_target(now, filtered)
         state = self.arbitration.machine.state
         output, reason, scan_deadline = Velocity(0, 0), state.reason, None
         if tracing:
@@ -217,23 +223,41 @@ class MotionCoreOutput:
             requested = self.arbitration.target.velocity
             if requested != Velocity(0, 0):
                 control_filtered = filtered
-                if self.node._scans and self.node._scans[-1].predictions:
+                if (
+                    not self._temporary_lidar_bypass
+                    and self.node._scans
+                    and self.node._scans[-1].predictions
+                ):
                     control_filtered = self._filtered_scan(self.node._scans[-1], avoidance=True)
                 self._trace_mark("clearance_begin")
-                clearance = self.collision.clearance(
-                    self.node._scans, now, filtered=control_filtered
+                clearance = (
+                    None
+                    if self._temporary_lidar_bypass
+                    else self.collision.clearance(self.node._scans, now, filtered=control_filtered)
                 )
                 self._trace_mark("clearance_end")
                 if tracing:
                     facts["clearance"] = None if clearance is None else asdict(clearance)
-                if clearance is None:
+                if clearance is None and not self._temporary_lidar_bypass:
                     if tracing:
                         facts["zero_stage"] = "clearance"
                     reason = "scan_temporarily_unavailable"
                 else:
                     current = self.sensors.wheel_linear(now)
                     self._trace_mark("limit_begin")
-                    output = self.speed.calculate(requested, self._output, current, clearance, dt)
+                    if self._temporary_lidar_bypass:
+                        output = self.speed.calculate(
+                            requested,
+                            self._output,
+                            current,
+                            None,
+                            dt,
+                            temporary_lidar_bypass=True,
+                        )
+                    else:
+                        output = self.speed.calculate(
+                            requested, self._output, current, clearance, dt
+                        )
                     self._trace_mark("limit_end")
                     if tracing:
                         facts["zero_stage"] = "limit" if output == Velocity(0, 0) else None
@@ -243,7 +267,7 @@ class MotionCoreOutput:
                             dt=dt,
                             limited=(output.vx, output.wz),
                         )
-                    scan_deadline = clearance.deadline
+                    scan_deadline = None if clearance is None else clearance.deadline
                     reason = "directional_limit" if output != requested else "target"
             else:
                 if tracing:

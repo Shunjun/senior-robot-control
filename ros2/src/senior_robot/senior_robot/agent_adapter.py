@@ -27,6 +27,7 @@ from senior_control.protocol import (
     validate_envelope,
 )
 from senior_control.safety.arbiter import CommandResult
+from vehicle_core.lidar_diagnostic import selected
 from vehicle_core.route_plan import RoutePlan
 
 if TYPE_CHECKING:
@@ -67,6 +68,7 @@ class AdapterCore:
         ros_domain: int | None = None,
         manual: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
+        self._temporary_lidar_bypass = selected()
         self._robot_id = robot_id
         self._manual = manual
         self._ros_domain = ros_domain
@@ -94,6 +96,16 @@ class AdapterCore:
 
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
+        if self._temporary_lidar_bypass:
+            if kind == "learning_capability":
+                return {
+                    "ok": True,
+                    "learning_protocol_version": 0,
+                    "reason": "temporary_lidar_bypass",
+                }
+            if kind in {"learning", "pose.get"} or kind.startswith(("navigation.", "map.")):
+                return {"ok": False, "error": "unavailable", "reason": "temporary_lidar_bypass"}
+
         if kind in {
             "navigation.task_start",
             "navigation.task_status",
@@ -570,7 +582,8 @@ def main() -> None:
         node.declare_parameter("hardware_navigation_reference", "")
         hardware_reference = str(node.get_parameter("hardware_navigation_reference").value)
         reference = None
-        if hardware_reference:
+        bypass = selected()
+        if hardware_reference and not bypass:
             from senior_localization.hardware_reference import HardwareReference
 
             reference = HardwareReference(node, Path(hardware_reference))
@@ -610,7 +623,13 @@ def main() -> None:
             result["manual_authority"] = manual
             result["manual_driving"] = manual_active
             result["navigation_block_reason"] = (
-                None if result["navigation_ready"] else previous_failure or "navigation unavailable"
+                "temporary_lidar_bypass"
+                if bypass
+                else (
+                    None
+                    if result["navigation_ready"]
+                    else previous_failure or "navigation unavailable"
+                )
             )
             if current is not None and current.map_generation == result["map_generation"]:
                 result["route_progress"] = current.model_dump()

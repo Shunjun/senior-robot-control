@@ -36,6 +36,8 @@ scan_motion_node:
     min_rays: 100
 safety_gate:
   ros__parameters:
+    # Temporary computation diagnostic: all lidar disabled, no lidar obstacle avoidance.
+    temporary_lidar_bypass: true
     wheel_frame: odom_combined
     use_sim_time: false
     body_frame: base_link

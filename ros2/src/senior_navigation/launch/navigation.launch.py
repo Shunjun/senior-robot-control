@@ -22,6 +22,9 @@ from senior_control.runtime.launch_recovery import (
 
 
 def _members(context):
+    from vehicle_core.lidar_diagnostic import require_lidar
+
+    require_lidar("navigation")
     share = FindPackageShare("senior_navigation")
     use_sim_time = LaunchConfiguration("use_sim_time")
     external_controller = LaunchConfiguration("external_controller")

@@ -21,28 +21,38 @@ def _braking_speed_limit(distance, decel, lag_s):
     return braking_term / (math.sqrt(lag_speed**2 + braking_term) + lag_speed)
 
 
-def limit_velocity(requested, previous, measured_linear, clearance, profile, dt):
+def limit_velocity(
+    requested, previous, measured_linear, clearance, profile, dt, *, temporary_lidar_bypass=False
+):
     """v*lag + v²/(2*a) <= d: positive clearance permits a positive speed.
 
     Ramp ordinary requests from the last output; wheel speed selects the braking
     rate when the vehicle is already faster than the requested/capped speed.
     The distance cap takes precedence over the ramp, including zero at boundary.
+    The explicit temporary diagnostic mode accepts no clearance and omits only
+    the two distance caps; physical limits and ramps remain active.
     """
     linear = max(-profile.cap, min(profile.cap, requested.vx))
     yaw = max(-profile.yaw_cap, min(profile.yaw_cap, requested.wz))
-    lag_s = profile.lag_ms / 1000
-    distance = clearance.front if linear >= 0 else clearance.rear
-    cap = _braking_speed_limit(distance, profile.decel, lag_s)
-    desired = math.copysign(min(abs(linear), cap), linear)
+    if temporary_lidar_bypass:
+        if clearance is not None:
+            raise ValueError("temporary_lidar_bypass requires absent lidar clearance")
+        desired = linear
+    else:
+        lag_s = profile.lag_ms / 1000
+        distance = clearance.front if linear >= 0 else clearance.rear
+        cap = _braking_speed_limit(distance, profile.decel, lag_s)
+        desired = math.copysign(min(abs(linear), cap), linear)
     measured = previous.vx if measured_linear is None else measured_linear
     reversing = previous.vx * desired < 0
     braking = reversing or abs(desired) < abs(previous.vx) or measured * desired > desired**2
     ramp_target = 0.0 if reversing else desired
     vx = _approach(previous.vx, ramp_target, profile.decel if braking else profile.accel, dt)
     # Cap the direction actually commanded, also during a requested reversal.
-    actual_distance = clearance.front if vx >= 0 else clearance.rear
-    actual_cap = _braking_speed_limit(actual_distance, profile.decel, lag_s)
-    vx = math.copysign(min(abs(vx), actual_cap), vx)
+    if not temporary_lidar_bypass:
+        actual_distance = clearance.front if vx >= 0 else clearance.rear
+        actual_cap = _braking_speed_limit(actual_distance, profile.decel, lag_s)
+        vx = math.copysign(min(abs(vx), actual_cap), vx)
     if linear == 0:
         vx = 0.0
     elif abs(vx) < abs(linear):
@@ -58,5 +68,17 @@ class SpeedCalculation:
     def __init__(self, profile):
         self.profile = profile
 
-    def calculate(self, requested, previous, measured, clearance, dt):
-        return limit_velocity(requested, previous, measured, clearance, self.profile, dt)
+    def calculate(
+        self, requested, previous, measured, clearance, dt, *, temporary_lidar_bypass=False
+    ):
+        if not temporary_lidar_bypass:
+            return limit_velocity(requested, previous, measured, clearance, self.profile, dt)
+        return limit_velocity(
+            requested,
+            previous,
+            measured,
+            clearance,
+            self.profile,
+            dt,
+            temporary_lidar_bypass=True,
+        )

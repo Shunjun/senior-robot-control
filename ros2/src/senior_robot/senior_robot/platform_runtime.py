@@ -14,6 +14,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Protocol
 
+from vehicle_core.lidar_diagnostic import from_file
+
 
 class RuntimeProfile(Protocol):
     """Read-only fields actually consumed by the real execution provider."""
@@ -44,6 +46,8 @@ def _adapter_command(profile: RuntimeProfile, robot_id: str) -> list[str]:
     from senior_robot.real_runtime import validate_real_runtime
 
     hardware = validate_real_runtime(profile.motion_profile, profile.safety_parameters)
+    assert profile.safety_parameters is not None  # Required by validate_real_runtime.
+    bypass = from_file(profile.safety_parameters)
     setup = profile.ros_setup
     if setup is None or not setup.is_absolute() or not setup.is_file():
         raise ValueError("ROS workspace setup is missing; build it and configure ros_setup")
@@ -54,11 +58,14 @@ def _adapter_command(profile: RuntimeProfile, robot_id: str) -> list[str]:
         raise ValueError("vendor_ros_setup: WHEELTEC install/setup.bash is missing")
     from senior_robot.real_runtime import validate_navigation
 
-    validate_navigation(profile.navigation_reference, profile.navigation_parameters)
+    if not bypass:
+        validate_navigation(profile.navigation_reference, profile.navigation_parameters)
     return [
         "/bin/bash",
         "-c",
         'source "$1" || exit; source "$2" || exit; shift 2; '
+        # //Compatible: env-shebang ROS nodes must use the launch virtualenv after setup.
+        'export PATH="${1%/*}${PATH:+:$PATH}"; '
         'if [ -n "${SENIOR_EXPECTED_ROS_DOMAIN:-}" ]; then '
         'export ROS_DOMAIN_ID="$SENIOR_EXPECTED_ROS_DOMAIN"; fi; exec "$@"',
         "senior-vehicle-ros",
@@ -85,7 +92,7 @@ def _adapter_command(profile: RuntimeProfile, robot_id: str) -> list[str]:
                 "-p",
                 f"navigation_controller_params:={profile.navigation_parameters}",
             ]
-            if profile.navigation_reference is not None
+            if not bypass and profile.navigation_reference is not None
             else []
         ),
         "-p",
@@ -163,6 +170,10 @@ async def _video_environment(
 def _motion_command(profile: RuntimeProfile, robot_id: str) -> list[str]:
     # Use the same sourced overlay/domain as the adapter; no second authority
     # owner or actuator publisher is introduced by the hardware launch.
+    # Configuration is also checked by the sourced launch and adapter.
+    bypass = (
+        from_file(profile.safety_parameters) if profile.safety_parameters is not None else False
+    )
     return _ros_launch_command(
         profile,
         robot_id,
@@ -173,7 +184,7 @@ def _motion_command(profile: RuntimeProfile, robot_id: str) -> list[str]:
         f"robot_id:={robot_id}",
         *(
             [f"navigation_parameters:={profile.navigation_parameters}"]
-            if profile.navigation_parameters is not None
+            if not bypass and profile.navigation_parameters is not None
             else []
         ),
     )
