@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from senior_control.runtime.ipc import IpcClient, IpcServer
+from vehicle_core.ipc import IpcClient, IpcServer
 
 
 async def answer(_message):

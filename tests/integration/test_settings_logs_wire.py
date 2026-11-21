@@ -14,25 +14,27 @@ from typing import Any, cast
 
 import pytest
 from agent_fakes import FakeConnector, FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks
+from senior_contracts.wire import ResponseEnvelope, serialize_envelope, validate_envelope
 from test_cloud import ORIGIN, Cloud, WsClient
 from test_cloud import cloud as cloud
 from test_manual_wire import runtime
-
-from senior_control.agent.journal import AgentJournal
-from senior_control.agent.logs_wire import AgentLogConnection, AgentLogHandler, CloudLogGrants
-from senior_control.agent.main import Agent
-from senior_control.agent.ports import RuntimeState
-from senior_control.agent.settings_wire import SettingsRuntime
-from senior_control.protocol import ResponseEnvelope, serialize_envelope, validate_envelope
-from senior_control.settings.models import SettingsRequest, simulation_settings_profile
-from senior_control.settings.service import RuntimeGate, SettingsService
-from senior_control.settings.store import SettingsStore
-from senior_control.storage.database import Database
-from senior_control.tasks import TaskStore
-from senior_control.tasks.lifecycle_store import LifecycleStore
-from senior_control.vehicle_logs.models import LogInput, LogQuery
-from senior_control.vehicle_logs.service import VehicleLogService
-from senior_control.vehicle_logs.store import VehicleLogStore
+from vehicle_manager.agent.local_state import RuntimeState
+from vehicle_manager.agent.logs_wire import AgentLogHandler, CloudLogGrants
+from vehicle_manager.agent.production_bindings import (
+    AgentJournal,
+    AgentLogConnection,
+    SettingsRuntime,
+    VehicleLogService,
+)
+from vehicle_manager.agent.runtime_bindings import Agent
+from vehicle_manager.settings.models import SettingsRequest, simulation_settings_profile
+from vehicle_manager.settings.service import RuntimeGate, SettingsService
+from vehicle_manager.settings.store import SettingsStore
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import TaskStore
+from vehicle_manager.tasks.lifecycle_store import LifecycleStore
+from vehicle_manager.vehicle_logs.models import LogInput, LogQuery
+from vehicle_manager.vehicle_logs.store import VehicleLogStore
 
 
 def frame(robot: str, kind: str, payload: dict[str, Any], seq: int) -> bytes:
@@ -243,7 +245,7 @@ async def test_authenticated_real_agent_logs_query_follow_pause_download_and_rev
         serving = asyncio.create_task(connection.serve(LogSocket(server)))
         handler = AgentLogHandler(service)
         record = logging.LogRecord(
-            "senior_control.agent",
+            "vehicle_manager.agent",
             logging.INFO,
             "",
             1,
@@ -277,7 +279,7 @@ async def test_authenticated_real_agent_logs_query_follow_pause_download_and_rev
         follow, page = await operation("follow", query)
         after = page["next_cursor"]
         service.enqueue(
-            LogInput("INFO", "senior_control.agent", "next event", source_utc=time.time())
+            LogInput("INFO", "vehicle_manager.agent", "next event", source_utc=time.time())
         )
         await service.flush()
         raw = await follow.receive(1)
@@ -285,12 +287,12 @@ async def test_authenticated_real_agent_logs_query_follow_pause_download_and_rev
         after = json.loads(raw)["data"]["next_cursor"]
         await follow.aclose()  # UI pause owns this close; source collection continues.
         service.enqueue(
-            LogInput("INFO", "senior_control.agent", "during pause", source_utc=time.time())
+            LogInput("INFO", "vehicle_manager.agent", "during pause", source_utc=time.time())
         )
         await service.flush()
         resumed, page = await operation("follow", query | {"after": after})
         assert [e["summary"] for e in page["entries"]] == ["during pause"]
-        export, download = await operation("download", query | {"module": "senior_control.agent"})
+        export, download = await operation("download", query | {"module": "vehicle_manager.agent"})
         assert len(download["data"].splitlines()) == 3
         assert download["has_more"] is False
         await export.aclose()
@@ -337,9 +339,8 @@ async def test_settings_gate_uses_real_framed_ipc_and_durable_task_phase(
 ) -> None:
     from test_manual_wire import ipc_pair
     from test_task_lifecycle_store import CONTEXT, activate, setup_store
-
-    from senior_control.agent.ports import IpcState
-    from senior_control.tasks.lifecycle import Command
+    from vehicle_manager.agent.local_adapters import IpcState
+    from vehicle_manager.tasks.lifecycle import Command
 
     sample = {"expired": False}
 
@@ -427,7 +428,7 @@ async def test_log_policy_and_restore_use_the_settings_owner(tmp_path: Path) -> 
         assert (
             await settings.apply(SettingsRequest("error", 0, "logging", values))
         ).reason == "applied"
-        info = LogInput("INFO", "senior_control.agent", "filtered", source_utc=time.time())
+        info = LogInput("INFO", "vehicle_manager.agent", "filtered", source_utc=time.time())
         assert service.enqueue(info) is False
         values |= {"debug_enabled": True, "debug_restore_seconds": 60}
         assert (

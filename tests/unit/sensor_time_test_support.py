@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 from typing import Any
 
-from senior_control.sensors.sample_time import SampleTime, map_sample
+from vehicle_core.sample_time import SampleTime, map_sample
 
 
 def sample_time(

@@ -9,6 +9,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from conftest import SimulationProfile
+from senior_localization.geo import AlignedPose, GeoAlignment, QualifiedFix
+from senior_localization.relocalization import PoseHint, Relocalizer
 from senior_mapping import (
     CellEvidence,
     MappingObservation,
@@ -26,12 +28,10 @@ from senior_mapping.references import (
     SlamSnapshot,
 )
 from senior_mapping.store import MapReferenceStore
+from vehicle_manager.mapping_runtime import MapOperations
+from vehicle_manager.storage.bindings import Database
 
-from senior_control.localization.geo import AlignedPose, GeoAlignment, QualifiedFix
-from senior_control.localization.relocalization import PoseHint, Relocalizer
-from senior_control.mapping.operations import MapOperations
-from senior_control.models import MapRef, OperationStatus, Pose2D
-from senior_control.storage.database import Database
+from vehicle_core.values import MapRef, OperationStatus, Pose2D
 
 MAP = MapRef("acceptance-map", 1)
 POSE = Pose2D(0.25, 0.25, 0.0)

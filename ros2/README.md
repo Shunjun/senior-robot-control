@@ -134,7 +134,7 @@ ros2/tests/
 
 客户端的 ROS 类型反序列化与稳态时钟仍按原位置延迟导入；Python 安装由功能包的
 `ament_cmake_python` / `ament_python_install_package` 承担，不新增 SDK 发行包。
-客户端继续使用现有 `senior_control.sensors.sample_time.SampleTime`、
+客户端继续使用现有 `vehicle_core.sample_time.SampleTime`、
 `sensors.policy.default_policy` 与 `runtime.diagnostics` 的公开接口，
 因此仍需既有根 Python 项目安装；这些 owner 和原安装/锁不迁移，后续管理项目迁移须重新核对边界。
 本批根 pyproject 只补 pytest 的接入包源码发现路径，不改变生产依赖。
@@ -207,14 +207,14 @@ remain unverified; no simulation or real service was started.
 
 `senior_robot/senior_robot/ros_video.py` now owns the original lazy ROS camera subscriber
 thread and one latest frame slot. Its required frame constructor is supplied by the
-original production binding as `senior_control.vision.synchronizer.ImageFrame`;
+original production binding as `senior_perception.vision.synchronizer.ImageFrame`;
 `CapturedFrame` is only a read interface, without a replacement value class.
 The module imports neither manager nor Root nor rclpy until the original runtime path
-requests ROS. The legacy `senior_control.vision.ros_video.RosCameraSource` remains a
+requests ROS. The legacy `senior_robot.camera_source.RosCameraSource` remains a
 Compatible constructor over that same implementation.
 
 The original sim node still owns publication. It now directly imports the sole RGB1
-publisher from `senior_control.vision.rgb1`, within the existing shared legacy owner,
+publisher from `vehicle_core.rgb1`, within the existing shared legacy owner,
 so it does not pass through the manager consumer compatibility module. Header,
 permissions, monotonic capture time, dimensions and publisher/GID checks are unchanged.
 No image geometry, calibration or detection algorithms moved in this batch.
@@ -236,10 +236,10 @@ installed-wheel RGB1/peer tests passed; commands and platform limits are in
 ROS launch, motion, camera command builders and optional video environment probe.
 Its `RuntimeProfile` protocol exposes only seven read-only fields consumed by
 these functions; it does not import `vehicle_manager` or import ROS on module load.
-The old `senior_control.docker_start_helper` signatures remain Compatible, with
+The old `senior_robot.service_runtime` signatures remain Compatible, with
 `ServicePorts` still binding those wrappers. Each camera request injects the real
 original `restart_prefix` and original launch hook; no recovery/peer/IPC/learning
-implementation moved. The video warning retains `senior_control.docker_start_helper`.
+implementation moved. The video warning retains `senior_robot.service_runtime`.
 
 The existing Python package collection in setup.py and wheel declaration already
 include this module; no build or launch configuration changed. The one-package

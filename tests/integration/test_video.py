@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from types import SimpleNamespace
 
 import pytest
+from vehicle_manager.agent.supervisor import Supervisor
 from vehicle_manager.media.stream import (
     NoCommonCodec,
     PeerRequest,
@@ -47,8 +48,7 @@ from vehicle_manager.media.turn import (
     verify_turn_credentials,
 )
 
-from senior_control.runtime.supervisor import Supervisor
-from senior_control.vision.synchronizer import ImageFrame
+from vehicle_core.image_frame import ImageFrame
 
 SECRET = b"s" * 32
 URLS = ("turn:turn.example.test:3478?transport=udp", "turns:turn.example.test:5349")
@@ -204,8 +204,7 @@ async def test_unselected_robot_stream_denied() -> None:
 async def test_hub_controller_selection_gates_video() -> None:
     pytest.importorskip("fastapi")
     from cloud.limits import CloudLimits
-
-    from senior_control.cloud.relay import Hub
+    from cloud.runtime_relay import Hub
 
     hub = Hub(CloudLimits())
     controller = hub.attach_controller("robot-a", "session-hash")
@@ -513,8 +512,8 @@ def test_aiortc_is_not_imported_with_the_package() -> None:
     import sys
 
     code = (
-        "import sys, senior_control, senior_control.vision, senior_control.vision.stream, "
-        "senior_control.vision.turn; "
+        "import sys, senior_perception.vision, vehicle_manager.media.stream, "
+        "vehicle_manager.media.turn; "
         "assert not any(n == 'aiortc' or n.startswith('aiortc.') for n in sys.modules)"
     )
     result = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True)
@@ -671,8 +670,8 @@ def candidate_frame(kind: str = "video.candidate", **changes: object) -> bytes:
 
 
 async def test_vehicle_signaling_answers_offer_and_closes_peer_with_link() -> None:
-    from senior_control.protocol import VideoSdpEnvelope, validate_frame
-    from senior_control.vision.signaling import VideoSignaling
+    from senior_contracts.wire import VideoSdpEnvelope, validate_frame
+    from vehicle_manager.agent.runtime_bindings import VideoSignaling
 
     sent: asyncio.Queue[VideoSdpEnvelope] = asyncio.Queue()
 
@@ -696,8 +695,8 @@ async def test_vehicle_signaling_answers_offer_and_closes_peer_with_link() -> No
 
 
 async def test_vehicle_signaling_refuses_a_second_viewer_without_releasing_the_first() -> None:
-    from senior_control.protocol import VideoEnvelope, VideoSdpEnvelope, validate_frame
-    from senior_control.vision.signaling import VideoSignaling
+    from senior_contracts.wire import VideoEnvelope, VideoSdpEnvelope, validate_frame
+    from vehicle_manager.agent.runtime_bindings import VideoSignaling
 
     sent: asyncio.Queue[VideoEnvelope] = asyncio.Queue()
     session, factory, _, _ = make_session()
@@ -720,8 +719,8 @@ async def test_vehicle_signaling_refuses_a_second_viewer_without_releasing_the_f
 
 
 async def test_vehicle_signaling_closes_offer_when_no_camera_is_available() -> None:
-    from senior_control.protocol import VideoCloseEnvelope, VideoSdpEnvelope, validate_frame
-    from senior_control.vision.signaling import VideoSignaling
+    from senior_contracts.wire import VideoCloseEnvelope, VideoSdpEnvelope, validate_frame
+    from vehicle_manager.agent.runtime_bindings import VideoSignaling
 
     sent: asyncio.Queue[VideoCloseEnvelope] = asyncio.Queue()
 
@@ -766,8 +765,7 @@ async def settle(condition: object) -> None:
 class WireRig:
     def __init__(self, outbox_frames: int = 32) -> None:
         from cloud.limits import CloudLimits
-
-        from senior_control.cloud.relay import Hub
+        from cloud.runtime_relay import Hub
 
         self.hub = Hub(CloudLimits(outbox_frames=outbox_frames))
         controller = self.hub.attach_controller("robot-a", "session-hash")
@@ -817,7 +815,7 @@ async def test_video_answer_reaches_only_the_viewer_that_offered() -> None:
 
 async def test_malformed_or_misdirected_video_frames_are_refused() -> None:
     pytest.importorskip("fastapi")
-    from senior_control.cloud.relay import CLOSE_BAD_FRAME, CLOSE_POLICY
+    from cloud.relay import CLOSE_BAD_FRAME, CLOSE_POLICY
 
     rig = WireRig()
     rig.hub.handle_control_frame(rig.controller, offer_frame())

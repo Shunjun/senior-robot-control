@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from senior_control.vision import (
+from senior_perception.vision import (
     CameraCalibration,
     DepthFrame,
     DynamicMask,
@@ -27,7 +27,7 @@ from senior_control.vision import (
 )
 
 # //Compatible: preserve the adapter module image-decoder imports.
-from senior_control.vision.image_codec import _validate_layout, decode_depth, decode_rgb
+from senior_perception.vision.image_codec import _validate_layout, decode_depth, decode_rgb
 
 DEFAULT_RGB_TOPIC = "/camera/color/image_raw"
 DEFAULT_DEPTH_TOPIC = "/camera/aligned_depth_to_color/image_raw"

@@ -2,17 +2,15 @@ import logging
 
 import pytest
 
-from senior_control.runtime.diagnostics import RuntimeDiagnostics
-from senior_control.sensors.policy import default_policy
+from vehicle_core.diagnostics import RuntimeDiagnostics
+from vehicle_core.sensor_policy import default_policy
 
 
 @pytest.fixture(params=["vehicle", "cloud"])
 def diagnostics_backend(request):
     from importlib import import_module
 
-    module = (
-        "senior_control.runtime.diagnostics" if request.param == "vehicle" else "cloud.diagnostics"
-    )
+    module = "vehicle_core.diagnostics" if request.param == "vehicle" else "cloud.diagnostics"
     return import_module(module)
 
 
@@ -166,9 +164,9 @@ def test_multiple_owners_use_worst_queue_and_released_owner_is_unknown(diagnosti
 
 def test_diagnostics_configuration_rejects_unknown_fields_and_reaches_actual_agent_env():
     from pydantic import TypeAdapter, ValidationError
+    from vehicle_manager.agent.production import AgentConfig
 
-    from senior_control.agent.composition import AgentConfig
-    from senior_control.runtime.diagnostics import DiagnosticsSettings, diagnostics_from_environment
+    from vehicle_core.diagnostics import DiagnosticsSettings, diagnostics_from_environment
 
     settings = diagnostics_from_environment(
         {

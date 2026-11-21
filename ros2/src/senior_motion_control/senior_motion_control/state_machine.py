@@ -7,9 +7,10 @@ missing observations do not revoke sources or create a persistent fault.
 import math
 from dataclasses import dataclass
 
-from senior_control.motion.contracts import MotionEvent, MotionState
-from senior_control.motion.contracts import MotionEventKind as K
-from senior_control.motion.contracts import MotionMode as M
+from senior_motion_control.contracts import MotionEvent
+from senior_motion_control.contracts import MotionEventKind as K
+from vehicle_core.motion_state import MotionMode as M
+from vehicle_core.motion_state import MotionState
 
 
 @dataclass(frozen=True)

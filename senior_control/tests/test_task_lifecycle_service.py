@@ -8,10 +8,9 @@ from typing import Literal
 
 import pytest
 from test_task_lifecycle_store import CONTEXT, NOW, SUBMIT, setup_store
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.tasks.lifecycle import Action, Command, Context, Effect, Event, Lifecycle
 from vehicle_manager.tasks.lifecycle_service import LifecycleService
-
-from senior_control.storage.database import Database
-from senior_control.tasks.lifecycle import Action, Command, Context, Effect, Event, Lifecycle
 
 
 class Port:
@@ -592,7 +591,7 @@ async def test_per_pass_external_budget_is_observable_and_unknown_effects_are_no
 async def test_provider_is_not_sampled_before_version_check(
     tmp_path: Path,
 ) -> None:
-    from senior_control.tasks.lifecycle_store import VersionConflict
+    from vehicle_manager.tasks.lifecycle_store import VersionConflict
 
     async with Database(tmp_path / "task.db") as database:
         store, task = await setup_store(database)

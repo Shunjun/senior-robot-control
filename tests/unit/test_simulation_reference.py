@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from senior_control.models import Pose2D
+from vehicle_core.values import Pose2D
 
 _SPEC = importlib.util.spec_from_file_location(
     "world_reference", Path("ros2/src/senior_sim/scripts/world_reference.py")
@@ -20,7 +20,7 @@ def test_baseline_grid_matches_the_pinned_world(tmp_path: Path) -> None:
     assert grid.cells[80 * 160 + 120] == 100  # World x=2, y=0, inside the wall.
     assert grid.cells[80 * 160 + 80] == 0
     assert grid.waypoint_writes
-    from senior_control.hardware_navigation import load_navigation_reference
+    from senior_localization.navigation_reference import load_navigation_reference
 
     reference = _WORLD.generate_reference(world, tmp_path / "assets")
     generated = load_navigation_reference(reference)

@@ -13,15 +13,15 @@ import pytest
 from agent_fakes import FakeConnector, FakeLink, until
 from test_manual_wire import envelope, runtime
 from vehicle_manager.agent import production as composition
+from vehicle_manager.agent.runtime_bindings import Agent
+from vehicle_manager.settings.models import SettingsRequest
+from vehicle_manager.settings.service import RuntimeGate, SettingsService
+from vehicle_manager.tasks.lifecycle import Command, Event
+from vehicle_manager.tasks.models import TaskDefinition
+from vehicle_manager.tasks.schedule import Schedule
 
-from senior_control.agent.main import Agent
-from senior_control.models import MapRef, Pose2D
-from senior_control.runtime.ipc import IpcClient, IpcError
-from senior_control.settings.models import SettingsRequest
-from senior_control.settings.service import RuntimeGate, SettingsService
-from senior_control.tasks.lifecycle import Command, Event
-from senior_control.tasks.models import TaskDefinition
-from senior_control.tasks.schedule import Schedule
+from vehicle_core.ipc import IpcClient, IpcError
+from vehicle_core.values import MapRef, Pose2D
 
 
 @pytest.mark.parametrize(
@@ -393,7 +393,7 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
             starting = asyncio.create_task(submit())
             await asyncio.wait_for(saving.wait(), 1)
             if path in {"expired-sample", "retirement-fence"}:
-                from senior_control.tasks.lifecycle_store import VersionConflict
+                from vehicle_manager.tasks.lifecycle_store import VersionConflict
 
                 if path == "expired-sample":
                     await asyncio.sleep(0.27)

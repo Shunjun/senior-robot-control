@@ -192,8 +192,9 @@ def test_gate_retires_generation_only_after_brake_owner_handoff(handoff, close_r
     import ast
     import time
 
-    from senior_control.models import Velocity
-    from senior_control.safety.arbiter import FinalCommandFence
+    from senior_motion_control.arbiter import FinalCommandFence
+
+    from vehicle_core.values import Velocity
 
     # Execute the actual callback without importing/starting rclpy. Its ROS
     # transport objects are controlled below; no gate algorithm is substituted.

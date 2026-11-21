@@ -39,20 +39,20 @@ from agent_fakes import (
 )
 from cloud.snapshots import SnapshotCache
 from pydantic import ValidationError
+from senior_contracts.wire import SnapshotEnvelope
+from vehicle_manager.agent.dispatcher import Deadlines
+from vehicle_manager.agent.production_bindings import AgentJournal
+from vehicle_manager.agent.request_bindings import StoreTaskPort
+from vehicle_manager.agent.runtime_bindings import Agent
+from vehicle_manager.agent.snapshot_decode import snapshot_from_envelope
+from vehicle_manager.agent.snapshots import RobotSnapshot, TaskSummary, snapshot_envelope
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import TaskStore
+from vehicle_manager.tasks.models import TaskDefinition
+from vehicle_manager.tasks.schedule import Schedule
 
-from senior_control.agent import Agent, RobotSnapshot
-from senior_control.agent.dispatcher import Deadlines, StoreTaskPort
-from senior_control.agent.journal import AgentJournal
-from senior_control.agent.snapshots import (
-    TaskSummary,
-    snapshot_envelope,
-    snapshot_from_envelope,
-)
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import OperationResult, OperationStatus
-from senior_control.protocol import SnapshotEnvelope
-from senior_control.storage.database import Database
-from senior_control.tasks import Schedule, TaskDefinition, TaskStore
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import OperationResult, OperationStatus
 
 
 @dataclass
@@ -660,9 +660,9 @@ async def test_reconnect_hides_deleted_task_and_preserves_snapshot_revision(
 async def test_snapshot_keeps_revision_and_tombstones_from_one_task_cut(
     store_rig: StoreRig, monkeypatch: pytest.MonkeyPatch, available: bool
 ) -> None:
-    from senior_control.agent.composition import SnapshotState
-    from senior_control.agent.ports import IpcState
-    from senior_control.waypoints.store import WaypointStore
+    from vehicle_manager.agent.local_adapters import IpcState
+    from vehicle_manager.agent.production import SnapshotState
+    from vehicle_manager.storage.domain_bindings import WaypointStore
 
     class RuntimeClient:
         async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
@@ -899,7 +899,7 @@ async def test_replay_of_a_running_operation_is_a_conflict(rig: Rig) -> None:
 
 
 async def test_failed_heartbeat_closes_session_and_forces_reconnect(rig: Rig) -> None:
-    from senior_control.agent.connection import HeartbeatFrame
+    from vehicle_manager.agent.connection import HeartbeatFrame
 
     class BrokenLink(FakeLink):
         async def send_heartbeat(self) -> None:
@@ -926,7 +926,7 @@ async def test_failed_heartbeat_closes_session_and_forces_reconnect(rig: Rig) ->
 
 
 async def test_slow_snapshot_does_not_block_heartbeat_reply(tmp_path: Path) -> None:
-    from senior_control.agent.connection import HeartbeatFrame
+    from vehicle_manager.agent.connection import HeartbeatFrame
 
     class SlowState(FakeState):
         async def collect(self) -> Any:
@@ -991,7 +991,7 @@ async def test_disconnect_cancels_inflight_old_epoch_operations(rig: Rig, monkey
 
 
 async def test_overload_bounds_work_and_reserves_stop_capacity(rig: Rig) -> None:
-    from senior_control.agent.main import MAX_INFLIGHT
+    from vehicle_manager.agent.main import MAX_INFLIGHT
 
     link = FakeLink(epoch=1)
     release = asyncio.Event()
@@ -1015,8 +1015,8 @@ async def test_overload_bounds_work_and_reserves_stop_capacity(rig: Rig) -> None
 
 
 async def test_heartbeat_survives_full_work_slots_before_overload_closes_session(rig: Rig) -> None:
-    from senior_control.agent.connection import HeartbeatFrame
-    from senior_control.agent.main import MAX_INFLIGHT
+    from vehicle_manager.agent.connection import HeartbeatFrame
+    from vehicle_manager.agent.main import MAX_INFLIGHT
 
     link = FakeLink(epoch=1)
     release = asyncio.Event()
@@ -1074,7 +1074,7 @@ async def test_control_acquire_ignores_browser_clock(rig: Rig) -> None:
 
 
 async def test_recovery_after_five_failed_attempts_preserves_ros_adapter(rig: Rig) -> None:
-    from senior_control.agent.connection import HeartbeatFrame
+    from vehicle_manager.agent.connection import HeartbeatFrame
 
     links = [FakeLink(epoch) for epoch in range(1, 8)]
     for bad in links[1:6]:
@@ -1100,7 +1100,7 @@ async def test_recovery_after_five_failed_attempts_preserves_ros_adapter(rig: Ri
 
 
 async def test_unconfigured_video_offer_does_not_close_the_agent_link(rig: Rig) -> None:
-    from senior_control.protocol import SdpPayload, VideoEnvelope, VideoSdpEnvelope
+    from senior_contracts.wire import SdpPayload, VideoEnvelope, VideoSdpEnvelope
 
     class VideoLink(FakeLink):
         video: asyncio.Queue[VideoEnvelope]
@@ -1181,7 +1181,7 @@ async def snapshot_polls(tmp_path, monkeypatch, request):
     import importlib
     from types import SimpleNamespace
 
-    from senior_control.protocol import RobotPosePayload, ScanPointPayload
+    from senior_contracts.wire import RobotPosePayload, ScanPointPayload
 
     main = importlib.import_module("vehicle_manager.agent.main")
     actual_asyncio = asyncio
@@ -1287,7 +1287,7 @@ async def snapshot_polls(tmp_path, monkeypatch, request):
     "change", ["pose", "laser", "reason", "pose-none", "laser-clear", "generation"]
 )
 async def test_perception_change_pushes_at_the_next_existing_poll(snapshot_polls, change):
-    from senior_control.protocol import RobotPosePayload
+    from senior_contracts.wire import RobotPosePayload
 
     runtime = snapshot_polls
     assert len(runtime.link.snapshots) == 1
@@ -1358,7 +1358,7 @@ async def test_rapid_geometry_changes_coalesce_to_one_snapshot_per_existing_poll
 
 
 async def test_retired_epoch_collect_cannot_send_or_revive_old_geometry(snapshot_polls):
-    from senior_control.protocol import RobotPosePayload
+    from senior_contracts.wire import RobotPosePayload
 
     runtime = snapshot_polls
     runtime.state.hold = asyncio.Event()
@@ -1397,7 +1397,7 @@ async def test_public_snapshot_collect_cannot_cross_connection_epoch(
     snapshot_polls,
     initially_connected,
 ):
-    from senior_control.protocol import RobotPosePayload
+    from senior_contracts.wire import RobotPosePayload
 
     runtime = snapshot_polls
     if not initially_connected:
@@ -1433,9 +1433,8 @@ async def test_public_snapshot_offline_collect_remains_available_without_sending
 
 async def test_delayed_replies_preserve_send_cadence_and_connection(monkeypatch) -> None:
     from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
-
-    from senior_control.agent.connection import HeartbeatFrame
-    from senior_control.agent.websocket import WebSocketLink
+    from vehicle_manager.agent.connection import HeartbeatFrame
+    from vehicle_manager.agent.production_bindings import WebSocketLink
 
     clock = HeartbeatClock(monkeypatch)
     hub = relay_hub(monkeypatch, clock)
@@ -1463,7 +1462,7 @@ async def test_learning_request_returns_only_original_start_receipt_without_jour
 ):
     from unittest.mock import AsyncMock
 
-    from senior_control.protocol import LearningStartEnvelope
+    from senior_contracts.wire import LearningStartEnvelope
 
     response = {"start_request_id": "calibration", "attempt_id": "a" * 32, "state": "accepted"}
     callback = AsyncMock(return_value=response)
@@ -1498,7 +1497,7 @@ async def test_learning_request_returns_only_original_start_receipt_without_jour
 
 
 async def test_grid_id_round_trips_and_pushes_only_when_changed(snapshot_polls):
-    from senior_control.protocol import SnapshotEnvelope
+    from senior_contracts.wire import SnapshotEnvelope
 
     runtime = snapshot_polls
     initial = cache_frame(runtime.link.snapshots[0])

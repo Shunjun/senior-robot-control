@@ -14,7 +14,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-from senior_control.runtime.launch_recovery import restart_prefix
+from vehicle_core.launch_recovery import restart_prefix
 
 
 def _mapping_nodes(context):

@@ -5,7 +5,7 @@ import struct
 
 import pytest
 
-from senior_control.runtime.ipc import IpcError, _read
+from vehicle_core.ipc import IpcError, _read
 
 
 @pytest.mark.parametrize("value", [b"NaN", b"Infinity", b"-Infinity", b"1e999"])

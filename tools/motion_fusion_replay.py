@@ -17,11 +17,12 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
-from senior_control.motion.fusion import FusionConfig, FusionSnapshot, NumericalFusion
-from senior_control.motion.observations import AdmissionConfig, Heading, Source, SourceRule
-from senior_control.motion.sample_types import MotionSample, PointObservation
-from senior_control.motion.source_admission import AdmissionDecision, AdmissionOwner
-from senior_control.motion.temporal import ResolvedWindow, TemporalConfig, TemporalResolver
+from senior_motion_estimation.fusion import FusionConfig, FusionSnapshot, NumericalFusion
+from senior_motion_estimation.observations import AdmissionConfig, Heading, Source, SourceRule
+from senior_motion_estimation.sample_types import MotionSample, PointObservation
+from senior_motion_estimation.source_admission import AdmissionDecision, AdmissionOwner
+from senior_motion_estimation.temporal import ResolvedWindow, TemporalConfig, TemporalResolver
+
 from tools.motion_replay_records import NativeAdapter, TruthIndex
 
 
@@ -260,7 +261,7 @@ def run_native(path: Path, output: Path, max_records: int = 500000) -> dict[str,
     sources = [
         Path(__file__),
         Path(__file__).with_name("motion_replay_records.py"),
-        *sorted(Path("src/senior_control/motion").glob("*.py")),
+        *sorted(Path("ros2/src/senior_motion_estimation/senior_motion_estimation").glob("*.py")),
     ]
     summary["source_sha256"] = {str(p): sha256(p) for p in sources}
     summary["outputs_sha256"] = {p.name: sha256(p) for p in output.iterdir() if p.is_file()}

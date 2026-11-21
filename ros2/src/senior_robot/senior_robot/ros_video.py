@@ -16,7 +16,7 @@ class CapturedFrame(Protocol):
 
 FrameT = TypeVar("FrameT", bound=CapturedFrame)
 
-logger = logging.getLogger("senior_control.vision.ros_video")
+logger = logging.getLogger("senior_robot.camera_source")
 
 
 class RosCameraSource(Generic[FrameT]):

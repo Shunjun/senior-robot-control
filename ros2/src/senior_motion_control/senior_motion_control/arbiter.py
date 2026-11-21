@@ -4,9 +4,8 @@ import math
 from dataclasses import dataclass
 from typing import Literal
 
-from senior_control.protocol import (
-    Envelope,
-)
+from senior_contracts.wire import Envelope
+
 from vehicle_core.errors import ErrorCode
 from vehicle_core.values import Velocity
 

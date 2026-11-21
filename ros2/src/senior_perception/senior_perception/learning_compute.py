@@ -4,11 +4,11 @@ from concurrent.futures import Future
 from dataclasses import dataclass
 from functools import partial
 
-from senior_control.config import DeviceProfile
-from senior_control.safety.self_filter import FilteredObservation, ScanObservation, filter_self
-from senior_control.safety.self_learning import LEARNING_SAMPLE_COUNT, SelfReturnModel
 from senior_perception.learning_record import LearningGeometry
 from senior_perception.learning_wire import RecordedFrame
+from senior_perception.self_filter import FilteredObservation, ScanObservation, filter_self
+from senior_perception.self_learning import LEARNING_SAMPLE_COUNT, SelfReturnModel
+from vehicle_core.config import DeviceProfile
 from vehicle_core.process_resources import ProcessWorker
 from vehicle_core.values import Pose2D
 

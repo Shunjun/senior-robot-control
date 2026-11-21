@@ -5,18 +5,16 @@ from dataclasses import replace
 
 import pytest
 from learning_test_support import geometry
+from senior_perception.external_motion_features import external_feature_ranges
+from senior_perception.learning_record import LearnedCatalog, LearningAnchor
+from senior_perception.learning_view import LearningFilterView
+from senior_perception.self_filter import filter_self
+from senior_perception.self_learning import SelfReturnModel
 from test_motion_core_handoff import core as motion_core  # noqa: F401
 from test_startup_learning import observation, side_observation
 from test_startup_learning_feasibility import BOUNDARY
 
-from senior_control.config import DeviceProfile
-from senior_control.motion.learning_record import LearnedCatalog, LearningAnchor
-from senior_control.safety.external_motion_features import (
-    external_feature_ranges,
-)
-from senior_control.safety.learning_view import LearningFilterView
-from senior_control.safety.self_filter import filter_self
-from senior_control.safety.self_learning import SelfReturnModel
+from vehicle_core.config import DeviceProfile
 
 
 @pytest.fixture

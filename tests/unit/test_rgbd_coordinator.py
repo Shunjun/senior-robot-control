@@ -2,13 +2,12 @@ import time
 from types import SimpleNamespace as NS
 
 import numpy as np
+from senior_perception.vision.independent_motion import Profile
+from senior_perception.vision.raw_capture import RawCaptureHeader
+from senior_perception.vision.rgbd_coordinator import RgbdCoordinator
+from senior_perception.vision.static_tf_binding import Edge, Receipt, StaticBinding
 from sensor_time_test_support import sample_time
 from test_independent_motion import scene
-
-from senior_control.vision.independent_motion import Profile
-from senior_control.vision.raw_capture import RawCaptureHeader
-from senior_control.vision.rgbd_coordinator import RgbdCoordinator
-from senior_control.vision.static_tf_binding import Edge, Receipt, StaticBinding
 
 
 def capture(seq, shift=0):
@@ -402,7 +401,7 @@ def test_binding_object_cannot_be_swapped_under_running_worker():
 
 
 def test_candidate_with_wrong_tf_dependency_is_rejected():
-    from senior_control.vision.rgbd_spawn_worker import CompactResult
+    from senior_perception.vision.rgbd_spawn_worker import CompactResult
 
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))

@@ -1,10 +1,10 @@
 """Baseline feasibility probes, not acceptance of startup motion or learned filtering."""
 
+from senior_perception.self_filter import ScanObservation, filter_self
 from test_directional_constraints import engine, snapshot
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
-from senior_control.safety.self_filter import ScanObservation, filter_self
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Pose2D, Velocity
 
 BOUNDARY = [(-0.3, -0.2), (0.3, -0.2), (0.3, 0.2), (-0.3, 0.2)]
 

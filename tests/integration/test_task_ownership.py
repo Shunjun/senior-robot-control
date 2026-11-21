@@ -10,17 +10,17 @@ from pathlib import Path
 from typing import Any, Literal
 
 import pytest
+from senior_navigation.route import RouteProgress
 from test_task_lifecycle_store import NOW, setup_store
+from vehicle_manager.agent.production import build_task_runtime
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import TaskStore
 from vehicle_manager.tasks.executor import TaskExecutor
+from vehicle_manager.tasks.lifecycle import Effect
+from vehicle_manager.tasks.models import ExecutionContext, TaskDefinition
 from vehicle_manager.tasks.runtime import TaskRuntime
 
-from senior_control.agent.composition import build_task_runtime
-from senior_control.models import Pose2D
-from senior_control.navigation import RouteProgress
-from senior_control.storage.database import Database
-from senior_control.tasks.lifecycle import Effect
-from senior_control.tasks.models import ExecutionContext, TaskDefinition
-from senior_control.tasks.store import TaskStore
+from vehicle_core.values import Pose2D
 
 
 class Navigation:
@@ -98,10 +98,8 @@ async def test_runtime_runs_offline_and_completes_same_identity(
 ) -> None:
     from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, until
     from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
-
-    from senior_control.agent import Agent
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.agent.websocket import WebSocketLink
+    from vehicle_manager.agent.production_bindings import AgentJournal, WebSocketLink
+    from vehicle_manager.agent.runtime_bindings import Agent
 
     clock = HeartbeatClock(monkeypatch)
     hub = relay_hub(monkeypatch, clock)
@@ -186,7 +184,7 @@ async def test_takeover_waits_for_output_ack_then_explicit_resume_uses_remaining
 ) -> None:
     import pytest
 
-    from senior_control.errors import DomainError
+    from vehicle_core.errors import DomainError
 
     async with Database(tmp_path / "task.db") as database:
         runtime, executor, nav, live, identity = await start(database)
@@ -211,9 +209,10 @@ async def test_takeover_waits_for_output_ack_then_explicit_resume_uses_remaining
 async def test_existing_ipc_receiver_records_actions_and_task_epoch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from senior_control.agent.ports import IpcNavigation
-    from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
-    from senior_control.safety.arbiter import Arbiter
+    from senior_motion_control.arbiter import Arbiter
+    from vehicle_manager.agent.local_adapters import IpcNavigation
+
+    from vehicle_core.values import MapRef, OperationResult, OperationStatus, Pose2D
 
     monkeypatch.syspath_prepend(str(Path("ros2/src/senior_robot").resolve()))
     ros_nav = importlib.import_module("senior_robot.navigation_adapter")
@@ -336,22 +335,22 @@ async def test_dispatcher_acceptance_and_query_share_task_transaction(tmp_path: 
     from typing import cast
 
     from agent_fakes import operation
-
-    from senior_control.agent.dispatcher import (
-        Deadlines,
+    from vehicle_manager.agent.dispatcher import Deadlines, HomePort
+    from vehicle_manager.agent.exported_workspace import WorkspaceReader
+    from vehicle_manager.agent.local_adapters import IpcState
+    from vehicle_manager.agent.local_state import RuntimeState
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.agent.request_bindings import (
         Dispatcher,
-        HomePort,
         LifecycleNavigationOperations,
         MapPort,
         StoreTaskPort,
         TaskOperationResult,
     )
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.agent.ports import IpcState, RuntimeState
-    from senior_control.agent.workspace import WorkspaceReader
-    from senior_control.models import MapRef, OperationStatus
-    from senior_control.observability import Metrics
-    from senior_control.waypoints.store import WaypointStore
+    from vehicle_manager.observability import Metrics
+    from vehicle_manager.storage.domain_bindings import WaypointStore
+
+    from vehicle_core.values import MapRef, OperationStatus
 
     async with Database(tmp_path / "task.db") as database:
         durable, _ = await setup_store(database)
@@ -370,7 +369,7 @@ async def test_dispatcher_acceptance_and_query_share_task_transaction(tmp_path: 
         )
 
         async def read() -> RuntimeState:
-            from senior_control.protocol import RobotPosePayload
+            from senior_contracts.wire import RobotPosePayload
 
             return RuntimeState(
                 True,
@@ -444,10 +443,9 @@ async def test_dispatcher_acceptance_and_query_share_task_transaction(tmp_path: 
         # Exercise the actual Agent._reply and both wire validators, beyond the
         # dispatcher/service return value which previously hid the data contract bug.
         from agent_fakes import FakeConnector, FakeHome, FakeLink, FakeMaps, FakeMotion, FakeState
-
-        from senior_control.agent.connection import Link
-        from senior_control.agent.main import Agent
-        from senior_control.protocol import ResponseEnvelope, serialize_envelope, validate_envelope
+        from senior_contracts.wire import ResponseEnvelope, serialize_envelope, validate_envelope
+        from vehicle_manager.agent.connection import Link
+        from vehicle_manager.agent.runtime_bindings import Agent
 
         class WireLink(FakeLink):
             async def send_response(self, response: ResponseEnvelope) -> None:
@@ -476,7 +474,7 @@ async def test_dispatcher_acceptance_and_query_share_task_transaction(tmp_path: 
             reply_to = envelope.model_copy(update={"type": kind})
             await agent._reply(cast(Link, wire_link), reply_to, result=result)
             assert wire_link.responses[-1].payload.data == result.task_state
-        from senior_control.models import OperationResult
+        from vehicle_core.values import OperationResult
 
         await agent._reply(
             cast(Link, wire_link),
@@ -584,7 +582,7 @@ async def test_status_timeout_keeps_accepted_task_for_next_tick(tmp_path: Path) 
 def test_task_result_survives_actual_wire_response(
     kind: Literal["navigation.goal", "navigation.return_home", "operation.query"],
 ) -> None:
-    from senior_control.protocol import ResponsePayload
+    from senior_contracts.wire import ResponsePayload
 
     receipt = {
         "execution_id": "owned-task",
@@ -608,15 +606,15 @@ async def test_authenticated_task_commands_normal_lifecycle_and_receipt(
     from typing import cast
 
     from agent_fakes import FakeConnector, FakeHome, FakeLink, FakeMaps, FakeMotion, FakeState
-
-    from senior_control.agent.connection import Link
-    from senior_control.agent.dispatcher import LifecycleNavigationOperations, StoreTaskPort
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.agent.main import Agent
-    from senior_control.agent.ports import IpcState, RuntimeState
-    from senior_control.agent.workspace import WorkspaceReader
-    from senior_control.protocol import RobotPosePayload, validate_envelope
-    from senior_control.waypoints.store import WaypointStore
+    from senior_contracts.wire import RobotPosePayload, validate_envelope
+    from vehicle_manager.agent.connection import Link
+    from vehicle_manager.agent.exported_workspace import WorkspaceReader
+    from vehicle_manager.agent.local_adapters import IpcState
+    from vehicle_manager.agent.local_state import RuntimeState
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.agent.request_bindings import LifecycleNavigationOperations, StoreTaskPort
+    from vehicle_manager.agent.runtime_bindings import Agent
+    from vehicle_manager.storage.domain_bindings import WaypointStore
 
     async with Database(tmp_path / "task.db") as database:
         runtime, executor, nav, live, identity = await start(database)
@@ -751,8 +749,7 @@ async def test_authenticated_task_commands_normal_lifecycle_and_receipt(
 )
 def test_task_navigation_response_rejects_unvalidated_data(data: dict[str, Any]) -> None:
     from pydantic import ValidationError
-
-    from senior_control.protocol import ResponsePayload
+    from senior_contracts.wire import ResponsePayload
 
     with pytest.raises(ValidationError):
         ResponsePayload(request_type="navigation.goal", ok=True, data=data)

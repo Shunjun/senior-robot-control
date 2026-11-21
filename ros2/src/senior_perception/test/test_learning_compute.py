@@ -6,10 +6,9 @@ import pytest
 from learning_test_support import TestRun, geometry
 from senior_perception.learning_compute import ComputeRequest, compute_samples, decode_observation
 from senior_perception.learning_wire import FrameBatch, MotionObservedThrough, RecordedFrame
+from senior_perception.vision.raw_capture import RawCaptureHeader
 from sensor_time_test_support import sample_time
 from test_startup_learning_feasibility import BOUNDARY
-
-from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 def recorded(index, stamp, *, received=None):
@@ -167,9 +166,10 @@ def test_dense_capture_compacts_without_requiring_every_unselected_frame(tmp_pat
 
 
 def test_actual_tf_metadata_keeps_stream_open_and_kernel_uses_each_transform(tmp_path):
-    from senior_control.config import DeviceProfile
-    from senior_control.models import Pose2D
-    from senior_control.safety.self_filter import ScanObservation, filter_self
+    from senior_perception.self_filter import ScanObservation, filter_self
+
+    from vehicle_core.config import DeviceProfile
+    from vehicle_core.values import Pose2D
 
     first = recorded(1, 10.1)
     first = first.model_copy(

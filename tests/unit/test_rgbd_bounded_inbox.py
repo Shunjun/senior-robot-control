@@ -1,4 +1,4 @@
-from senior_control.vision.rgbd_bounded_inbox import BoundedInbox
+from senior_perception.vision.rgbd_bounded_inbox import BoundedInbox
 
 
 def test_overflow_revokes_old_inflight_and_discards_old_queue_before_new():

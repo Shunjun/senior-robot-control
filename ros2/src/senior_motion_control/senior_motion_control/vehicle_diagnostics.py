@@ -3,8 +3,9 @@
 import math
 from dataclasses import asdict
 
-from senior_control.motion.contracts import MotionMode
-from senior_control.vision.raw_capture import capture_from_message
+from senior_perception.vision.raw_capture import capture_from_message
+
+from vehicle_core.motion_state import MotionMode
 from vehicle_core.runtime_state import MotionRuntimeState
 from vehicle_core.sensor_policy import default_policy
 
@@ -236,7 +237,7 @@ class CoreDiagnostics:
     def initialize(self):
         from std_msgs.msg import String
 
-        from senior_control.motion.diagnostic_pump import DiagnosticPump
+        from senior_motion_control.diagnostic_pump import DiagnosticPump
         from senior_motion_control.runtime_reports import RuntimeReports
 
         self._runtime = RuntimeReports(self.context.node)

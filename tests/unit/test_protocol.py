@@ -1,8 +1,7 @@
 import json
 
 import pytest
-
-from senior_control.protocol import validate_envelope
+from senior_contracts.wire import validate_envelope
 
 
 def message(**changes):
@@ -36,7 +35,7 @@ def test_valid_velocity():
 
 
 def test_receipt_clock_is_private_and_does_not_extend_the_wire_envelope():
-    from senior_control.protocol import EnvelopeBase, serialize_envelope
+    from senior_contracts.wire import EnvelopeBase, serialize_envelope
 
     envelope = validate_envelope(message(), "r1")
     envelope._received_steady = 42.0
@@ -76,7 +75,7 @@ def test_reject_oversized_message():
 
 
 def test_response_round_trip_and_typed_payload():
-    from senior_control.protocol import ResponseEnvelope, serialize_envelope
+    from senior_contracts.wire import ResponseEnvelope, serialize_envelope
 
     raw = message(
         type="response",
@@ -100,7 +99,7 @@ def test_response_cannot_have_success_and_error():
 
 
 def test_shared_values_reject_invalid_values():
-    from senior_control.models import MapRef, OperationResult, Pose2D, Velocity
+    from vehicle_core.values import MapRef, OperationResult, Pose2D, Velocity
 
     for factory in (
         lambda: Velocity(float("nan"), 0),
@@ -121,7 +120,7 @@ def video_message(kind="video.offer", payload=None, **changes):
 
 
 def test_video_frames_validate_and_round_trip():
-    from senior_control.protocol import serialize_envelope, validate_frame
+    from senior_contracts.wire import serialize_envelope, validate_frame
 
     offer = validate_frame(video_message(), "r1")
     assert offer.type == "video.offer" and offer.payload.sdp == "v=0\r\n"
@@ -146,7 +145,7 @@ def test_video_frames_validate_and_round_trip():
     ],
 )
 def test_reject_invalid_video_frames(raw):
-    from senior_control.protocol import validate_frame
+    from senior_contracts.wire import validate_frame
 
     with pytest.raises(ValueError):
         validate_frame(raw, "r1")
@@ -158,7 +157,7 @@ def test_commands_do_not_accept_video_types():
 
 
 def test_video_close_has_no_payload_and_round_trips():
-    from senior_control.protocol import serialize_envelope, validate_frame
+    from senior_contracts.wire import serialize_envelope, validate_frame
 
     closing = validate_frame(video_message("video.close", {}), "r1")
     assert closing.type == "video.close"
@@ -177,11 +176,7 @@ def test_retired_intent_receipt_is_rejected():
 
 
 def test_learning_contract_keeps_start_identity_separate_from_status_query():
-    from senior_control.protocol import (
-        LearningStartEnvelope,
-        LearningStatusEnvelope,
-        ResponsePayload,
-    )
+    from senior_contracts.wire import LearningStartEnvelope, LearningStatusEnvelope, ResponsePayload
 
     base = dict(
         v=1,

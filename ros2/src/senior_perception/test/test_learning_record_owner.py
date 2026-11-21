@@ -288,10 +288,9 @@ def test_unclean_owner_exit_preserves_saved_frozen_model_and_consumed_action(tmp
 
 
 def test_explicit_attempt_requests_are_idempotent_busy_and_preserve_old_action(tmp_path):
+    from senior_contracts.wire import LearningStartPayload
     from senior_perception.learning_store import attempt_path
     from senior_perception.learning_wire import BeginAttempt
-
-    from senior_control.protocol import LearningStartPayload
 
     run = TestRun(tmp_path / "attempts")
     try:
@@ -330,9 +329,8 @@ def test_explicit_attempt_requests_are_idempotent_busy_and_preserve_old_action(t
         assert busy.data["state"] == "busy" and busy.data["attempt_id"] == identity
         assert run.owner.record.attempt_id == identity and not run.owner.record.action.consumed
         assert read_record(attempt_path(run.path, old.attempt_id)).action == old.action
+        from senior_contracts.wire import LearningStatusPayload
         from senior_perception.learning_wire import QueryAttempt
-
-        from senior_control.protocol import LearningStatusPayload
 
         queried = run.rpc(QueryAttempt(payload=LearningStatusPayload(attempt_id=old.attempt_id)))
         assert queried.data["phase"] == "failed" and queried.data["reason"] == "control_takeover"

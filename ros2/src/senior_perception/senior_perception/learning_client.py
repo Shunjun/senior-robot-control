@@ -8,8 +8,6 @@ import time
 from collections import deque
 from pathlib import Path
 
-from senior_control.safety.learning_view import LearningFilterView
-from senior_control.vision.raw_capture import capture_from_message
 from senior_perception.learning_record import (
     MAX_RECORD_BYTES,
     LearningGeometry,
@@ -18,6 +16,7 @@ from senior_perception.learning_record import (
     attempt_identity,
 )
 from senior_perception.learning_service import address
+from senior_perception.learning_view import LearningFilterView
 from senior_perception.learning_wire import (
     AcceptAttempt,
     ActionReady,
@@ -36,6 +35,7 @@ from senior_perception.learning_wire import (
     SessionRequest,
     State,
 )
+from senior_perception.vision.raw_capture import capture_from_message
 
 
 def request_once(run_id: str, request: Request) -> Reply:

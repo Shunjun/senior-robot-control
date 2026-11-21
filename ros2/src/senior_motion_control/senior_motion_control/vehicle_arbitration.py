@@ -6,11 +6,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from senior_control.motion.contracts import MotionEvent, MotionMode, MotionTarget
-from senior_control.motion.contracts import MotionEventKind as K
-from senior_control.motion.manual_target import ManualLinearTarget
+from senior_motion_control.contracts import MotionEvent, MotionTarget
+from senior_motion_control.contracts import MotionEventKind as K
 from senior_motion_control.final_command_frame import PAYLOAD_FIELDS
+from senior_motion_control.manual_target import ManualLinearTarget
 from senior_motion_control.state_machine import MotionStateMachine
+from vehicle_core.motion_state import MotionMode
 from vehicle_core.values import Velocity
 
 if TYPE_CHECKING:

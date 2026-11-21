@@ -6,10 +6,9 @@ import pytest
 from learning_test_support import TestRun, geometry
 from senior_perception.learning_compute import ComputeRequest, compute_samples, decode_observation
 from senior_perception.learning_service import select_motion_frames
+from senior_perception.self_learning import SelfReturnModel
 from test_learning_compute import opened, recorded, send
 from test_startup_learning_feasibility import BOUNDARY
-
-from senior_control.safety.self_learning import SelfReturnModel
 
 
 def test_sampling_uses_five_distinct_temporal_quartiles_inside_motion():

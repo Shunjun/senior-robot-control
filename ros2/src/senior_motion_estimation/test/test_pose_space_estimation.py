@@ -3,11 +3,11 @@ import math
 import pytest
 from senior_motion_estimation.estimator import MotionEstimation
 from senior_motion_estimation.pose_estimator import PoseEstimation, PoseObservation
+from senior_perception.space_estimator import SpaceEstimation, SpaceObservation
 from shapely.geometry import Point, box
 from test_unified_estimator import observation
 
-from senior_control.models import Pose2D
-from senior_control.safety.space_estimator import SpaceEstimation, SpaceObservation
+from vehicle_core.values import Pose2D
 
 
 def test_pose_interpolation_wrap_and_motion_prediction_without_150ms_gate():

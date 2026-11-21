@@ -133,8 +133,8 @@ def test_real_four_streams_and_tf_produce_nonzero_unqualified_candidate():
         edge.child_frame = "optical"
         edge.rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
         status.edges = [edge]
-        from senior_control.vision.static_tf_binding import StaticBinding
-        from senior_control.vision.static_tf_wire import observe_verified_tf
+        from senior_perception.vision.static_tf_binding import StaticBinding
+        from senior_perception.vision.static_tf_wire import observe_verified_tf
 
         probe = StaticBinding("base_link", "optical")
         assert observe_verified_tf(probe, status, current_relay_gid=status.bridge_gid)

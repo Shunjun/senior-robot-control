@@ -1,11 +1,10 @@
 import math
 
 import pytest
+from senior_perception.geometry import swept_footprint, swept_trajectory
 from shapely.affinity import rotate
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union
-
-from senior_control.safety.geometry import swept_footprint, swept_trajectory
 
 
 def test_corner_rotation_blocked():

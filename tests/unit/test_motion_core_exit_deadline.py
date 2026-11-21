@@ -8,7 +8,7 @@ import pytest
 from test_directional_constraints import scene
 from test_reference_nanosecond_boundary import replay as boundary_fixture
 
-from senior_control.models import Pose2D, Velocity
+from vehicle_core.values import Pose2D, Velocity
 
 
 @pytest.fixture

@@ -1,9 +1,8 @@
 import time
 
+from senior_perception.vision.independent_motion import Profile
+from senior_perception.vision.rgbd_spawn_worker import SpawnWorker
 from test_independent_motion import frame, scene
-
-from senior_control.vision.independent_motion import Profile
-from senior_control.vision.rgbd_spawn_worker import SpawnWorker
 
 
 def test_spawn_worker_returns_small_result_without_pixels():
@@ -58,8 +57,7 @@ def test_pending_replaced_and_invalidation_revokes_inflight():
 
 def test_hard_error_flag_cannot_be_set_by_caller():
     import pytest
-
-    from senior_control.vision.rgbd_spawn_worker import CompactResult
+    from senior_perception.vision.rgbd_spawn_worker import CompactResult
 
     with pytest.raises(TypeError):
         CompactResult(1, 1, "candidate", (), None, 0, 0, None, None, hard_error_qualified=True)
@@ -226,7 +224,7 @@ def test_candidate_expires_when_first_capture_deadline_passes():
 
 
 def test_wrong_ticket_does_not_release_live_worker_slot():
-    from senior_control.vision.rgbd_spawn_worker import CompactResult
+    from senior_perception.vision.rgbd_spawn_worker import CompactResult
 
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
     image, depth = scene()
@@ -252,7 +250,7 @@ def test_wrong_ticket_does_not_release_live_worker_slot():
 
 
 def test_worker_cannot_claim_hard_error_qualification():
-    from senior_control.vision.rgbd_spawn_worker import CompactResult
+    from senior_perception.vision.rgbd_spawn_worker import CompactResult
 
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
     image, depth = scene()
@@ -280,7 +278,7 @@ def test_worker_cannot_claim_hard_error_qualification():
 
 
 def test_finite_nonrigid_candidate_is_rejected():
-    from senior_control.vision.rgbd_spawn_worker import CompactResult
+    from senior_perception.vision.rgbd_spawn_worker import CompactResult
 
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
     image, depth = scene()
@@ -316,7 +314,7 @@ def test_finite_nonrigid_candidate_is_rejected():
 
 
 def test_candidate_must_name_exact_capture_issued_to_worker():
-    from senior_control.vision.rgbd_spawn_worker import CompactResult
+    from senior_perception.vision.rgbd_spawn_worker import CompactResult
 
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
     image, depth = scene()
@@ -354,7 +352,7 @@ def test_candidate_must_name_exact_capture_issued_to_worker():
 
 
 def test_candidate_rejects_fit_counts_above_feature_budget():
-    from senior_control.vision.rgbd_spawn_worker import CompactResult
+    from senior_perception.vision.rgbd_spawn_worker import CompactResult
 
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
     image, depth = scene()
@@ -395,7 +393,7 @@ def test_hung_worker_timeout_restarts_with_fresh_capture_floor():
     import os
     import signal
 
-    from senior_control.vision.rgbd_spawn_worker import CompactResult
+    from senior_perception.vision.rgbd_spawn_worker import CompactResult
 
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.1, 0.1, 2.0, 0.1, 0.1)
     image, depth = scene()
@@ -496,7 +494,7 @@ def test_partial_result_cannot_block_poll_or_worker_restart(monkeypatch):
     import signal
     import threading
 
-    import senior_control.vision.rgbd_spawn_worker as module
+    import senior_perception.vision.rgbd_spawn_worker as module
 
     original = module._run
     monkeypatch.setattr(module, "_run", _partial_result_worker)
@@ -560,7 +558,7 @@ def test_invalid_serialized_result_reports_failure_and_restarts(monkeypatch):
     import os
     import signal
 
-    import senior_control.vision.rgbd_spawn_worker as module
+    import senior_perception.vision.rgbd_spawn_worker as module
 
     original = module._run
     monkeypatch.setattr(module, "_run", _corrupt_result_worker)
@@ -613,8 +611,8 @@ def test_process_group_sigint_during_spawn_startup_keeps_child_clean(tmp_path):
         import signal
         import threading
         import time
-        from senior_control.vision.independent_motion import Profile
-        from senior_control.vision.rgbd_spawn_worker import SpawnWorker
+        from senior_perception.vision.independent_motion import Profile
+        from senior_perception.vision.rgbd_spawn_worker import SpawnWorker
 
         caught = []
         def handler(signum, frame):

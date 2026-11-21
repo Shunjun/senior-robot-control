@@ -3,12 +3,7 @@
 from dataclasses import replace
 
 import pytest
-from sensor_time_test_support import sample_time
-from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point, box
-from shapely.ops import unary_union
-
-from senior_control.models import BodyTwist, Pose2D, Velocity
-from senior_control.motion.constraints import (
+from senior_motion_control.constraints import (
     ConstraintConfig,
     ConstraintEngine,
     ConstraintSnapshot,
@@ -20,8 +15,13 @@ from senior_control.motion.constraints import (
     prepare_perception,
     stop_axis,
 )
-from senior_control.motion.contracts import BodyMotion, BrakeKind, MotionTarget, ResponseBounds
-from senior_control.motion.source_modes import SourceMode
+from senior_motion_control.contracts import BodyMotion, BrakeKind, MotionTarget, ResponseBounds
+from senior_motion_estimation.source_modes import SourceMode
+from sensor_time_test_support import sample_time
+from shapely.geometry import GeometryCollection, LineString, MultiPoint, Point, box
+from shapely.ops import unary_union
+
+from vehicle_core.values import BodyTwist, Pose2D, Velocity
 
 
 def scene(now=0.0, hits=(), rear=True, epoch="scan", revision=1, no_return=False, error_m=0.02):
@@ -331,9 +331,9 @@ def test_geometry_inflation_is_once_and_stops_outside_sensor_error():
 
 
 def test_pure_t3b_partial_motion_to_direction_constraint_example():
+    from senior_motion_estimation.observations import Source
     from test_motion_temporal import point
 
-    from senior_control.motion.observations import Source
     from tools.motion_fusion_replay import ReplayChain, replay_policy
 
     policy = replay_policy()

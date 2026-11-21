@@ -3,23 +3,22 @@
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
-
-from senior_control.models import BodyTwist, Velocity
-from senior_control.motion.contracts import (
+from senior_motion_control.contracts import (
     AcceptedManualIntent,
     BodyMotion,
     ControlOutput,
     ManualIntent,
     MotionEvent,
     MotionEventKind,
-    MotionMode,
-    MotionState,
     MotionTarget,
     ResponseBounds,
     TaskEvent,
     TaskEventKind,
     TaskStatus,
 )
+
+from vehicle_core.motion_state import MotionMode, MotionState
+from vehicle_core.values import BodyTwist, Velocity
 
 
 def test_accepted_intent_cannot_be_mutated_through_latest_slot() -> None:

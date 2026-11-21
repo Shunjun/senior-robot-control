@@ -6,8 +6,8 @@ from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
-from senior_control.runtime.launch_recovery import restart_prefix
-from senior_control.sensors.policy import ros_sensor_parameters
+from vehicle_core.launch_recovery import restart_prefix
+from vehicle_core.sensor_parameters import ros_sensor_parameters
 
 
 def generate_launch_description():

@@ -3,19 +3,19 @@
 from dataclasses import replace
 
 from control_process_test_support import generic_motion_profile
-from test_directional_constraints import scene
-
-from senior_control.models import Pose2D, Velocity
-from senior_control.motion.constraints import (
+from senior_motion_control.constraints import (
     ConstraintConfig,
     ConstraintEngine,
     ConstraintSnapshot,
     Footprint,
     RiskEnvelope,
 )
-from senior_control.motion.contracts import BodyMotion, MotionTarget, ResponseBounds
-from senior_control.motion.controller import Feedback, MotionController
-from senior_control.motion.source_modes import SourceMode
+from senior_motion_control.contracts import BodyMotion, MotionTarget, ResponseBounds
+from senior_motion_control.controller import Feedback, MotionController
+from senior_motion_estimation.source_modes import SourceMode
+from test_directional_constraints import scene
+
+from vehicle_core.values import Pose2D, Velocity
 
 
 def context(now, target=None):
@@ -134,9 +134,9 @@ def test_epoch_change_and_missing_model_remove_permission():
 
 
 def test_manual_only_readiness_never_clears_safety_or_grants_task_actions():
-    from senior_control.motion.contracts import MotionEvent
-    from senior_control.motion.contracts import MotionEventKind as K
-    from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
+    from senior_motion_control.contracts import MotionEvent
+    from senior_motion_control.contracts import MotionEventKind as K
+    from senior_motion_control.state_machine import MotionStateMachine, RecoveryObservation
 
     m = MotionStateMachine()
 
@@ -180,9 +180,9 @@ def test_static_stop_model_does_not_manufacture_raw_stillness():
 
 
 def test_manual_rearm_consumes_pending_task_auto_replan():
-    from senior_control.motion.contracts import MotionEvent
-    from senior_control.motion.contracts import MotionEventKind as K
-    from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
+    from senior_motion_control.contracts import MotionEvent
+    from senior_motion_control.contracts import MotionEventKind as K
+    from senior_motion_control.state_machine import MotionStateMachine, RecoveryObservation
 
     m = MotionStateMachine()
     m.observe(RecoveryObservation("body", 1, 1.0, 1.1, True, False), 1.0)
@@ -200,7 +200,7 @@ def test_manual_rearm_consumes_pending_task_auto_replan():
 
 
 def test_current_proof_veto_revokes_permission_without_recounting_sensor_sample():
-    from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
+    from senior_motion_control.state_machine import MotionStateMachine, RecoveryObservation
 
     m = MotionStateMachine()
     m.observe(RecoveryObservation("limited", 1, 10.0, 10.1, False, False, True), 10.0)

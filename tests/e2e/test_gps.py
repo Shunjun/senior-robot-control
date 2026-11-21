@@ -3,9 +3,9 @@
 from dataclasses import fields
 
 from conftest import SimulationProfile
+from senior_localization.heading import HeadingObserver, MotionSample
 
-from senior_control.localization.heading import HeadingObserver, MotionSample
-from senior_control.models import Velocity
+from vehicle_core.values import Velocity
 
 
 def test_gps_passive_heading_never_moves_robot(

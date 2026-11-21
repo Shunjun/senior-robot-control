@@ -3,15 +3,12 @@ from dataclasses import replace
 
 import pytest
 from cloud.snapshots import SnapshotCache
+from senior_contracts.wire import RobotPosePayload, ScanPointPayload, SnapshotPayload
+from vehicle_manager.agent.local_adapters import IpcState
+from vehicle_manager.agent.snapshot_decode import snapshot_from_envelope
+from vehicle_manager.agent.snapshots import RobotSnapshot, snapshot_envelope
 
-from senior_control.agent.ports import IpcState
-from senior_control.agent.snapshots import (
-    RobotSnapshot,
-    snapshot_envelope,
-    snapshot_from_envelope,
-)
-from senior_control.models import MapRef
-from senior_control.protocol import RobotPosePayload, ScanPointPayload, SnapshotPayload
+from vehicle_core.values import MapRef
 
 
 def test_live_geometry_round_trips_and_stale_or_offline_copies_clear_it():
@@ -114,7 +111,7 @@ def test_snapshot_geometry_rejects_nonfinite_and_oversized_input():
 
 
 def test_cloud_cache_preserves_original_map_identity_validation():
-    from senior_control.protocol import SnapshotEnvelope
+    from senior_contracts.wire import SnapshotEnvelope
 
     frame = SnapshotEnvelope(
         v=1,

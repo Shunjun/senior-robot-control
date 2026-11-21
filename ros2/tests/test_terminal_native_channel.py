@@ -7,11 +7,11 @@ import time
 from pathlib import Path
 from types import SimpleNamespace as N
 
+from senior_motion_control.arbiter import FinalCommandFence
 from test_task_terminal_release import rig  # noqa: F401
 
-from senior_control.models import Velocity
-from senior_control.motion.contracts import MotionMode
-from senior_control.safety.arbiter import FinalCommandFence
+from vehicle_core.motion_state import MotionMode
+from vehicle_core.values import Velocity
 
 
 def test_native_identity_channel_preserves_newer_manual_generation(rig):  # noqa: F811

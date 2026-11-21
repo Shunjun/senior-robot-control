@@ -39,7 +39,7 @@ def test_fixture_has_dedicated_actuation_and_reviewable_physics(tmp_path):
     launch = (output / "calibration.launch.py").read_text()
     assert "IGN_PARTITION" in launch and "GZ_PARTITION" in launch
     assert "vehicle_motion_calibration_review1" in launch
-    assert str(ROOT / "src") in (output / "start.sh").read_text()
+    assert str(ROOT) in (output / "start.sh").read_text()
     assert "scan_motion_node" in launch and "scan_receipt_node" in launch
     assert "safety_node" not in launch and "command_node" not in launch
     assert json.loads((output / "manifest.json").read_text())["calibration_executed"] is False

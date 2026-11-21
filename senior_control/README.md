@@ -3319,3 +3319,13 @@ ruff format --check senior_control/src/vehicle_manager/agent/{production,__main_
   tools/verify_batch_one_install.py
 git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check
 ```
+
+
+## 根 src 迁移收尾（2026-11-21）
+
+根 `src/` 已退役；`vehicle_manager` 不再通过 `senior_control.*` 导入功能。
+正式 Agent 使用 `python -m vehicle_manager.agent`；Shell 操作绑定使用
+`vehicle_manager.operator_entry`；实车服务装配使用 `senior_robot.service_runtime`。
+根发行 `senior-control` 保留安装依赖名称，但只发布 `vehicle_core`。共享基础代码不拥有
+管理/云/ROS 业务。地图/Home 具体效果绑定保留在管理侧，ROS 功能算法归其功能包。
+验证与未通过项见 [迁移验证](../docs/testing/2026-11-21-source-migration.md)。

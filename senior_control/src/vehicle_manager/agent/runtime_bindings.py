@@ -43,7 +43,7 @@ from vehicle_manager.media.stream import VideoSession
 from vehicle_manager.observability import Metrics
 from vehicle_manager.settings.service import RuntimeGate, SettingsService
 
-logger = logging.getLogger("senior_control.agent")
+logger = logging.getLogger("vehicle_manager.agent")
 
 
 class VideoSignaling(_VideoSignaling):

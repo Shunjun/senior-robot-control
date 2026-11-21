@@ -21,20 +21,16 @@ from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.subscription import Subscription
+from senior_contracts.wire import Envelope, ManualIntentEnvelope, RecoveryEnvelope, SimpleEnvelope
 from senior_motion_msgs.msg import DriveExecutionFeedback, FinalCommand
 from senior_sensor_ingress.native_receipt import with_dds_info
 from std_msgs.msg import String
+from vehicle_manager.settings.models import DrivingSettings
 
-from senior_control.agent.manual_control import (
-    ManualIngress,
-    ManualTarget,
-    MotionRuntimeReceiver,
-)
-from senior_control.motion.contracts import ManualIntent
-from senior_control.motion.manual_authority import ManualAuthorityError, ManualAuthorityState
-from senior_control.protocol import Envelope, ManualIntentEnvelope, RecoveryEnvelope, SimpleEnvelope
-from senior_control.settings.models import DrivingSettings
 from senior_motion_control.arbiter import Arbiter, CommandResult
+from senior_motion_control.contracts import ManualIntent
+from senior_motion_control.manual_authority import ManualAuthorityError, ManualAuthorityState
+from senior_motion_control.manual_control import ManualIngress, ManualTarget, MotionRuntimeReceiver
 from vehicle_core.clock import Clock, SystemClock
 from vehicle_core.errors import ErrorCode
 from vehicle_core.runtime_state import MotionRuntimeState
@@ -951,14 +947,14 @@ class CommandNode(Node):
         )
 
     def manual_request(self, message: dict[str, Any]) -> dict[str, Any]:
-        from senior_control.protocol import validate_envelope
+        from senior_contracts.wire import validate_envelope
 
         try:
             envelope = validate_envelope(
                 message["envelope"].encode(), str(self.get_parameter("robot_id").value)
             )
             now = self._monotonic_clock.monotonic()
-            from senior_control.protocol import LearningStartEnvelope, LearningStatusEnvelope
+            from senior_contracts.wire import LearningStartEnvelope, LearningStatusEnvelope
 
             if isinstance(envelope, (LearningStartEnvelope, LearningStatusEnvelope)):
                 if envelope.controller_generation is None:

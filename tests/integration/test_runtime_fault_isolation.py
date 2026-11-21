@@ -11,12 +11,12 @@ from types import SimpleNamespace
 import pytest
 from agent_fakes import FakeConnector, FakeLink, until
 from vehicle_manager.agent import production as composition
+from vehicle_manager.agent.pairing import Credentials
+from vehicle_manager.agent.production_bindings import AgentLogConnection
 from vehicle_manager.agent.runtime_bindings import Agent
 
-from senior_control.agent.logs_wire import AgentLogConnection
-from senior_control.agent.pairing import Credentials
-from senior_control.runtime.ipc import IpcClient
-from senior_control.runtime.lifecycle_events import READ_FD, LifecycleEvents, report_ros_exit
+from vehicle_core.ipc import IpcClient
+from vehicle_core.lifecycle_events import READ_FD, LifecycleEvents, report_ros_exit
 
 
 class LogSocket:
@@ -78,8 +78,8 @@ class Child:
 async def test_supervise_local_fault_keeps_actual_agent_and_log_transport(
     monkeypatch, kind, failure
 ):
-    from senior_control import docker_start_helper as helper
-    from senior_control import simulation_cli
+    import senior_robot.service_runtime as helper
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     with tempfile.TemporaryDirectory(prefix="isolation-") as directory:
         root = Path(directory).resolve()
@@ -272,8 +272,7 @@ def test_launch_exit_only_reports_lifecycle(monkeypatch, code):
 @pytest.mark.parametrize("retired", [False, True])
 async def test_task_failure_uses_actual_durable_pause_owner(tmp_path, retired):
     from test_task_ownership import start
-
-    from senior_control.storage.database import Database
+    from vehicle_manager.storage.bindings import Database
 
     async with Database(tmp_path / "task.db") as database:
         runtime, executor, nav, live, identity = await start(database)
@@ -290,10 +289,10 @@ async def test_task_failure_uses_actual_durable_pause_owner(tmp_path, retired):
 
 async def test_observer_eof_is_reported_by_actual_agent_without_exiting(monkeypatch, tmp_path):
     from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.storage.bindings import Database
 
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.runtime.lifecycle_events import observe
-    from senior_control.storage.database import Database
+    from vehicle_core.lifecycle_events import observe
 
     events = LifecycleEvents()
     reader = os.dup(events.reader)
@@ -335,10 +334,10 @@ async def test_manual_transport_failure_retires_authority_without_cloud_disconne
     monkeypatch, tmp_path
 ):
     from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, velocity
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.storage.bindings import Database
 
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.runtime.ipc import IpcError
-    from senior_control.storage.database import Database
+    from vehicle_core.ipc import IpcError
 
     class Motion(FakeMotion):
         sends = 0
@@ -380,9 +379,8 @@ async def test_manual_transport_failure_retires_authority_without_cloud_disconne
 @pytest.mark.parametrize("module", ["tasks", "logs"])
 async def test_failed_background_module_stops_without_stopping_report_plane(tmp_path, module):
     from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks
-
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.storage.database import Database
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.storage.bindings import Database
 
     calls = []
     trigger = asyncio.Event()
@@ -423,12 +421,12 @@ async def test_failed_background_module_stops_without_stopping_report_plane(tmp_
 
 async def test_retired_straggler_cannot_issue_new_motion_or_reply(tmp_path):
     from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, simple
+    from vehicle_manager.agent.dispatcher import Deadlines
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.storage.bindings import Database
 
-    from senior_control.agent.dispatcher import Deadlines
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.errors import DomainError
-    from senior_control.models import OperationResult, OperationStatus
-    from senior_control.storage.database import Database
+    from vehicle_core.errors import DomainError
+    from vehicle_core.values import OperationResult, OperationStatus
 
     first, second = FakeLink(1), FakeLink(2)
     connector, motion = FakeConnector(first), FakeMotion()
@@ -495,10 +493,10 @@ async def test_retired_straggler_cannot_issue_new_motion_or_reply(tmp_path):
 async def test_safety_delivery_fault_preserves_cloud_and_never_claims_success(tmp_path, capacity):
     from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks, simple
     from vehicle_manager.agent.main import MAX_SAFETY_PENDING
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.storage.bindings import Database
 
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.runtime.ipc import IpcError
-    from senior_control.storage.database import Database
+    from vehicle_core.ipc import IpcError
 
     entered, release = asyncio.Event(), asyncio.Event()
 
@@ -565,9 +563,8 @@ async def test_safety_delivery_fault_preserves_cloud_and_never_claims_success(tm
 
 async def test_reporting_ready_cannot_revive_failed_local_module(tmp_path):
     from agent_fakes import FakeHome, FakeMaps, FakeMotion, FakeState, FakeTasks
-
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.storage.database import Database
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.storage.bindings import Database
 
     async with Database(tmp_path / "robot.db") as database:
         journal = AgentJournal(database, robot_id="robot-a")

@@ -20,13 +20,10 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from senior_contracts.wire import SimpleEnvelope, validate_envelope
 from senior_mapping.workspace import WorkspaceMap
+from senior_motion_control.arbiter import CommandResult
 
-from senior_control.protocol import (
-    SimpleEnvelope,
-    validate_envelope,
-)
-from senior_control.safety.arbiter import CommandResult
 from vehicle_core.route_plan import RoutePlan
 
 if TYPE_CHECKING:
@@ -119,9 +116,9 @@ class AdapterCore:
             import os
             from pathlib import Path
 
-            from senior_control.protocol import LearningStartEnvelope, LearningStatusEnvelope
-            from senior_control.runtime.learning_client import request_once
-            from senior_control.runtime.learning_wire import BeginAttempt, QueryAttempt
+            from senior_contracts.wire import LearningStartEnvelope, LearningStatusEnvelope
+            from senior_perception.learning_client import request_once
+            from senior_perception.learning_wire import BeginAttempt, QueryAttempt
 
             if self._manual is None or self._exiting:
                 return {"ok": False, "error": "unavailable"}

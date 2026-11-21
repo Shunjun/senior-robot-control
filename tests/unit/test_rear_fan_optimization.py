@@ -6,14 +6,14 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+import senior_perception.coverage as coverage
+from senior_perception.coverage import SweptRegion
+from senior_perception.self_filter import ScanObservation, filter_self
 from shapely.geometry import Point, Polygon
 from shapely.ops import unary_union as geometric_union
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
-from senior_control.safety import coverage
-from senior_control.safety.coverage import SweptRegion
-from senior_control.safety.self_filter import ScanObservation, filter_self
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Pose2D
 
 
 def original_visible(observation):

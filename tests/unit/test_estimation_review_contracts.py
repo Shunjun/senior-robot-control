@@ -5,15 +5,15 @@ from dataclasses import replace
 
 import pytest
 from control_process_test_support import generic_motion_profile, read_inputs, read_observation
+from senior_motion_estimation.estimator import MotionEstimation
 from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
+from senior_motion_estimation.pose_estimator import PoseEstimation, PoseObservation
 from sensor_time_test_support import sample_time
 from test_reference_nanosecond_boundary import replay  # noqa: F401
 from test_unified_estimator import observation
 
-from senior_control.models import Pose2D
-from senior_control.motion.estimator import MotionEstimation
-from senior_control.motion.pose_estimator import PoseEstimation, PoseObservation
-from senior_control.runtime.diagnostics import RuntimeDiagnostics
+from vehicle_core.diagnostics import RuntimeDiagnostics
+from vehicle_core.values import Pose2D
 
 
 def reporter():
@@ -256,8 +256,7 @@ def test_rejected_native_receipt_uses_original_identity_without_live_state_mutat
     from types import SimpleNamespace as N
 
     from senior_motion_estimation import motion_observation_adapter as adapter
-
-    from senior_control.motion.observations import Source
+    from senior_motion_estimation.observations import Source
 
     d, emitted = reporter()
     monkeypatch.setattr("vehicle_core.diagnostics.process_diagnostics", lambda: d)
@@ -455,7 +454,7 @@ def test_interval_projection_support_and_software_error_are_not_expanded_twice(r
 
 
 def test_raw_identity_dedup_and_attempt_results_remain_distinct_across_flush():
-    from senior_control.sensors.policy import default_policy
+    from vehicle_core.sensor_policy import default_policy
 
     d, emitted = reporter()
     age = default_policy().age(measured_steady=19.5, received_steady=20, now_steady=20)
@@ -472,10 +471,10 @@ def test_raw_identity_dedup_and_attempt_results_remain_distinct_across_flush():
 
 
 def test_space_positional_api_and_bounded_diagnostic_registrations():
+    from senior_perception.space_estimator import SpaceEstimation, SpaceObservation
     from shapely.geometry import box
 
-    from senior_control.safety.space_estimator import SpaceEstimation, SpaceObservation
-    from senior_control.sensors.policy import default_policy
+    from vehicle_core.sensor_policy import default_policy
 
     roots = observation("scan", (None, None, None)).roots
     space = SpaceEstimation()
@@ -504,7 +503,7 @@ def test_space_positional_api_and_bounded_diagnostic_registrations():
 
 
 def test_captured_scene_uses_local_alignment_without_erasing_velocity_error(replay):  # noqa: F811
-    from senior_control.models import Velocity
+    from vehicle_core.values import Velocity
 
     c = replay.core
     now = replay.clock.steady
@@ -534,9 +533,8 @@ def test_captured_scene_uses_local_alignment_without_erasing_velocity_error(repl
 
 
 def test_unknown_space_errors_use_explicit_model_policy_instead_of_zero():
+    from senior_perception.space_estimator import SpaceEstimation, SpaceObservation
     from shapely.geometry import box
-
-    from senior_control.safety.space_estimator import SpaceEstimation, SpaceObservation
 
     owner = SpaceEstimation(software_pose_error_m=0.07)
     roots = observation("scan", (None, None, None)).roots

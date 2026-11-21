@@ -30,12 +30,12 @@ def test_agent_config_requires_encrypted_remote_transport() -> None:
 async def test_composition_opens_and_closes_database(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    import vehicle_manager.agent.runtime_bindings as agent_module
     from vehicle_manager.agent import production as composition
     from vehicle_manager.agent.production import run_agent
+    from vehicle_manager.storage.bindings import Database
 
-    from senior_control.agent import main as agent_module
-    from senior_control.runtime.ipc import IpcClient
-    from senior_control.storage.database import Database
+    from vehicle_core.ipc import IpcClient
 
     clients: list[IpcClient] = []
 
@@ -84,9 +84,8 @@ def test_pair_cli_reads_code_privately_and_uses_credential_path(
     import asyncio
     import sys
 
+    import vehicle_manager.agent.__main__ as agent_module
     from vehicle_manager.agent import application, pairing
-
-    from senior_control.agent import main as agent_module
 
     seen: list[tuple[str, str, str, Path]] = []
 
@@ -124,7 +123,7 @@ def test_pair_cli_reads_code_privately_and_uses_credential_path(
 
 
 def test_token_file_requires_private_permissions(tmp_path: Path) -> None:
-    from senior_control.agent.pairing import read_token
+    from vehicle_manager.agent.pairing import read_token
 
     token = tmp_path / "token"
     token.write_text("secret")
@@ -143,10 +142,10 @@ async def test_composition_starts_reporting_without_adapter_identity(
     import tempfile
 
     from vehicle_manager.agent import production as composition
+    from vehicle_manager.agent.runtime_bindings import Agent
 
-    from senior_control.agent.main import Agent
-    from senior_control.runtime.ipc import IpcServer
     from tests.integration.agent_fakes import FakeConnector, FakeLink, until
+    from vehicle_core.ipc import IpcServer
 
     with tempfile.TemporaryDirectory(prefix="identity-") as directory:
         socket = Path(directory) / "agent.sock"

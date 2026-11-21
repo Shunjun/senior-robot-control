@@ -11,15 +11,15 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from control_process_test_support import generic_motion_profile
 from learning_test_support import TestRun, learning_point
+from senior_motion_estimation.observations import Source
 from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.raw_safety_observation import RawSafetyObservation
 from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier
 from test_native_output_protocol import output_module  # noqa: F401
 
-from senior_control.models import Velocity
-from senior_control.motion.contracts import MotionMode
-from senior_control.motion.observations import Source
+from vehicle_core.motion_state import MotionMode
+from vehicle_core.values import Velocity
 
 
 class LearningRig:
@@ -38,7 +38,7 @@ class LearningRig:
             lambda _, **kwargs: self.run.client(**kwargs),
         )
         monkeypatch.setattr(
-            "senior_control.motion.diagnostic_pump.DiagnosticPump",
+            "senior_motion_control.diagnostic_pump.DiagnosticPump",
             lambda _: SimpleNamespace(close=lambda: None),
         )
         monkeypatch.setattr(
@@ -130,9 +130,8 @@ class LearningRig:
         return core.node.emitted[-1][1]
 
     def manual_attempt(self):
+        from senior_contracts.wire import LearningStartPayload
         from senior_perception.learning_wire import BeginAttempt
-
-        from senior_control.protocol import LearningStartPayload
 
         self.step(self.now + 0.05)
         prepared = barrier("prepared")
@@ -403,9 +402,8 @@ def test_slow_compute_does_not_extend_motion_and_complete_capture_survives_takeo
 
 
 def test_new_calibration_request_is_rejected_if_core_source_generation_changed(rig):
+    from senior_contracts.wire import LearningStartPayload
     from senior_perception.learning_wire import BeginAttempt
-
-    from senior_control.protocol import LearningStartPayload
 
     rig.step(rig.now + 0.05)
     prepared = barrier("prepared")
@@ -487,10 +485,9 @@ def test_recovered_core_stays_read_only_until_handoff_then_can_run_a_new_explici
 
 
 def uncached_scan(core, raw, *, avoidance=False):
+    from senior_perception.learning_view import LearningFilterView
+    from senior_perception.self_learning import SelfReturnModel
     from senior_robot import motion_core_perception as perception
-
-    from senior_control.safety.learning_view import LearningFilterView
-    from senior_control.safety.self_learning import SelfReturnModel
 
     decode = perception.avoidance_observation if avoidance else perception.scan_observation
     expected = decode(raw, core.node._body)
@@ -505,9 +502,8 @@ def uncached_scan(core, raw, *, avoidance=False):
 
 
 def assert_original_scan_result(core, raw, actual, now, *, avoidance=False):
+    from senior_perception.startup_visibility import startup_visibility
     from senior_robot import motion_core_perception as perception
-
-    from senior_control.safety.startup_visibility import startup_visibility
 
     expected = uncached_scan(core, raw, avoidance=avoidance)
     # JSON gives NaN its original nonfinite category; finite coordinates compare exactly.
@@ -580,7 +576,7 @@ def test_reconstructed_current_scan_reuses_facts_but_updates_output_and_expires(
     assert calls == ["decode", "filter"]
     assert velocities[0] != velocities[-1] and all(value.vx > 0 for value in velocities)
     assert deadlines[0] < deadlines[1] < deadlines[2]
-    from senior_control.sensors.policy import default_policy
+    from vehicle_core.sensor_policy import default_policy
 
     expires = raw.measurement_steady + default_policy().hard_age_s
     assert all(deadline <= expires for deadline in deadlines)
@@ -594,9 +590,8 @@ def test_current_scan_keys_invalidate_for_identity_payload_geometry_and_filter_v
 ):
 
     from senior_perception.learning_record import LearnedCatalog, LearningAnchor
-
-    from senior_control.safety.learning_view import LearningFilterView
-    from senior_control.safety.self_learning import SelfReturnModel
+    from senior_perception.learning_view import LearningFilterView
+    from senior_perception.self_learning import SelfReturnModel
 
     rig.start()
     calls = []
@@ -670,9 +665,8 @@ def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning
 ):
     from senior_motion_control import vehicle_speed
     from senior_perception import learning_runtime as motion_core_output
+    from senior_perception.vision.raw_capture import capture_from_message
     from senior_robot.raw_safety_observation import PredictedReturn
-
-    from senior_control.vision.raw_capture import capture_from_message
 
     rig.start()
     seed = capture_from_message(rig.core.node._scans[-1].message.raw_capture)
@@ -856,7 +850,7 @@ def test_completed_view_zero_target_skips_filter_but_manual_output_keeps_origina
 
 
 def test_started_filter_failure_is_sticky_in_status_without_changing_hold(rig, monkeypatch):
-    from senior_control.vision.raw_capture import capture_from_message
+    from senior_perception.vision.raw_capture import capture_from_message
 
     start = rig.start()
     deadline, reason = rig.core.startup.deadline, rig.core.startup.reason

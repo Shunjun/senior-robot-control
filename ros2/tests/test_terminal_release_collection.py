@@ -6,13 +6,13 @@ from pathlib import Path
 from types import SimpleNamespace as N
 
 import pytest
+from senior_motion_control.arbiter import FinalCommandFence
 from test_motion_core_exit_deadline import start
 from test_task_terminal_release import intent
 from test_task_terminal_release import rig as core_fixture
 from test_terminal_release_wire import wire as command_fixture
 
-from senior_control.models import Velocity
-from senior_control.safety.arbiter import FinalCommandFence
+from vehicle_core.values import Velocity
 
 
 @pytest.fixture

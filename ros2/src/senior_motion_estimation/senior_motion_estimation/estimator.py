@@ -10,7 +10,7 @@ from dataclasses import dataclass, field, replace
 from typing import cast
 from uuid import uuid4
 
-from senior_control.sensors.consensus import Vote, combine
+from senior_motion_estimation.consensus import Vote, combine
 from vehicle_core.sample_time import ClockTracker, SampleTime, StampInterval
 from vehicle_core.sensor_policy import Age, SensorTiming, default_policy
 from vehicle_core.values import Pose2D

@@ -90,7 +90,7 @@ def lifecycle(
             "--",
             sys.executable,
             "-m",
-            "senior_control.simulation_cli",
+            "vehicle_manager.simulation_runtime",
             str(profile.resolve()),
             "--headless",
             str(headless).lower(),

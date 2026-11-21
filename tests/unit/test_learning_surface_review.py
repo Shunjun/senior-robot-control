@@ -5,12 +5,12 @@ from dataclasses import replace
 
 import pytest
 from learning_test_support import TestRun, geometry, save_completed
+from senior_perception.self_filter import ScanObservation, filter_self
 from test_learning_frozen_reference import cloud, learn
 from test_startup_learning_feasibility import BOUNDARY
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
-from senior_control.safety.self_filter import ScanObservation, filter_self
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Pose2D
 
 
 def dense_surface(count=1000):

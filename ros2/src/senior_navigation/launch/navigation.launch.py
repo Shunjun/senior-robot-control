@@ -15,10 +15,7 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
-from senior_control.runtime.launch_recovery import (
-    lifecycle_group_command,
-    lifecycle_owner_prefix,
-)
+from vehicle_core.launch_recovery import lifecycle_group_command, lifecycle_owner_prefix
 
 
 def _members(context):

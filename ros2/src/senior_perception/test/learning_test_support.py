@@ -6,10 +6,9 @@ from pathlib import Path
 
 import pytest
 from senior_perception.learning_owner import LearningRecordOwner
+from senior_perception.learning_view import LearningFilterView
 from senior_perception.startup_learning import StartupLearning
 from sensor_time_test_support import sample_time
-
-from senior_control.safety.learning_view import LearningFilterView
 
 DOMAIN = "00000000-0000-0000-0000-000000000001"
 
@@ -377,8 +376,8 @@ def write_geometry_record(path, boundary):
 
 def learning_point(source, stamp_ns, received_ros_ns, received_steady_ns, values, sequence=1):
     """Explicit point input with real mapping, no environment-specific admission."""
-    from senior_control.motion.observations import Frame, SourceStatus
-    from senior_control.motion.sample_types import PointObservation
+    from senior_motion_estimation.observations import Frame, SourceStatus
+    from senior_motion_estimation.sample_types import PointObservation
 
     return PointObservation(
         source=source,

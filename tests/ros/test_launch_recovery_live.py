@@ -50,7 +50,7 @@ def isolated_ros():
 
 @contextmanager
 def prefixed_process(command, logfile):
-    from senior_control.runtime.launch_recovery import restart_prefix
+    from vehicle_core.launch_recovery import restart_prefix
 
     with logfile.open("w") as log:
         process = subprocess.Popen(
@@ -167,13 +167,12 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
+    from senior_contracts.wire import SimpleEnvelope
     from senior_motion_msgs.msg import FinalCommand
     from senior_robot.command_node import CommandNode
     from senior_robot.motion_lifecycle import MotionExecutor
     from std_msgs.msg import String
-
-    from senior_control.protocol import SimpleEnvelope
-    from senior_control.settings.models import simulation_settings_profile
+    from vehicle_manager.settings.models import simulation_settings_profile
 
     monkeypatch.delenv("SENIOR_STARTUP_LEARNING_CLAIM", raising=False)
     # Learning run preservation is checked by the owner/client production-chain

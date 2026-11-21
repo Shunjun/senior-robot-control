@@ -7,7 +7,7 @@ from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from senior_robot.optional_motion_inputs import rgbd_observation, static_matrix
 from sensor_time_test_support import capture_fields, sample_time
 
-from senior_control.runtime.diagnostics import RuntimeDiagnostics
+from vehicle_core.diagnostics import RuntimeDiagnostics
 
 
 def stamp(v):

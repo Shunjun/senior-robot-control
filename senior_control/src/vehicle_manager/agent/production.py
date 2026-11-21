@@ -51,7 +51,7 @@ from vehicle_manager.tasks.lifecycle_store import Admission
 from vehicle_manager.tasks.navigation_port import TaskNavigation
 from vehicle_manager.tasks.runtime import TaskRuntime
 
-logger = logging.getLogger("senior_control.agent")
+logger = logging.getLogger("vehicle_manager.agent")
 
 
 @dataclass(frozen=True)

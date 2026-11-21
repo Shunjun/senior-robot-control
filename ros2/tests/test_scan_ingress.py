@@ -205,10 +205,9 @@ def test_oversized_raw_dimensions_emit_only_a_bounded_invalid_event(native_scan_
 @pytest.mark.parametrize("failure", ["empty_epoch", "retirement_exhaustion"])
 def test_unqualified_or_exhausted_scan_epoch_revokes_freshness(monkeypatch, failure):
     rclpy = pytest.importorskip("rclpy")
+    from senior_motion_control.source_fences import SourceEpochFence
     from senior_motion_msgs.msg import BoundedSafetyScan, FencedSafetyScan
     from senior_robot.safety_node import SafetyGate
-
-    from senior_control.motion.source_fences import SourceEpochFence
 
     rclpy.init()
     gate = SafetyGate()

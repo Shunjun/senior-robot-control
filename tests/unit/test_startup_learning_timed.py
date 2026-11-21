@@ -1,10 +1,9 @@
 """The action is a fixed host window; learning compares relative scan positions."""
 
 from learning_test_support import begin_action, learning_runs, startup_for  # noqa: F401
+from senior_perception.self_learning import SelfReturnModel
 from test_startup_learning import side_observation
 from test_startup_learning_feasibility import BOUNDARY
-
-from senior_control.safety.self_learning import SelfReturnModel
 
 
 def test_fixed_three_seconds_never_waits_for_exact_displacement(tmp_path):

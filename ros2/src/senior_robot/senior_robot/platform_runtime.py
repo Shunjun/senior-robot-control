@@ -147,7 +147,7 @@ async def _video_environment(
             raise ValueError("invalid ROS environment")
         return {**original, **values, "SENIOR_ROS_VIDEO_TOPIC": "/camera/color/image_raw"}
     except (OSError, ValueError, IndexError, asyncio.TimeoutError) as exc:
-        logging.getLogger("senior_control.docker_start_helper").warning(
+        logging.getLogger("senior_robot.service_runtime").warning(
             "ROS video unavailable; starting Agent with original control environment: %s", exc
         )
         return original

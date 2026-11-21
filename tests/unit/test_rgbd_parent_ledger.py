@@ -1,9 +1,8 @@
 from dataclasses import replace
 
+from senior_perception.vision.raw_capture import RawCaptureHeader
+from senior_perception.vision.rgbd_parent_ledger import CaptureLedger
 from sensor_time_test_support import sample_time
-
-from senior_control.vision.raw_capture import RawCaptureHeader
-from senior_control.vision.rgbd_parent_ledger import CaptureLedger
 
 
 def header(seq):

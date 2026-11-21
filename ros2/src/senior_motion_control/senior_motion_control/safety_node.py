@@ -31,24 +31,21 @@ from senior_motion_msgs.msg import (
 from senior_motion_msgs.msg import (
     DriveExecutionFeedback as DriveFeedbackMessage,
 )
+from senior_perception.freshness import SafetyFreshness
 from senior_perception.raw_safety_observation import RawSafetyObservation
-
-from senior_control.motion.source_fences import (
-    ProducerTopology,
-    SourceEpochFence,
-)
-from senior_control.safety.freshness import SafetyFreshness
-from senior_control.vision.egress_receipt import (
+from senior_perception.vision.egress_receipt import (
     EgressAdmission,
     depth_capture_headers,
     egress_from_message,
     safety_scan_capture,
 )
-from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
-from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
+from senior_perception.vision.raw_capture import RawCaptureAdmission, capture_from_message
+from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
+
 from senior_motion_control.arbiter import FinalCommandFence
 from senior_motion_control.motion_lifecycle import MotionExecutor, run
 from senior_motion_control.native import native_executable
+from senior_motion_control.source_fences import ProducerTopology, SourceEpochFence
 from vehicle_core.sensor_policy import default_policy
 from vehicle_core.values import Velocity
 
@@ -200,7 +197,7 @@ class SafetyGate(Node):
             self._input_sensors = MotionSensorRuntime(
                 candidate_profile, configure_diagnostics(candidate_profile.diagnostics)
             )
-            from senior_control.motion.diagnostic_pump import DiagnosticPump
+            from senior_motion_control.diagnostic_pump import DiagnosticPump
 
             self._input_diagnostics = self._own(DiagnosticPump(self._input_sensors.diagnostics))
             if not self.has_parameter("wheel_frame"):

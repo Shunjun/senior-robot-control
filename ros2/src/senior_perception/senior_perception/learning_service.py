@@ -10,8 +10,6 @@ from collections import deque
 from collections.abc import Iterable
 from pathlib import Path
 
-from senior_control.motion.navigation_clock import monotonic_domain
-from senior_control.safety.self_learning import LEARNING_SAMPLE_COUNT
 from senior_perception.learning_compute import ComputeRequest, LearningCompute
 from senior_perception.learning_owner import LearningRecordOwner
 from senior_perception.learning_record import MAX_RECORD_BYTES, CaptureSummary, attempt_identity
@@ -35,8 +33,10 @@ from senior_perception.learning_wire import (
     SessionRequest,
     State,
 )
+from senior_perception.self_learning import LEARNING_SAMPLE_COUNT
+from vehicle_core.navigation_clock import monotonic_domain
 
-_LOG = logging.getLogger("senior_control.runtime.learning_service")  # //Compatible: log filters.
+_LOG = logging.getLogger("senior_perception.learning_service")  # //Compatible: log filters.
 
 
 def address(run_id: str) -> str:

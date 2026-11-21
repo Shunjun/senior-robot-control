@@ -160,7 +160,7 @@ class Server:
 async def test_hardware_cleanup_only_once_after_verified_live_agent_under_lock(
     tmp_path, monkeypatch, caplog, outcome
 ):
-    from senior_control import docker_start_helper as helper
+    import senior_robot.service_runtime as helper
 
     old = tmp_path / OLD
     old.touch()
@@ -241,7 +241,7 @@ async def test_hardware_cleanup_only_once_after_verified_live_agent_under_lock(
 async def test_simulation_boundary_preserves_failures_and_cleans_once(
     tmp_path, monkeypatch, outcome
 ):
-    from senior_control import simulation_cli as helper
+    import vehicle_manager.simulation_runtime as helper
 
     old = tmp_path / OLD
     old.touch()
@@ -289,7 +289,7 @@ async def test_simulation_boundary_preserves_failures_and_cleans_once(
     monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(helper, "_stop", terminate)
     monkeypatch.setattr(helper, "_notify", lambda *args: None)
-    from senior_control import docker_start_helper
+    import senior_robot.service_runtime as docker_start_helper
 
     async def stop_group(child):
         if child is not None:

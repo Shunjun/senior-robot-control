@@ -4,7 +4,6 @@ import math
 from collections import deque
 from dataclasses import dataclass, field
 
-from senior_control.motion.source_modes import SourceView
 from senior_motion_estimation.admission_events import AdmissionEvent, SourceSnapshot
 from senior_motion_estimation.observations import (
     AdaptedObservation,
@@ -18,6 +17,7 @@ from senior_motion_estimation.observations import (
     validate,
 )
 from senior_motion_estimation.sample_types import MotionSample, physical_support
+from senior_motion_estimation.source_modes import SourceView
 from vehicle_core.sample_time import ClockTracker
 
 

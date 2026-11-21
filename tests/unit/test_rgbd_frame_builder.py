@@ -1,10 +1,9 @@
 from types import SimpleNamespace as NS
 
 import numpy as np
+from senior_perception.vision.raw_capture import RawCaptureHeader
+from senior_perception.vision.rgbd_frame_builder import build_frame
 from sensor_time_test_support import sample_time
-
-from senior_control.vision.raw_capture import RawCaptureHeader
-from senior_control.vision.rgbd_frame_builder import build_frame
 
 
 def inputs():
@@ -166,8 +165,8 @@ def test_padded_big_endian_depth_is_decoded_from_real_rows():
 
 
 def test_bad_image_consumes_headers_and_prevents_same_capture_replay():
-    from senior_control.vision.independent_motion import IndependentMotion, Profile
-    from senior_control.vision.rgbd_frame_builder import offer_capture
+    from senior_perception.vision.independent_motion import IndependentMotion, Profile
+    from senior_perception.vision.rgbd_frame_builder import offer_capture
 
     headers, rgb, depth, rgb_info, depth_info = inputs()
     estimator = IndependentMotion(

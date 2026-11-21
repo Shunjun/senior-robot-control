@@ -1,6 +1,6 @@
 import pytest
 
-from senior_control.config import SettingsSource, load_settings
+from vehicle_core.config import SettingsSource, load_settings
 
 
 def test_settings_precedence_and_redaction(tmp_path):
@@ -47,7 +47,7 @@ def test_import_has_no_side_effects(tmp_path):
     import sys
 
     result = subprocess.run(
-        [sys.executable, "-c", "import senior_control.config, senior_control.storage.database"],
+        [sys.executable, "-c", "import vehicle_core.config, vehicle_manager.storage.bindings"],
         cwd=tmp_path,
         env={"PATH": os.environ["PATH"]},
         capture_output=True,
@@ -60,7 +60,7 @@ def test_import_has_no_side_effects(tmp_path):
 def test_log_redacts_secrets():
     import logging
 
-    from senior_control.observability import JsonFormatter
+    from vehicle_manager.observability import JsonFormatter
 
     record = logging.LogRecord(
         "test", logging.INFO, "", 0, "token=very-secret password=hunter2", (), None
@@ -85,7 +85,7 @@ def test_configuration_traceback_does_not_expose_input():
 
 
 def test_mounted_secrets_and_nested_env_precedence(tmp_path):
-    from senior_control.config import AgentSettings
+    from vehicle_core.config import AgentSettings
 
     config = tmp_path / "config.yaml"
     config.write_text("secret: yaml\ndevice:\n  mode: simulation\n  topics:\n    cmd: /yaml\n")
@@ -108,7 +108,7 @@ def test_mounted_secrets_and_nested_env_precedence(tmp_path):
 @pytest.mark.parametrize("cloud_config", ["legacy", "independent"])
 def test_cloud_settings_rejects_device_and_empty_secret(cloud_config):
     if cloud_config == "legacy":
-        from senior_control.config import CloudSettings
+        from vehicle_core.config import CloudSettings
 
         def load(values):
             return load_settings(SettingsSource(cli=values, environment={}))
@@ -159,7 +159,7 @@ def test_unstructured_and_exception_logs_never_emit_input():
     import json
     import logging
 
-    from senior_control.observability import JsonFormatter
+    from vehicle_manager.observability import JsonFormatter
 
     record = logging.LogRecord(
         "test", logging.ERROR, "", 0, 'authorization: Bearer "super secret" position=1,2', (), None
@@ -177,7 +177,7 @@ def test_approved_event_keeps_identifiers():
     import json
     import logging
 
-    from senior_control.observability import JsonFormatter
+    from vehicle_manager.observability import JsonFormatter
 
     record = logging.LogRecord("test", logging.INFO, "", 0, "token: secret", (), None)
     record.event = "operation_failed"
@@ -189,7 +189,7 @@ def test_approved_event_keeps_identifiers():
 
 
 def test_clock_is_injected_without_sleep():
-    from senior_control.clock import Clock
+    from vehicle_core.clock import Clock
 
     class FakeClock:
         now = 10.0
@@ -234,7 +234,7 @@ def test_malformed_yaml_traceback_does_not_expose_secret(tmp_path, monkeypatch):
     ],
 )
 def test_hardware_rejects_missing_or_invalid_coverage(coverage):
-    from senior_control.config import DeviceProfile
+    from vehicle_core.config import DeviceProfile
 
     with pytest.raises(ValueError):
         DeviceProfile(
@@ -249,7 +249,7 @@ def test_hardware_rejects_missing_or_invalid_coverage(coverage):
 def test_simulation_coverage_optional_and_full_circle_valid():
     from math import pi
 
-    from senior_control.config import DeviceProfile
+    from vehicle_core.config import DeviceProfile
 
     assert DeviceProfile().sensor_coverage == {}
     profile = DeviceProfile(topics={"scan": "/scan"}, sensor_coverage={"scan": 2 * pi})
@@ -259,7 +259,7 @@ def test_simulation_coverage_optional_and_full_circle_valid():
 
 
 def test_hardware_coverage_rejects_boolean_before_numeric_coercion():
-    from senior_control.config import DeviceProfile
+    from vehicle_core.config import DeviceProfile
 
     with pytest.raises(ValueError):
         DeviceProfile(

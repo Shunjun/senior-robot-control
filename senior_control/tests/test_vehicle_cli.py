@@ -3,11 +3,10 @@ from io import StringIO
 from pathlib import Path
 
 import pytest
+import vehicle_manager.operator_cli as cli
 from vehicle_manager import cli as cli_owner
 from vehicle_manager import operator_actions
 from vehicle_manager import simulation as simulation_owner
-
-from senior_control import cli
 
 
 @pytest.fixture
@@ -39,7 +38,7 @@ def test_default_directory_can_select_real_profile(default_profile, monkeypatch)
 
 @pytest.mark.parametrize("command", ["start", "stop", "status"])
 def test_lifecycle_uses_default_simulation_profile(default_profile, monkeypatch, command):
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     def lifecycle(action, path, profile):
         assert (action, path, profile.kind) == (command, default_profile, "simulation")
@@ -174,7 +173,7 @@ def test_deploy_dry_run_leaves_files_and_services_untouched(tmp_path: Path, monk
 
 
 def _simulation_profile(tmp_path):
-    from senior_control.agent.pairing import Credentials
+    from vehicle_manager.agent.pairing import Credentials
 
     profile = cli.VehicleProfile(
         kind="simulation",
@@ -189,7 +188,7 @@ def _simulation_profile(tmp_path):
 
 
 async def test_failed_start_reaps_only_owned_processes(tmp_path, monkeypatch):
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     owned_ros = object()
     stopped = []
@@ -224,8 +223,7 @@ async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_star
     monkeypatch,
 ):
     import pytest
-
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     slots = []
 
@@ -260,7 +258,7 @@ async def test_opt_in_video_shares_one_private_slot_and_cleans_after_failed_star
 
 @pytest.mark.parametrize("headless", ["true", "false"])
 def test_start_accepts_explicit_headless(default_profile, monkeypatch, headless):
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     def lifecycle(action, path, profile, *, headless=True):
         assert (action, path) == ("start", default_profile)
@@ -282,7 +280,7 @@ def test_start_rejects_invalid_headless(default_profile):
 def test_simulation_service_receives_runtime_mode_and_desktop(tmp_path, monkeypatch, headless):
     from types import SimpleNamespace
 
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     calls = []
     monkeypatch.setattr(simulation_owner.sys, "platform", "linux")
@@ -315,7 +313,7 @@ def test_simulation_service_receives_runtime_mode_and_desktop(tmp_path, monkeypa
 def test_windowed_start_requires_display_without_starting_service(tmp_path, monkeypatch, capsys):
     from types import SimpleNamespace
 
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     calls = []
     monkeypatch.setattr(simulation_owner.sys, "platform", "linux")
@@ -337,7 +335,7 @@ def test_windowed_start_requires_display_without_starting_service(tmp_path, monk
 def test_windowed_start_does_not_duplicate_running_simulation(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     calls = []
     monkeypatch.setattr(simulation_owner.sys, "platform", "linux")
@@ -357,9 +355,9 @@ def test_windowed_start_does_not_duplicate_running_simulation(tmp_path, monkeypa
 
 @pytest.mark.parametrize("headless", [True, False])
 async def test_simulation_launch_uses_requested_window_mode(tmp_path, monkeypatch, headless):
+    import senior_robot.service_runtime as docker_start_helper
+    import vehicle_manager.simulation_runtime as simulation_cli
     from test_runtime_fault_isolation import Child
-
-    from senior_control import docker_start_helper, simulation_cli
 
     calls = []
     monkeypatch.setenv("DISPLAY", ":7")
@@ -390,7 +388,7 @@ async def test_simulation_launch_uses_requested_window_mode(tmp_path, monkeypatc
 
 
 async def test_status_probe_preserves_legacy_adapter_identity(tmp_path, monkeypatch):
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     profile, credentials = _simulation_profile(tmp_path)
 
@@ -462,7 +460,7 @@ def _stale_test_socket(path):
 
 
 def test_stale_socket_is_removed_and_missing_path_is_allowed(short_socket_root):
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     path = short_socket_root / "adapter.sock"
     simulation_cli._remove_stale_socket(path)
@@ -472,7 +470,7 @@ def test_stale_socket_is_removed_and_missing_path_is_allowed(short_socket_root):
 
 
 def test_live_socket_is_preserved(short_socket_root, monkeypatch):
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     path = short_socket_root / "adapter.sock"
     _stale_test_socket(path)
@@ -491,7 +489,7 @@ def test_stale_cleanup_rejects_unowned_or_non_socket_paths(
     monkeypatch,
     kind,
 ):
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     path = short_socket_root / "adapter.sock"
     if kind == "regular":
@@ -515,7 +513,7 @@ def test_stale_cleanup_rejects_unowned_or_non_socket_paths(
 def test_stale_cleanup_preserves_uncertain_socket(short_socket_root, monkeypatch, outcome):
     import errno
 
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     path = short_socket_root / "adapter.sock"
     _stale_test_socket(path)
@@ -551,7 +549,7 @@ def test_stale_cleanup_preserves_uncertain_socket(short_socket_root, monkeypatch
 def test_stale_cleanup_preserves_socket_replaced_during_probe(short_socket_root, monkeypatch):
     import errno
 
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     path = short_socket_root / "adapter.sock"
     replacement = short_socket_root / "replacement.sock"
@@ -587,7 +585,7 @@ def test_main_only_cleans_stale_socket_after_both_locks(
 ):
     import os
 
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     profile, credentials = _simulation_profile(short_socket_root)
     path = short_socket_root / "simulation.json"

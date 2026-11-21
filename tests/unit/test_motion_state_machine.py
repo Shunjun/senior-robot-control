@@ -1,8 +1,9 @@
 import pytest
+from senior_motion_control.contracts import MotionEvent
+from senior_motion_control.contracts import MotionEventKind as K
+from senior_motion_control.state_machine import MotionStateMachine, RecoveryObservation
 
-from senior_control.motion.contracts import MotionEvent, MotionMode
-from senior_control.motion.contracts import MotionEventKind as K
-from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
+from vehicle_core.motion_state import MotionMode
 
 
 def evidence(t, seq, healthy=True, stationary=True):

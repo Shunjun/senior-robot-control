@@ -12,8 +12,8 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from senior_control.models import OperationResult, OperationStatus
-from senior_control.navigation import RoutePlan
+from vehicle_core.route_plan import RoutePlan
+from vehicle_core.values import OperationResult, OperationStatus
 
 
 @pytest.fixture
@@ -93,8 +93,8 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
     tmp_path,
     monkeypatch,
 ):
-    from senior_control.models import MapRef
     from vehicle_core import ipc
+    from vehicle_core.values import MapRef
 
     runtime = navigation_evidence
     logs = []

@@ -26,7 +26,7 @@ from typing import Any, Literal, Protocol
 from vehicle_manager.media import ImageReading
 from vehicle_manager.media.turn import IceCredentials, TurnCredentialIssuer
 
-logger = logging.getLogger("senior_control.vision.stream")
+logger = logging.getLogger("vehicle_manager.media.stream")
 
 SERVER_CODECS = ("VP8", "H264")
 """Codecs `aiortc` can encode, in the order the vehicle prefers them."""

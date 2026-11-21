@@ -125,11 +125,10 @@ def test_raw_sender_reopens_when_attempt_changes(tmp_path, monkeypatch):
     from dataclasses import asdict
     from types import SimpleNamespace as N
 
+    from senior_contracts.wire import LearningStartPayload
     from senior_perception.learning_wire import BeginAttempt
     from sensor_time_test_support import capture_fields
     from test_learning_compute import recorded
-
-    from senior_control.protocol import LearningStartPayload
 
     run = TestRun(tmp_path / "sender-switch")
     _, lock = wire_owner(monkeypatch, run)
@@ -190,9 +189,8 @@ def test_raw_sender_reopens_when_attempt_changes(tmp_path, monkeypatch):
 def test_live_motion_client_can_observe_next_attempt_after_its_catalog_is_durable(
     tmp_path, monkeypatch
 ):
+    from senior_contracts.wire import LearningStartPayload
     from senior_perception.learning_wire import BeginAttempt
-
-    from senior_control.protocol import LearningStartPayload
 
     run = TestRun(tmp_path / "live-client-next")
     requests, lock = wire_owner(monkeypatch, run)
@@ -258,9 +256,8 @@ def test_live_motion_client_can_observe_next_attempt_after_its_catalog_is_durabl
 def test_raw_sender_stops_after_completion_and_reopens_only_for_new_attempt(tmp_path, monkeypatch):
     from types import SimpleNamespace
 
+    from senior_contracts.wire import LearningStartPayload
     from senior_perception.learning_wire import BeginAttempt
-
-    from senior_control.protocol import LearningStartPayload
 
     run = TestRun(tmp_path / "sender-complete")
     _, lock = wire_owner(monkeypatch, run)

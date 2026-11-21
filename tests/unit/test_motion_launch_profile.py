@@ -3,7 +3,7 @@
 import json
 from pathlib import Path
 
-from senior_control.motion.hardware_profile import HardwareMotionProfile
+from senior_motion_control.hardware_profile import HardwareMotionProfile
 
 
 def test_hardware_uses_requested_linear_rates():

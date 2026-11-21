@@ -8,14 +8,15 @@ from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
-from senior_control.agent.manual_control import ManualIngress
-from senior_control.errors import ErrorCode
-from senior_control.models import Velocity
-from senior_control.motion.contracts import ManualIntent
-from senior_control.motion.manual_authority import ManualAuthorityError, ManualAuthorityState
-from senior_control.protocol import ManualIntentEnvelope, RecoveryEnvelope, SimpleEnvelope
-from senior_control.safety.arbiter import Arbiter, CommandResult, FinalCommandFence
-from senior_control.settings.models import DrivingSettings, simulation_settings_profile
+from senior_contracts.wire import ManualIntentEnvelope, RecoveryEnvelope, SimpleEnvelope
+from senior_motion_control.arbiter import Arbiter, CommandResult, FinalCommandFence
+from senior_motion_control.contracts import ManualIntent
+from senior_motion_control.manual_authority import ManualAuthorityError, ManualAuthorityState
+from senior_motion_control.manual_control import ManualIngress
+from vehicle_manager.settings.models import DrivingSettings, simulation_settings_profile
+
+from vehicle_core.errors import ErrorCode
+from vehicle_core.values import Velocity
 
 
 def command_class():

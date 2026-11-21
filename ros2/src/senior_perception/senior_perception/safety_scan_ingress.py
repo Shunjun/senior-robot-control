@@ -11,7 +11,7 @@ from rclpy.time import Time
 from senior_motion_msgs.msg import BoundedRawLaserScan, BoundedSafetyScan
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
+from senior_perception.vision.raw_capture import RawCaptureAdmission, capture_from_message
 from vehicle_core.sensor_policy import default_policy
 
 MAX_RAYS = 2048

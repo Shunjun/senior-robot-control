@@ -113,7 +113,7 @@ def test_gap_epoch_interruption_and_cursor_overrun_are_explicit():
 def test_raw_gps_uses_each_causal_heading_not_only_window_start(yaw, enu):
     from senior_motion_estimation.observations import Heading
 
-    from senior_control.models import Pose2D
+    from vehicle_core.values import Pose2D
 
     o, r = owner(), resolver()
     events = [point(Source.IMU, i * 0.02, i + 1, (0.0,)) for i in range(6)]
@@ -171,11 +171,11 @@ def test_invalid_new_epoch_interrupts_resolver_and_retires_old_packets():
 
 
 def test_se2_delta_preserves_sensor_extrinsic_and_displacement_covariance():
+    from senior_motion_estimation.kinematics import compose, exponential, inverse
     from senior_motion_estimation.observations import Covariance, CovarianceKind
     from senior_motion_estimation.sample_types import DeltaObservation
 
-    from senior_control.models import Pose2D
-    from senior_control.motion.kinematics import compose, exponential, inverse
+    from vehicle_core.values import Pose2D
 
     o, r = owner(), resolver()
     extrinsic = Pose2D(0.7, -0.2, 0.4)
@@ -219,7 +219,7 @@ def test_se2_delta_preserves_sensor_extrinsic_and_displacement_covariance():
 def test_invalid_extrinsic_rejected_after_valid_owner_without_watermark_change():
     from senior_motion_estimation.observations import Heading
 
-    from senior_control.models import Pose2D
+    from vehicle_core.values import Pose2D
 
     o = owner()
     h = Heading(
@@ -294,7 +294,7 @@ def test_capacity_eviction_and_future_left_sample_never_invent_coverage():
 def test_interval_rotation_alias_is_explicit_not_a_crash_or_wrapped_prediction():
     from senior_motion_estimation.sample_types import DeltaObservation
 
-    from senior_control.models import Pose2D
+    from vehicle_core.values import Pose2D
 
     o, r = owner(), resolver()
     p = DeltaObservation(
@@ -347,7 +347,7 @@ def test_wheel_without_declared_lateral_motion_assumption_is_not_se2_mean():
 def test_owner_recovery_blocks_both_dependencies_until_same_epoch_gyro_ready():
     from senior_motion_estimation.observations import Heading
 
-    from senior_control.models import Pose2D
+    from vehicle_core.values import Pose2D
 
     o = AdmissionOwner(config(), event_capacity=128)
     r = resolver()

@@ -19,8 +19,8 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TextIO
 
-from senior_control.runtime.ipc import IpcClient, IpcError
-from senior_control.sensors.sample_time import ClockTracker, SampleTime, map_sample
+from vehicle_core.ipc import IpcClient, IpcError
+from vehicle_core.sample_time import ClockTracker, SampleTime, map_sample
 
 TOPICS = {
     "clock": ("/clock", "rosgraph_msgs/msg/Clock"),

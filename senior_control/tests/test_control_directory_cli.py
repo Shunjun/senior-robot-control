@@ -5,9 +5,8 @@ import tempfile
 from pathlib import Path
 
 import pytest
+import vehicle_manager.operator_cli as cli
 from vehicle_manager import cli as cli_owner
-
-from senior_control import cli
 
 
 @pytest.fixture
@@ -79,13 +78,13 @@ def test_profile_and_directory_cannot_be_selected_together(control_dir):
 
 
 def test_native_plan_uses_one_root_and_project_venv(control_dir):
-    from senior_control.vehicle_deploy import render_service
+    from vehicle_manager.deployment import render_service
 
     config = configure(control_dir)
     profile = cli.load_profile(config, control_dir=control_dir)
     unit = render_service(profile, "wheeltec", container_root=None)
     assert "/opt/robot/.venv/bin/python" in unit
-    assert "senior_control.docker_start_helper run" in unit
+    assert "senior_robot.service_runtime run" in unit
     assert "KillMode=mixed" in unit
     assert f"EnvironmentFile={control_dir}/agent.env" in unit
     assert f"ReadWritePaths={control_dir}" in unit
@@ -96,15 +95,15 @@ def test_native_plan_uses_one_root_and_project_venv(control_dir):
 
 
 def test_docker_plan_passes_host_env_file_and_stops_only_agent(control_dir):
-    from senior_control.vehicle_deploy import environment, render_service
+    from vehicle_manager.deployment import environment, render_service
 
     config = configure(control_dir, container="ros2")
     profile = cli.load_profile(config, control_dir=control_dir)
     unit = render_service(profile, "wheeltec", container_root=Path("/state/senior-control"))
     assert f"--env-file {control_dir}/agent.env" in unit
     assert "/opt/robot/.venv/bin/python" in unit
-    assert "senior_control.docker_start_helper run" in unit
-    assert "senior_control.docker_start_helper stop" in unit
+    assert "senior_robot.service_runtime run" in unit
+    assert "senior_robot.service_runtime stop" in unit
     assert "docker stop" not in unit
     assert "docker kill" not in unit
     env = environment(profile, Path("/state/senior-control"))
@@ -114,7 +113,7 @@ def test_docker_plan_passes_host_env_file_and_stops_only_agent(control_dir):
 
 
 def test_container_mapping_uses_deepest_bind_and_refuses_unshared_root(control_dir):
-    from senior_control.vehicle_deploy import container_directory
+    from vehicle_manager.deployment import container_directory
 
     mounts = [
         {"Type": "bind", "Source": str(control_dir.parent), "Destination": "/shared", "RW": True},
@@ -219,7 +218,7 @@ def test_docker_dry_run_maps_runtime_paths_without_starting_container(
 
 
 def test_simulation_worker_reads_unified_configuration(control_dir, monkeypatch):
-    from senior_control import simulation_cli
+    import vehicle_manager.simulation_runtime as simulation_cli
 
     setup = control_dir / "setup.bash"
     setup.write_text("")

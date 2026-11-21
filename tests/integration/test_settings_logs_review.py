@@ -8,14 +8,14 @@ from typing import Any
 import pytest
 from agent_fakes import FakeConnector, FakeLink, until
 from cloud.limits import CloudLimits
+from cloud.runtime_relay import Hub
+from senior_contracts.wire import ResponseEnvelope, serialize_envelope, validate_envelope
 from test_manual_wire import envelope, runtime
 from vehicle_manager.agent import production as composition
+from vehicle_manager.agent.connection import HeartbeatFrame
+from vehicle_manager.agent.runtime_bindings import Agent
 
-from senior_control.agent.connection import HeartbeatFrame
-from senior_control.agent.main import Agent
-from senior_control.cloud.relay import Hub
-from senior_control.protocol import ResponseEnvelope, serialize_envelope, validate_envelope
-from senior_control.runtime.ipc import IpcClient
+from vehicle_core.ipc import IpcClient
 
 
 def frame(robot: str, kind: str, payload: dict[str, Any], seq: int) -> bytes:

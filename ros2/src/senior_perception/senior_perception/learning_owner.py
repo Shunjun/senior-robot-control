@@ -30,7 +30,7 @@ from senior_perception.learning_store import (
 )
 from vehicle_core.process_resources import ProcessWorker
 
-_LOG = logging.getLogger("senior_control.runtime.learning_owner")  # //Compatible: log filters.
+_LOG = logging.getLogger("vehicle_core.learning_owner")  # //Compatible: log filters.
 
 
 CommitResult = int | LearningRecord | None

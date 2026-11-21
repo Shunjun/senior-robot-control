@@ -201,7 +201,7 @@ def generate_launch_description():
     (output / "calibration.launch.py").write_text(launch)
     (output / "start.sh").write_text(
         '#!/bin/bash\nset -euo pipefail\numask 0077\nsource "$1"\n'
-        f'export PYTHONPATH={shlex.quote(str(source_root / "src"))}:"${{PYTHONPATH:-}}"\n'
+        f'export PYTHONPATH={shlex.quote(str(source_root))}:"${{PYTHONPATH:-}}"\n'
         f"export ROS_DOMAIN_ID={plan.ros_domain_id} ROS_LOCALHOST_ONLY=1\n"
         f"export IGN_PARTITION={shlex.quote(partition)} GZ_PARTITION={shlex.quote(partition)}\n"
         f"export ROS_HOME={shlex.quote(str(output / 'ros-home'))}\n"

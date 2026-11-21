@@ -41,7 +41,7 @@ def witness(monkeypatch):
 
 
 def test_future_raw_clock_cannot_destroy_other_live_sources(witness):
-    from senior_control.motion.estimator import MotionObservation, Origin
+    from senior_motion_estimation.estimator import MotionObservation, Origin
 
     _, body, _ = read_inputs(witness.core, witness.clock.steady)
     assert body is not None

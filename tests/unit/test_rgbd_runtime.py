@@ -6,8 +6,7 @@ import sys
 from pathlib import Path
 
 import pytest
-
-from senior_control.vision import (
+from senior_perception.vision import (
     CameraCalibration,
     CameraExtrinsic,
     DepthFrame,
@@ -102,7 +101,7 @@ def test_depth_decode_limits_before_allocating():
 
 
 def test_optical_tf_is_converted_to_body_extrinsic_once():
-    from senior_control.vision.depth import body_extrinsic_from_optical_tf
+    from senior_perception.vision.depth import body_extrinsic_from_optical_tf
 
     extrinsic = body_extrinsic_from_optical_tf((0.2316, 0.00224, 0.1282), (-0.5, 0.5, -0.5, 0.5))
     assert (extrinsic.x, extrinsic.y, extrinsic.z) == pytest.approx((0.2316, 0.00224, 0.1282))
@@ -111,7 +110,7 @@ def test_optical_tf_is_converted_to_body_extrinsic_once():
 
 def test_depth_admission_rejects_retired_future_wait():
     """SafetyGate used to pass future_wait_s; the constructor no longer accepts it."""
-    from senior_control.vision.runtime_evidence import DepthAdmission
+    from senior_perception.vision.runtime_evidence import DepthAdmission
 
     with pytest.raises(TypeError):
         DepthAdmission(max_age_ms=1000, future_wait_s=min(0.02, 1.0))
@@ -120,7 +119,7 @@ def test_depth_admission_rejects_retired_future_wait():
 
 
 def test_depth_admission_preserves_receipt_and_invalidates_replaced_generation():
-    from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
+    from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
 
     def header(*, sequence=1, epoch="a", valid=True, stamp_ns=1_000_000_000, received_steady=10.0):
         return DepthHeader(
@@ -157,7 +156,7 @@ def test_depth_admission_preserves_receipt_and_invalidates_replaced_generation()
 
 
 def test_depth_ros_correction_does_not_delay_fresh_original_capture():
-    from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
+    from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
 
     h = DepthHeader(
         "a",
@@ -179,7 +178,7 @@ def test_depth_ros_correction_does_not_delay_fresh_original_capture():
 
 
 def test_queued_depth_cannot_receive_a_new_lifetime():
-    from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
+    from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
 
     admission = DepthAdmission(max_age_ms=500)
     h = DepthHeader("a", "camera", 1, 1, 1, 10.6, "frame", "cal", True, measurement_steady=10.0)
@@ -190,7 +189,7 @@ def test_queued_depth_cannot_receive_a_new_lifetime():
 def test_depth_failure_drift_and_out_of_order_revoke_older_results():
     from dataclasses import replace
 
-    from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
+    from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
 
     admission = DepthAdmission(max_age_ms=500)
     h = DepthHeader(
@@ -234,7 +233,7 @@ def test_depth_failure_drift_and_out_of_order_revoke_older_results():
 
 
 def test_depth_admission_rejects_stale_or_fabricated_receipts():
-    from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
+    from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
 
     h = DepthHeader(
         "a",
@@ -255,7 +254,7 @@ def test_depth_admission_rejects_stale_or_fabricated_receipts():
 
 def test_replayed_depth_and_true_monotonic_regression_revoke_without_ros_gate():
 
-    from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
+    from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
 
     a = DepthAdmission(max_age_ms=500)
     h = DepthHeader("a", "camera", 1, 1, 1, 10.0, "frame", "cal", True, measurement_steady=10.0)
@@ -269,7 +268,7 @@ def test_replayed_depth_and_true_monotonic_regression_revoke_without_ros_gate():
 def test_depth_calibration_drift_requires_new_source_epoch():
     from dataclasses import replace
 
-    from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
+    from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
 
     admission = DepthAdmission(max_age_ms=500)
     h = DepthHeader(

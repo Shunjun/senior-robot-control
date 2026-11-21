@@ -5,8 +5,8 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from senior_control.motion.kinematics import body_delta, compose, exponential, logarithm
 from senior_motion_estimation.admission_events import SourceSnapshot
+from senior_motion_estimation.kinematics import body_delta, compose, exponential, logarithm
 from senior_motion_estimation.observations import (
     AdaptedObservation,
     CovarianceKind,

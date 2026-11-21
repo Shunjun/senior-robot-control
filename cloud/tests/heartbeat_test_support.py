@@ -5,9 +5,8 @@ import json
 from typing import Any
 
 from cloud.limits import CloudLimits
-
-from senior_control.agent.websocket import WebSocketLink
-from senior_control.cloud.relay import Hub
+from cloud.runtime_relay import Hub
+from vehicle_manager.agent.production_bindings import WebSocketLink
 
 
 class HeartbeatClock:

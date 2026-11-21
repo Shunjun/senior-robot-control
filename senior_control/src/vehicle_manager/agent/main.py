@@ -49,7 +49,7 @@ from vehicle_manager.agent.supervisor import AuthRejected, Supervisor
 from vehicle_manager.agent.workspace import WorkspaceReader
 from vehicle_manager.settings.service import RuntimeGate, SettingsService
 
-logger = logging.getLogger("senior_control.agent")
+logger = logging.getLogger("vehicle_manager.agent")
 HALT_TYPES = frozenset({"drive.stop", "safety.estop"})
 MAX_INFLIGHT = 64
 MAX_SAFETY_PENDING = 64

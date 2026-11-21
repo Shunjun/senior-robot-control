@@ -5,17 +5,18 @@ import math
 from collections import defaultdict
 from typing import Any
 
-from senior_control.models import Pose2D
-from senior_control.motion.kinematics import compose, inverse, logarithm
-from senior_control.motion.observations import (
+from senior_motion_estimation.kinematics import compose, inverse, logarithm
+from senior_motion_estimation.observations import (
     Covariance,
     CovarianceKind,
     Frame,
     Source,
     SourceStatus,
 )
-from senior_control.motion.sample_types import DeltaObservation, MotionSample, PointObservation
-from senior_control.sensors.sample_time import SampleTime
+from senior_motion_estimation.sample_types import DeltaObservation, MotionSample, PointObservation
+
+from vehicle_core.sample_time import SampleTime
+from vehicle_core.values import Pose2D
 
 
 def stamp(value: dict[str, Any]) -> float:

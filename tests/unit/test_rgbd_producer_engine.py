@@ -1,10 +1,9 @@
 import time
 
+from senior_perception.vision.independent_motion import Profile
+from senior_perception.vision.rgbd_producer_engine import RgbdProducerEngine
+from senior_perception.vision.static_tf_binding import Edge, Receipt, StaticBinding
 from test_rgbd_coordinator import capture
-
-from senior_control.vision.independent_motion import Profile
-from senior_control.vision.rgbd_producer_engine import RgbdProducerEngine
-from senior_control.vision.static_tf_binding import Edge, Receipt, StaticBinding
 
 
 def test_four_streams_produce_compact_candidate_through_real_spawn():

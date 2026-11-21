@@ -13,7 +13,7 @@ from lifecycle_msgs.msg import State, Transition
 from lifecycle_msgs.srv import ChangeState, GetState
 from rclpy.node import Node
 
-from senior_control.runtime.launch_recovery import owner_command
+from vehicle_core.launch_recovery import owner_command
 
 
 class DedicatedController:

@@ -17,7 +17,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from senior_robot.rgbd_transport import transport_environment
 
-from senior_control.runtime.launch_recovery import restart_prefix
+from vehicle_core.launch_recovery import restart_prefix
 
 
 def _detect_rmw():

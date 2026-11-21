@@ -22,13 +22,13 @@ from agent_fakes import (
     operation,
     until,
 )
+from senior_contracts.wire import OPERATION_TYPES
+from vehicle_manager.agent.production_bindings import AgentJournal
+from vehicle_manager.agent.runtime_bindings import Agent
 from vehicle_manager.observability import JsonFormatter, Metrics
+from vehicle_manager.storage.bindings import Database
 
-from senior_control.agent import Agent
-from senior_control.agent.journal import AgentJournal
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.protocol import OPERATION_TYPES
-from senior_control.storage.database import Database
+from vehicle_core.errors import DomainError, ErrorCode
 
 SECRET = "s3cret-device-token-value"
 
@@ -38,11 +38,11 @@ def log_output() -> Iterator[io.StringIO]:
     stream = io.StringIO()
     handler = logging.StreamHandler(stream)
     handler.setFormatter(JsonFormatter())
-    logger = logging.getLogger("senior_control")
+    logger = logging.getLogger("vehicle_manager")
     previous = (logger.level, logger.propagate)
     leaves = [
-        logging.getLogger("senior_control.agent"),
-        logging.getLogger("senior_control.runtime.supervisor"),
+        logging.getLogger("vehicle_manager.agent"),
+        logging.getLogger("vehicle_manager.agent.supervisor"),
     ]
     leaf_states = [(leaf.level, leaf.propagate, leaf.disabled) for leaf in leaves]
     for leaf in leaves:
@@ -139,11 +139,13 @@ def test_metrics_labels_are_bounded() -> None:
 
 
 def test_cli_logging_config_restores_leaf_propagation_and_is_idempotent() -> None:
-    from vehicle_manager.observability import configure_logging
+    from vehicle_manager.observability import APPLICATION_LOG_NAMES, configure_logging
 
-    parent = logging.getLogger("senior_control")
-    leaf = logging.getLogger("senior_control.agent")
-    saved_parent = (list(parent.handlers), parent.level, parent.propagate, parent.disabled)
+    leaf = logging.getLogger("vehicle_manager.agent")
+    parents = [logging.getLogger(name) for name in APPLICATION_LOG_NAMES]
+    saved_parents = [
+        (list(item.handlers), item.level, item.propagate, item.disabled) for item in parents
+    ]
     saved_leaf = (leaf.level, leaf.propagate, leaf.disabled)
     output = io.StringIO()
     try:
@@ -159,5 +161,6 @@ def test_cli_logging_config_restores_leaf_propagation_and_is_idempotent() -> Non
         assert records[0]["operation_id"] == "op-1"
         assert SECRET not in output.getvalue()
     finally:
-        parent.handlers, parent.level, parent.propagate, parent.disabled = saved_parent
+        for item, saved in zip(parents, saved_parents, strict=True):
+            item.handlers, item.level, item.propagate, item.disabled = saved
         leaf.level, leaf.propagate, leaf.disabled = saved_leaf

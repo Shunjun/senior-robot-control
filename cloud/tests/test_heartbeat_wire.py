@@ -2,8 +2,8 @@ import json
 
 import pytest
 from cloud.limits import CloudLimits
-
-from senior_control.cloud.relay import Connection, Hub
+from cloud.relay import Connection
+from cloud.runtime_relay import Hub
 
 
 async def test_authenticated_heartbeat_echoes_epoch_and_nonce() -> None:
@@ -197,7 +197,7 @@ async def test_watcher_sleeps_until_current_evidence_deadline(monkeypatch):
     import time
     from types import SimpleNamespace
 
-    from senior_control.cloud.relay import _watch_heartbeat
+    from cloud.relay import _watch_heartbeat
 
     now = [10.0]
     monkeypatch.setattr(

@@ -14,17 +14,13 @@ from typing import Any, cast
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from senior_contracts.wire import ResponseEnvelope, serialize_envelope, validate_envelope
+from senior_motion_control.arbiter import Arbiter
+from senior_motion_control.manual_control import ManualIngress, MotionRuntimeReceiver
 from test_cloud import Cloud, cloud  # noqa: F401
+from vehicle_manager.settings.models import simulation_settings_profile
 
-from senior_control.agent.manual_control import ManualIngress, MotionRuntimeReceiver
-from senior_control.protocol import (
-    MotionRuntimeState,
-    ResponseEnvelope,
-    serialize_envelope,
-    validate_envelope,
-)
-from senior_control.safety.arbiter import Arbiter
-from senior_control.settings.models import simulation_settings_profile
+from vehicle_core.runtime_state import MotionRuntimeState
 
 
 @asynccontextmanager
@@ -33,7 +29,7 @@ async def ipc_pair(
     monkeypatch: pytest.MonkeyPatch,
 ) -> AsyncIterator[Any]:
     """Real length-framed IPC over a connected local pair; no bind/listener."""
-    from senior_control.runtime.ipc import IpcClient, IpcServer
+    from vehicle_core.ipc import IpcClient, IpcServer
 
     left, right = socket.socketpair()
     client_reader, client_writer = await asyncio.open_connection(sock=left)
@@ -215,18 +211,16 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from agent_fakes import FakeConnector, FakeHome, FakeMaps
-
-    from senior_control.agent.composition import SnapshotState, build_task_runtime
-    from senior_control.agent.dispatcher import StoreTaskPort
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.agent.main import Agent
-    from senior_control.agent.ports import IpcNavigation, IpcState, TaskAwareMotion
-    from senior_control.agent.snapshots import snapshot_envelope
-    from senior_control.settings.service import RuntimeGate, SettingsService
-    from senior_control.settings.store import SettingsStore
-    from senior_control.storage.database import Database
-    from senior_control.tasks.store import TaskStore
-    from senior_control.waypoints.store import WaypointStore
+    from vehicle_manager.agent.local_adapters import IpcNavigation, IpcState, TaskAwareMotion
+    from vehicle_manager.agent.production import SnapshotState, build_task_runtime
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.agent.request_bindings import StoreTaskPort
+    from vehicle_manager.agent.runtime_bindings import Agent
+    from vehicle_manager.agent.snapshots import snapshot_envelope
+    from vehicle_manager.settings.service import RuntimeGate, SettingsService
+    from vehicle_manager.settings.store import SettingsStore
+    from vehicle_manager.storage.bindings import Database
+    from vehicle_manager.storage.domain_bindings import TaskStore, WaypointStore
 
     monkeypatch.syspath_prepend(str(Path("ros2/src/senior_robot").resolve()))
     import importlib
@@ -351,11 +345,7 @@ async def test_real_authenticated_relay_agent_ipc_and_native_owner(
             raw = await server_agent.receive()
             assert raw is not None
             admitted = validate_envelope(raw, robot_id)
-            from senior_control.protocol import (
-                ManualIntentEnvelope,
-                RecoveryEnvelope,
-                SimpleEnvelope,
-            )
+            from senior_contracts.wire import ManualIntentEnvelope, RecoveryEnvelope, SimpleEnvelope
 
             assert isinstance(admitted, (ManualIntentEnvelope, RecoveryEnvelope, SimpleEnvelope))
             if admitted.type in {"control.acquire", "control.release", "drive.intent"}:
@@ -587,12 +577,12 @@ async def test_native_acquire_consumes_durable_task_retirement_before_ipc(
     import importlib
 
     from test_task_ownership import start
+    from vehicle_manager.agent.local_adapters import TaskAwareMotion
+    from vehicle_manager.settings.service import RuntimeGate, SettingsService
+    from vehicle_manager.settings.store import SettingsStore
+    from vehicle_manager.storage.bindings import Database
 
-    from senior_control.agent.ports import TaskAwareMotion
-    from senior_control.errors import DomainError, ErrorCode
-    from senior_control.settings.service import RuntimeGate, SettingsService
-    from senior_control.settings.store import SettingsStore
-    from senior_control.storage.database import Database
+    from vehicle_core.errors import DomainError, ErrorCode
 
     monkeypatch.syspath_prepend(str(Path("ros2/src/senior_robot").resolve()))
     AdapterCore = importlib.import_module("senior_robot.agent_adapter").AdapterCore
@@ -647,8 +637,8 @@ def test_missing_report_allows_prepare_without_fabricating_body_reference(node: 
 
 
 def test_simulation_policy_is_explicit_and_caps_requested_speeds() -> None:
-    from senior_control.agent.composition import AgentConfig
-    from senior_control.settings.models import DrivingSettings
+    from vehicle_manager.agent.production import AgentConfig
+    from vehicle_manager.settings.models import DrivingSettings
 
     policy = simulation_settings_profile()
     assert policy.driving_defaults.high_linear_mps == 25 / 18
@@ -688,12 +678,11 @@ async def test_t5_stop_during_feedback_retirement_cannot_auto_resume(
     from dataclasses import replace
     from datetime import timedelta
 
+    from senior_contracts.wire import RobotPosePayload
     from test_task_lifecycle_store import NOW
     from test_task_ownership import start
-
-    from senior_control.agent.ports import RuntimeState
-    from senior_control.protocol import RobotPosePayload
-    from senior_control.storage.database import Database
+    from vehicle_manager.agent.local_state import RuntimeState
+    from vehicle_manager.storage.bindings import Database
 
     async with Database(tmp_path / "stop-priority.db") as database:
         driver, executor, navigation, live, identity = await start(database)
@@ -736,8 +725,7 @@ async def test_native_websocket_connector_does_not_negotiate_old_motion_clock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import websockets.asyncio.client
-
-    from senior_control.agent.websocket import WebSocketConnector
+    from vehicle_manager.agent.production_bindings import WebSocketConnector
 
     sent: list[str] = []
 
@@ -764,8 +752,7 @@ async def test_native_websocket_connector_does_not_negotiate_old_motion_clock(
 
 async def test_relay_coalesced_intents_settle_owner_without_exhausting_pending() -> None:
     from cloud.limits import CloudLimits
-
-    from senior_control.cloud.relay import Hub
+    from cloud.runtime_relay import Hub
 
     hub = Hub(CloudLimits(outbox_frames=4))
     agent = hub.attach_agent("robot")
@@ -808,8 +795,7 @@ async def test_relay_coalesced_intents_settle_owner_without_exhausting_pending()
 @pytest.mark.parametrize("drop", ["release", "replace", "evict", "close"])
 async def test_relay_dropped_intent_settles_only_its_original_owner(drop: str) -> None:
     from cloud.limits import CloudLimits
-
-    from senior_control.cloud.relay import Hub
+    from cloud.runtime_relay import Hub
 
     hub = Hub(CloudLimits(outbox_frames=1))
     agent = hub.attach_agent("robot")
@@ -887,10 +873,9 @@ async def test_agent_receive_discards_replaced_intents_without_receipts(
         FakeTasks,
         until,
     )
-
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.agent.main import Agent
-    from senior_control.storage.database import Database
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.agent.runtime_bindings import Agent
+    from vehicle_manager.storage.bindings import Database
 
     async with Database(tmp_path / "queued.db") as database:
         journal = AgentJournal(database, robot_id="robot")
@@ -999,10 +984,9 @@ async def test_agent_queued_intent_keeps_original_300ms_cutoff(tmp_path):
         FakeState,
         FakeTasks,
     )
-
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.agent.main import Agent
-    from senior_control.storage.database import Database
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.agent.runtime_bindings import Agent
+    from vehicle_manager.storage.bindings import Database
 
     clock = SimpleNamespace(now=10.0)
     entered, released = asyncio.Event(), asyncio.Event()
@@ -1066,16 +1050,14 @@ async def test_heartbeat_window_keeps_manual_delivery_then_reconnect_retires_old
     from agent_fakes import FakeHome, FakeMaps, FakeState, FakeTasks, until
     from heartbeat_test_support import HeartbeatClock, RelaySocket, relay_hub
     from test_task_ownership import Navigation
-
-    from senior_control.agent import Agent
-    from senior_control.agent.composition import build_task_runtime
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.agent.ports import TaskAwareMotion
-    from senior_control.agent.websocket import WebSocketLink
-    from senior_control.settings.service import RuntimeGate, SettingsService
-    from senior_control.settings.store import SettingsStore
-    from senior_control.storage.database import Database
-    from senior_control.tasks.store import TaskStore
+    from vehicle_manager.agent.local_adapters import TaskAwareMotion
+    from vehicle_manager.agent.production import build_task_runtime
+    from vehicle_manager.agent.production_bindings import AgentJournal, WebSocketLink
+    from vehicle_manager.agent.runtime_bindings import Agent
+    from vehicle_manager.settings.service import RuntimeGate, SettingsService
+    from vehicle_manager.settings.store import SettingsStore
+    from vehicle_manager.storage.bindings import Database
+    from vehicle_manager.storage.domain_bindings import TaskStore
 
     clock = HeartbeatClock(monkeypatch)
     hub = relay_hub(monkeypatch, clock)

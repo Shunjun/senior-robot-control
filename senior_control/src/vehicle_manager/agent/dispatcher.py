@@ -26,7 +26,7 @@ from vehicle_manager.tasks.schedule import Schedule
 from vehicle_manager.tasks.store import TaskStore
 from vehicle_manager.waypoints.store import WaypointStore
 
-logger = logging.getLogger("senior_control.agent")
+logger = logging.getLogger("vehicle_manager.agent")
 
 _NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$")
 

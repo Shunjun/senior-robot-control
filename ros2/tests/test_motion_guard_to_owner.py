@@ -13,12 +13,12 @@ from pathlib import Path
 from types import SimpleNamespace as N
 
 from control_process_test_support import capture_inputs
+from senior_motion_control.arbiter import FinalCommandFence
 from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
 from test_motion_core_chain import feed
 from test_motion_core_handoff import Publisher, core  # noqa: F401
 
-from senior_control.models import Velocity
-from senior_control.safety.arbiter import FinalCommandFence
+from vehicle_core.values import Velocity
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -89,7 +89,7 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
         # The same production handler also consumes a real encoded intent. This
         # follows a new generation's neutral manual barrier, not navigation
         # resuming by itself.
-        from senior_control.motion.state_machine import RecoveryObservation
+        from senior_motion_control.state_machine import RecoveryObservation
 
         for i in range(5):
             core.machine.observe(

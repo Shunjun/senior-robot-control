@@ -5,7 +5,7 @@ import pytest
 from vehicle_manager.storage.database import Database
 from vehicle_manager.storage.migrations import Migration, migrate
 
-from senior_control.runtime.diagnostics import DiagnosticLock
+from vehicle_core.diagnostics import DiagnosticLock
 
 
 @pytest.fixture(params=["vehicle", "cloud"])

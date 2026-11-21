@@ -6,15 +6,15 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from senior_contracts.wire import serialize_envelope
+from senior_motion_control.manual_control import MotionRuntimeReceiver
 from test_cloud import cloud  # noqa: F401
 from test_manual_wire import ipc_pair, node, runtime  # noqa: F401
+from vehicle_manager.agent.local_adapters import IpcState
+from vehicle_manager.agent.production import SnapshotState
+from vehicle_manager.agent.snapshots import RobotSnapshot, snapshot_envelope
 
-from senior_control.agent.composition import SnapshotState
-from senior_control.agent.manual_control import MotionRuntimeReceiver
-from senior_control.agent.ports import IpcState
-from senior_control.agent.snapshots import RobotSnapshot, snapshot_envelope
-from senior_control.errors import DomainError
-from senior_control.protocol import serialize_envelope
+from vehicle_core.errors import DomainError
 
 
 async def test_reporting_without_motion_evidence(node, cloud, monkeypatch):  # noqa: F811
@@ -135,7 +135,7 @@ async def test_reporting_without_motion_evidence(node, cloud, monkeypatch):  # n
 async def test_ipc_failure_still_reports():
     tasks = SimpleNamespace(snapshot_tasks=AsyncMock(return_value=((), frozenset())))
     waypoints = SimpleNamespace(home=AsyncMock(return_value=None))
-    from senior_control.errors import ErrorCode
+    from vehicle_core.errors import ErrorCode
 
     state = SimpleNamespace(read=AsyncMock(side_effect=DomainError(ErrorCode.UNAVAILABLE, "lost")))
     snapshots = SnapshotState(state, tasks, waypoints)
@@ -145,7 +145,7 @@ async def test_ipc_failure_still_reports():
 
 
 def test_report_heartbeat_does_not_extend_motion_evidence():
-    from senior_control.agent.manual_control import vehicle_frame
+    from senior_motion_control.manual_control import vehicle_frame
 
     sample = runtime(10, evidence_deadline_steady=10.05)
     frame = vehicle_frame(

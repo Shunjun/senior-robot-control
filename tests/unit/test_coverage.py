@@ -3,11 +3,11 @@ import math
 from pathlib import Path
 
 import pytest
+from senior_perception.coverage import SweptRegion, supports
+from senior_perception.self_filter import ScanObservation, filter_self
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
-from senior_control.safety.coverage import SweptRegion, supports
-from senior_control.safety.self_filter import ScanObservation, filter_self
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Pose2D
 
 
 def sweep_region(vertices):
@@ -116,10 +116,9 @@ def test_actual_fortress_full_circle_wrap_is_observed():
 
 
 def test_full_fan_fast_path_equals_union_of_real_beam_triangles():
+    from senior_perception.coverage import _visible_areas
     from shapely.geometry import Point, Polygon
     from shapely.ops import unary_union
-
-    from senior_control.safety.coverage import _visible_areas
 
     scan, obs, sweep = _captured_fortress_seam()
     pairs = [*zip(obs.rays, obs.rays[1:], strict=False), (obs.rays[-1], obs.rays[0])]

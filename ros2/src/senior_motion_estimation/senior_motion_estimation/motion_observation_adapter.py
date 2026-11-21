@@ -12,8 +12,8 @@ from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 from uuid import uuid4
 
-from senior_control.motion.source_modes import SourceMode
-from senior_control.vision.raw_capture import capture_from_message
+from senior_perception.vision.raw_capture import capture_from_message
+
 from senior_motion_estimation.fusion import FusionConfig, NumericalFusion
 from senior_motion_estimation.observations import (
     AdmissionConfig,
@@ -30,6 +30,7 @@ from senior_motion_estimation.sample_types import (
     physical_support,
 )
 from senior_motion_estimation.source_admission import AdmissionOwner
+from senior_motion_estimation.source_modes import SourceMode
 from senior_motion_estimation.temporal import TemporalConfig, TemporalResolver
 from vehicle_core.sample_time import SampleTime
 from vehicle_core.values import Pose2D
@@ -677,7 +678,7 @@ class NativeObservationRosBridge:
 
         from rclpy.time import Time
 
-        from senior_control.motion.kinematics import compose, inverse
+        from senior_motion_estimation.kinematics import compose, inverse
 
         transform = self.node._tf.lookup_transform(
             "base_link", msg.child_frame_id, Time.from_msg(msg.header.stamp)

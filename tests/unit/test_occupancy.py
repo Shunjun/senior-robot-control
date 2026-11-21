@@ -3,17 +3,18 @@
 import math
 from dataclasses import fields
 
-from senior_control.mapping import (
+from senior_mapping.evidence import (
     CellEvidence,
     MapDelta,
     MappingObservation,
-    OccupancyMaintainer,
     OccupancySnapshot,
     OccupancyThresholds,
     RangeRay,
     SceneHit,
 )
-from senior_control.models import MapRef, Pose2D
+from senior_mapping.occupancy import OccupancyMaintainer
+
+from vehicle_core.values import MapRef, Pose2D
 
 CELL_SIZE = 0.5
 ORIGIN = Pose2D(0.25, 0.25, 0.0)

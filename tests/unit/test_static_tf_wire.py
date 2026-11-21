@@ -1,7 +1,7 @@
 from types import SimpleNamespace as NS
 
-from senior_control.vision.static_tf_binding import StaticBinding
-from senior_control.vision.static_tf_wire import observe_verified_tf
+from senior_perception.vision.static_tf_binding import StaticBinding
+from senior_perception.vision.static_tf_wire import observe_verified_tf
 
 
 def ns(value):
@@ -49,7 +49,7 @@ def test_late_first_receipt_admission_status_keeps_latest_sequence():
 def test_retired_source_invalid_status_does_not_revoke_successor():
     from dataclasses import replace
 
-    from senior_control.vision.static_tf_binding import Edge, Receipt
+    from senior_perception.vision.static_tf_binding import Edge, Receipt
 
     binding = StaticBinding("base_link", "camera")
     edge = Edge("base_link", "camera", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
@@ -68,7 +68,7 @@ def test_retired_source_invalid_status_does_not_revoke_successor():
 def test_malformed_queued_retired_source_does_not_revoke_successor():
     from dataclasses import replace
 
-    from senior_control.vision.static_tf_binding import Edge, Receipt
+    from senior_perception.vision.static_tf_binding import Edge, Receipt
 
     binding = StaticBinding("base_link", "camera")
     edge = Edge("base_link", "camera", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))

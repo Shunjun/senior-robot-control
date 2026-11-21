@@ -17,8 +17,7 @@ import asyncio
 import sys
 
 import pytest
-
-from senior_control.runtime.supervisor import AuthRejected, Supervisor
+from vehicle_manager.agent.supervisor import AuthRejected, Supervisor
 
 
 async def settle(seconds: float) -> None:

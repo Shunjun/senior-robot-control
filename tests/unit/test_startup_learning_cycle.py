@@ -2,7 +2,7 @@
 
 from test_startup_learning_chain import rig  # noqa: F401
 
-from senior_control.models import Velocity
+from vehicle_core.values import Velocity
 
 
 def test_complete_collection_without_reference_points_reports_zero_honestly(rig):  # noqa: F811

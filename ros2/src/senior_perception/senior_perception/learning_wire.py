@@ -3,9 +3,8 @@
 from typing import Annotated, Literal, TypeAlias
 
 from pydantic import Field, TypeAdapter, model_validator
+from senior_contracts.wire import LearningStartPayload, LearningStatusPayload
 
-from senior_control.protocol import LearningStartPayload, LearningStatusPayload
-from senior_control.vision.raw_capture import RawCaptureHeader
 from senior_perception.learning_record import (
     FrozenFact,
     LearningGeometry,
@@ -15,6 +14,7 @@ from senior_perception.learning_record import (
     ProgramManifest,
     RunId,
 )
+from senior_perception.vision.raw_capture import RawCaptureHeader
 
 
 class Attach(FrozenFact):

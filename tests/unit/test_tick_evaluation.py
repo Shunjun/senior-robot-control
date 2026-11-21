@@ -8,15 +8,15 @@ from types import SimpleNamespace as N
 
 import pytest
 from control_process_test_support import LocalWorker, publish_inputs
+from senior_motion_control.constraint_worker import ConstraintScheduler
+from senior_motion_control.controller import MotionController
 from sensor_time_test_support import sample_time
 from test_constraint_scheduling import Worker
 from test_directional_constraints import engine, scene, snapshot
 from test_motion_controller import config, feedback
 from test_reference_nanosecond_boundary import replay as boundary_fixture
 
-from senior_control.models import Pose2D, Velocity
-from senior_control.motion.constraint_worker import ConstraintScheduler
-from senior_control.motion.controller import MotionController
+from vehicle_core.values import Pose2D, Velocity
 
 
 @pytest.fixture
@@ -373,9 +373,8 @@ def test_real_core_runtime_normalizes_expired_scheduler_permit(replay, monkeypat
 def test_actual_output_cycle_retains_expired_linear_motion_and_starts_zero_response(
     replay, perception_failure
 ):
+    from senior_motion_estimation.observations import Source
     from test_unified_motion_runtime import point
-
-    from senior_control.motion.observations import Source
 
     core, clock = replay.core, replay.clock
 

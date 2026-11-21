@@ -2,13 +2,13 @@ from types import SimpleNamespace as N
 
 import pytest
 from control_process_test_support import generic_motion_profile
+from senior_motion_estimation.observations import Frame, Source, SourceStatus
+from senior_motion_estimation.sample_types import PointObservation
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from sensor_time_test_support import sample_time
 
-from senior_control.models import Pose2D
-from senior_control.motion.observations import Frame, Source, SourceStatus
-from senior_control.motion.sample_types import PointObservation
-from senior_control.runtime.diagnostics import RuntimeDiagnostics
+from vehicle_core.diagnostics import RuntimeDiagnostics
+from vehicle_core.values import Pose2D
 
 
 def point(source, stamp, received, values, sequence=1, *, measurement_steady=None):
@@ -74,9 +74,10 @@ def test_leaf_bridge_local_sink_does_not_run_old_numerical_qualification():
 
 
 def test_older_but_live_remaining_source_survives_legacy_controller_receipt_frontier():
-    from senior_control.models import Velocity
-    from senior_control.motion.constraints import ConstraintConfig, ConstraintEngine
-    from senior_control.motion.controller import Feedback, MotionController
+    from senior_motion_control.constraints import ConstraintConfig, ConstraintEngine
+    from senior_motion_control.controller import Feedback, MotionController
+
+    from vehicle_core.values import Velocity
 
     p = generic_motion_profile()
     c = MotionController(

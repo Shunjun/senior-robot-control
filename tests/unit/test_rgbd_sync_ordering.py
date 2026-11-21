@@ -3,9 +3,10 @@
 from types import SimpleNamespace as N
 
 import pytest
+from senior_perception.vision.synchronizer import DepthFrame, RgbdSynchronizer
 
-from senior_control.runtime.diagnostics import RuntimeDiagnostics
-from senior_control.vision.synchronizer import DepthFrame, ImageFrame, RgbdSynchronizer
+from vehicle_core.diagnostics import RuntimeDiagnostics
+from vehicle_core.image_frame import ImageFrame
 
 
 def rgb(stamp):

@@ -1,6 +1,6 @@
 """Retired wall-clock future queues have no runtime or compatibility branch."""
 
-from senior_control.motion.source_fences import SourceEpochFence
+from senior_motion_control.source_fences import SourceEpochFence
 
 
 def test_replaced_deferred_epoch_cannot_revive_or_exhaustion_be_forgotten():

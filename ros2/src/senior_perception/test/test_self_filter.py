@@ -2,8 +2,8 @@ import math
 
 from senior_perception.self_filter import ScanObservation, filter_self
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Pose2D
 
 
 def scan(ranges, *, pose=None):

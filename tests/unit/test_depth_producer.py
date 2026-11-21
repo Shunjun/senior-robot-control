@@ -8,7 +8,11 @@ import pytest
 
 
 def inputs():
-    from senior_control.vision.depth_runtime import CameraInfoFrame, DepthPacket, OpticalTransform
+    from senior_perception.vision.depth_runtime import (
+        CameraInfoFrame,
+        DepthPacket,
+        OpticalTransform,
+    )
 
     packet = DepthPacket(
         stamp_ns=1_000_000_001,
@@ -61,7 +65,7 @@ def inputs():
 
 
 def test_depth_producer_preserves_original_identity_and_low_hits():
-    from senior_control.vision.depth_runtime import DepthGeometrySettings, produce_depth_evidence
+    from senior_perception.vision.depth_runtime import DepthGeometrySettings, produce_depth_evidence
 
     packet, info, tf = inputs()
     packet = replace(packet, stamp_ns=0, received_ros_ns=0)
@@ -92,7 +96,7 @@ def test_depth_producer_preserves_original_identity_and_low_hits():
 
 @pytest.mark.parametrize("change", ["wrong_frame", "skew", "distortion", "projection", "tf"])
 def test_depth_producer_rejects_unqualified_calibration_or_tf(change):
-    from senior_control.vision.depth_runtime import DepthGeometrySettings, produce_depth_evidence
+    from senior_perception.vision.depth_runtime import DepthGeometrySettings, produce_depth_evidence
 
     packet, info, tf = inputs()
     if change == "wrong_frame":
@@ -122,7 +126,7 @@ def test_depth_producer_rejects_unqualified_calibration_or_tf(change):
 
 
 def test_buffer_pairs_exact_stamps_across_dropped_frames_and_keeps_receipts():
-    from senior_control.vision.depth_runtime import DepthPairBuffer
+    from senior_perception.vision.depth_runtime import DepthPairBuffer
 
     packet, info, _ = inputs()
     buffer = DepthPairBuffer(max_age_ms=500, pair_wait_ms=100)
@@ -137,7 +141,7 @@ def test_buffer_pairs_exact_stamps_across_dropped_frames_and_keeps_receipts():
 
 
 def test_buffer_ros_correction_keeps_pair_and_overflow_is_explicit():
-    from senior_control.vision.depth_runtime import DepthPairBuffer
+    from senior_perception.vision.depth_runtime import DepthPairBuffer
 
     packet, info, _ = inputs()
     buffer = DepthPairBuffer(max_age_ms=500, pair_wait_ms=100)
@@ -167,7 +171,7 @@ def test_buffer_ros_correction_keeps_pair_and_overflow_is_explicit():
     [((0.0, 0.0, 0.0, 1.0), (0.0, -0.25, 1.0)), ((1.0, 0.0, 0.0, 0.0), (0.0, 0.25, -1.0))],
 )
 def test_singular_optical_transforms_project_samples_without_gimbal_lock(quaternion, expected):
-    from senior_control.vision.depth_runtime import DepthGeometrySettings, produce_depth_evidence
+    from senior_perception.vision.depth_runtime import DepthGeometrySettings, produce_depth_evidence
 
     packet, info, tf = inputs()
     tf = replace(tf, translation=(0.0, 0.0, 0.0), rotation_xyzw=quaternion)
@@ -193,7 +197,7 @@ def test_optical_rotation_matches_quaternion_oracle_near_both_pitch_singularitie
     import math
     import random
 
-    from senior_control.vision.depth import _Rotation, body_extrinsic_from_optical_tf
+    from senior_perception.vision.depth import _Rotation, body_extrinsic_from_optical_tf
 
     def multiply(a, b):
         x, y, z, w = a

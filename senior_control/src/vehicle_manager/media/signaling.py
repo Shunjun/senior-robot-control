@@ -14,7 +14,7 @@ from senior_contracts.wire import (
 
 from vehicle_manager.media.stream import SessionDescription, VideoError, VideoLimits, VideoSession
 
-logger = logging.getLogger("senior_control.vision.signaling")
+logger = logging.getLogger("vehicle_manager.agent.runtime_bindings")
 
 
 class VideoSignaling:

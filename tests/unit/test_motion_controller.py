@@ -3,13 +3,13 @@
 from dataclasses import replace
 
 import pytest
+from senior_motion_control.controller import ControllerConfig, Feedback, MotionController
+from senior_motion_estimation.source_modes import SourceMode
 from sensor_time_test_support import sample_time
 from shapely.geometry import Point
 from test_directional_constraints import engine, snapshot
 
-from senior_control.models import Velocity
-from senior_control.motion.controller import ControllerConfig, Feedback, MotionController
-from senior_control.motion.source_modes import SourceMode
+from vehicle_core.values import Velocity
 
 
 def config():
@@ -405,10 +405,10 @@ def test_slip_does_not_accumulate_integral_to_chase_body_speed():
 
 
 def test_t3_partial_fusion_to_real_t4_to_controller_wheel_limited():
+    from senior_motion_control.contracts import BodyMotion
+    from senior_motion_estimation.observations import Source
     from test_motion_temporal import point
 
-    from senior_control.motion.contracts import BodyMotion
-    from senior_control.motion.observations import Source
     from tools.motion_fusion_replay import ReplayChain, replay_policy
 
     policy = replay_policy()
@@ -523,9 +523,11 @@ def test_latest_collision_risk_outranks_exhausted_brake_supervision():
 
 
 def test_controller_and_reducer_estop_reset_never_restart_old_manual_target():
-    from senior_control.motion.contracts import MotionEvent, MotionMode
-    from senior_control.motion.contracts import MotionEventKind as K
-    from senior_control.motion.state_machine import MotionStateMachine, RecoveryObservation
+    from senior_motion_control.contracts import MotionEvent
+    from senior_motion_control.contracts import MotionEventKind as K
+    from senior_motion_control.state_machine import MotionStateMachine, RecoveryObservation
+
+    from vehicle_core.motion_state import MotionMode
 
     c = MotionController(engine(), config(), Velocity(0.3, 0), Velocity(0, 0))
     m = MotionStateMachine()
@@ -634,7 +636,7 @@ def test_rate_saturation_freezes_integral_instead_of_winding_up_at_start():
 
 
 def test_combined_wheel_limit_reaches_curvature_preserving_target_without_tick_clipping():
-    from senior_control.models import BodyTwist
+    from vehicle_core.values import BodyTwist
 
     cfg = replace(config(), kp=Velocity(0, 0), ki=Velocity(0, 0), wheel_speed_mps=0.6)
     c = MotionController(engine(), cfg, Velocity(0, 0), Velocity(0, 0))

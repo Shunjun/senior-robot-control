@@ -230,7 +230,7 @@ sudo senior-robot start --control-dir /home/wheeltec/ros2_shared_dir/senior-cont
 sudo senior-robot status --control-dir /home/wheeltec/ros2_shared_dir/senior-control
 ```
 
-服务按目录属主身份，以本机 `<project_dir>/.venv/bin/python` 执行历史命名的 `senior_control.docker_start_helper run` 联合入口，并使用 `KillMode=mixed`，以便按顺序关闭子进程。这个模块名不表示 native 模式需要 Docker。
+服务按目录属主身份，以本机 `<project_dir>/.venv/bin/python` 执行历史命名的 `senior_robot.service_runtime run` 联合入口，并使用 `KillMode=mixed`，以便按顺序关闭子进程。这个模块名不表示 native 模式需要 Docker。
 
 ### 两种模式共有的行为
 
@@ -296,7 +296,7 @@ Agent 会校验完整小写 SHA-256、地图包内容与来源车辆。只读包
 
 ## 源码依据与验收边界
 
-入口与统一目录解析见 [cli.py](../../src/senior_control/cli.py)，生成 unit / 挂载推导见 [vehicle_deploy.py](../../src/senior_control/vehicle_deploy.py)，联合生命周期、身份和 socket 回收见 [docker_start_helper.py](../../src/senior_control/docker_start_helper.py)。本文是部署操作说明；目标 Linux、厂商 underlay、权限映射、systemd 启停、云连接和整车安全/运动链仍须现场分项验收，不能从静态源码或成功配对推导通过。
+入口与统一目录解析见 [cli.py](../../senior_control/src/vehicle_manager/operator_cli.py)，生成 unit / 挂载推导见 [vehicle_deploy.py](../../senior_control/src/vehicle_manager/platform_deployment.py)，联合生命周期、身份和 socket 回收见 [docker_start_helper.py](../../ros2/src/senior_robot/senior_robot/service_runtime.py)。本文是部署操作说明；目标 Linux、厂商 underlay、权限映射、systemd 启停、云连接和整车安全/运动链仍须现场分项验收，不能从静态源码或成功配对推导通过。
 
 升级时从自定义配置中移除已退役的 `estop_state` / `safety_state_path` 参数，并从自定义 motion profile 移除 `hardware_estop` 配置块；新版本不保留这些配置的兼容读取。现场旧 `estop-state.json` 保留原样，不作为启动输入。
 

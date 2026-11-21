@@ -9,10 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from senior_control.agent.snapshots import LiveState
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, Pose2D
-from senior_control.protocol import (
+from senior_contracts.wire import (
     EmptyPayload,
     Envelope,
     ManualIntentEnvelope,
@@ -22,7 +19,11 @@ from senior_control.protocol import (
     ResponseEnvelope,
     SimpleEnvelope,
 )
-from senior_control.waypoints import Waypoint
+from vehicle_manager.agent.snapshots import LiveState
+from vehicle_manager.storage.domain_bindings import Waypoint
+
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, Pose2D
 
 ROBOT = "robot-1"
 MAP = MapRef("map-1", 3)

@@ -7,12 +7,12 @@ from learning_test_support import (  # noqa: F401
     startup_for,
     write_geometry_record,
 )
+from senior_perception.self_filter import filter_self
+from senior_perception.self_learning import SelfReturnModel
 from senior_perception.startup_learning import StartupLearning
 from test_startup_learning_feasibility import BOUNDARY, forward_scan
 
-from senior_control.config import DeviceProfile
-from senior_control.safety.self_filter import filter_self
-from senior_control.safety.self_learning import SelfReturnModel
+from vehicle_core.config import DeviceProfile
 
 
 def observation(distance):
@@ -85,7 +85,7 @@ def test_program_start_context_is_explicit_and_run_owned(tmp_path):
 
 
 def test_stable_connected_returns_do_not_require_world_hypothesis():
-    from senior_control.safety.self_filter import RayEvidence
+    from senior_perception.self_filter import RayEvidence
 
     m = SelfReturnModel(BOUNDARY)
     base = observation(0.15)
@@ -105,7 +105,7 @@ def test_outside_following_object_and_device_removal_do_not_leave_a_mask():
 
 
 def test_collision_footprint_preserves_actual_physical_polygon():
-    from senior_control.motion.constraints import Footprint
+    from senior_motion_control.constraints import Footprint
 
     polygon = ((-0.3, -0.2), (0.4, -0.2), (0.4, 0.2), (-0.3, 0.2))
     shape = Footprint(0.6, 0.4, polygon)
@@ -136,12 +136,9 @@ def test_stable_body_return_needs_no_world_free_space():
 
 def test_matcher_features_exclude_body_points_without_changing_raw_obstacles(tmp_path):
     from learning_test_support import geometry
-
-    from senior_control.motion.learning_record import LearnedCatalog, LearningAnchor
-    from senior_control.safety.external_motion_features import (
-        external_feature_ranges,
-    )
-    from senior_control.safety.learning_view import LearningFilterView
+    from senior_perception.external_motion_features import external_feature_ranges
+    from senior_perception.learning_record import LearnedCatalog, LearningAnchor
+    from senior_perception.learning_view import LearningFilterView
 
     raw = observation(0.15)
     view = LearningFilterView(

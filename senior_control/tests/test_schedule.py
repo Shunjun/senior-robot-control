@@ -15,7 +15,7 @@ from vehicle_manager.tasks.models import (
 from vehicle_manager.tasks.runner import TaskRunner
 from vehicle_manager.tasks.schedule import Schedule
 
-from senior_control.models import MapRef
+from vehicle_core.values import MapRef
 
 MAP = MapRef("yard", 1)
 

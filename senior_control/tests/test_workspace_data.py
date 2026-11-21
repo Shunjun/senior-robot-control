@@ -7,14 +7,8 @@ from typing import Any
 
 import pytest
 from cloud.limits import CloudLimits
-from senior_mapping.workspace import WorkspaceGrid, WorkspaceMap
-
-from senior_control.agent.dispatcher import StoreTaskPort
-from senior_control.agent.workspace import WorkspaceReader
-from senior_control.cloud.relay import Hub
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, Pose2D
-from senior_control.protocol import (
+from cloud.runtime_relay import Hub
+from senior_contracts.wire import (
     MAX_MESSAGE_BYTES,
     ResponseEnvelope,
     ResponsePayload,
@@ -22,10 +16,17 @@ from senior_control.protocol import (
     serialize_envelope,
     validate_envelope,
 )
-from senior_control.runtime.ipc import MAX_FRAME, _encode
-from senior_control.storage.database import Database
-from senior_control.tasks import Schedule, TaskDefinition, TaskStore
-from senior_control.waypoints.store import WaypointStore
+from senior_mapping.workspace import WorkspaceGrid, WorkspaceMap
+from vehicle_manager.agent.exported_workspace import WorkspaceReader
+from vehicle_manager.agent.request_bindings import StoreTaskPort
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import TaskStore, WaypointStore
+from vehicle_manager.tasks.models import TaskDefinition
+from vehicle_manager.tasks.schedule import Schedule
+
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.ipc import MAX_FRAME, _encode
+from vehicle_core.values import MapRef, Pose2D
 
 REF = MapRef("active", 2)
 

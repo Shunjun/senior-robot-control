@@ -16,7 +16,7 @@ from typing import Literal, NamedTuple
 
 import yaml
 
-from senior_control.config import DeviceProfile
+from vehicle_core.config import DeviceProfile
 
 Status = Literal["passed", "failed", "not_run"]
 

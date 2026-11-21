@@ -5,12 +5,11 @@ from dataclasses import replace
 
 import pytest
 from learning_test_support import TestRun, bind_core, geometry, learning_runs, save_completed  # noqa: F401
+from senior_perception.self_filter import RayEvidence
+from senior_perception.self_learning import SelfReturnModel
 from test_motion_core_handoff import core  # noqa: F401
 from test_startup_learning import side_observation
 from test_startup_learning_feasibility import BOUNDARY
-
-from senior_control.safety.self_filter import RayEvidence
-from senior_control.safety.self_learning import SelfReturnModel
 
 
 def cloud(points):

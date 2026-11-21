@@ -6,10 +6,9 @@ from datetime import timedelta
 import pytest
 from test_task_lifecycle_store import NOW
 from test_task_ownership import Navigation, start
-
-from senior_control.agent.composition import build_task_runtime
-from senior_control.storage.database import Database
-from senior_control.tasks.store import TaskStore
+from vehicle_manager.agent.production import build_task_runtime
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import TaskStore
 
 
 async def prepare_terminal(database):

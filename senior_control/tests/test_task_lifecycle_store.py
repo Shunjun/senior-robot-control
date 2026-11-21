@@ -8,6 +8,9 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import TaskStore
+from vehicle_manager.tasks.lifecycle import Command, Context, Event, EventKind
 from vehicle_manager.tasks.lifecycle_store import (
     LifecycleStore,
     RequestConflict,
@@ -15,13 +18,10 @@ from vehicle_manager.tasks.lifecycle_store import (
     VersionConflict,
 )
 from vehicle_manager.tasks.models import TaskDefinition
+from vehicle_manager.tasks.schedule import Schedule
 
-from senior_control.errors import DomainError
-from senior_control.models import MapRef
-from senior_control.storage.database import Database
-from senior_control.tasks.lifecycle import Command, Context, Event, EventKind
-from senior_control.tasks.schedule import Schedule
-from senior_control.tasks.store import TaskStore
+from vehicle_core.errors import DomainError
+from vehicle_core.values import MapRef
 
 NOW = datetime(2026, 11, 13, tzinfo=timezone.utc)
 CONTEXT = Context(True, True, "pose", "map")
@@ -423,9 +423,9 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
-from senior_control.storage.database import Database
-from senior_control.tasks.store import TaskStore
-from senior_control.tasks.lifecycle import Command, Context
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import TaskStore
+from vehicle_manager.tasks.lifecycle import Command, Context
 from vehicle_manager.tasks.lifecycle_store import LifecycleStore
 async def main():
     async with Database(Path(sys.argv[1])) as database:

@@ -2,9 +2,8 @@ import json
 import time
 
 from cloud.limits import CloudLimits
-
-from senior_control.cloud.relay import Hub
-from senior_control.protocol import validate_frame
+from cloud.runtime_relay import Hub
+from senior_contracts.wire import validate_frame
 
 
 def frame(kind: str, seq: int, payload: dict | None = None, *, epoch: int = 1) -> bytes:

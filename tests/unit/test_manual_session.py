@@ -3,9 +3,8 @@
 from dataclasses import replace
 
 import pytest
-
-from senior_control.motion.contracts import ManualIntent
-from senior_control.motion.manual_session import ManualSession
+from senior_motion_control.contracts import ManualIntent
+from senior_motion_control.manual_session import ManualSession
 
 
 def intent(*, gesture: int = 1, sequence: int = 1) -> ManualIntent:

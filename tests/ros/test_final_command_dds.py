@@ -12,12 +12,12 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from senior_contracts.wire import EmptyPayload, SimpleEnvelope
+from senior_motion_control.contracts import ManualIntent
+from senior_motion_control.manual_control import ManualIngress
+from vehicle_manager.settings.models import DrivingSettings
 
-from senior_control.agent.manual_control import ManualIngress
-from senior_control.models import Velocity
-from senior_control.motion.contracts import ManualIntent
-from senior_control.protocol import EmptyPayload, SimpleEnvelope
-from senior_control.settings.models import DrivingSettings
+from vehicle_core.values import Velocity
 
 COMMAND_TTL_S = 3.0  # Test-only seconds: keep discovery longer than a 300ms command.
 COMMAND_TTL_MS = 3000.0

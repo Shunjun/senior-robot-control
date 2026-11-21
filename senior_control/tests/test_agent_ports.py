@@ -2,10 +2,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from vehicle_manager.agent.local_adapters import IpcMapPort
 
-from senior_control.agent.ports import IpcMapPort
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef
 
 
 class UnsupportedIpc:
@@ -21,7 +21,7 @@ async def test_missing_map_consumer_is_explicitly_unavailable(tmp_path: Path) ->
 
 
 async def test_missing_state_consumer_reports_unavailable() -> None:
-    from senior_control.agent.ports import IpcState
+    from vehicle_manager.agent.local_adapters import IpcState
 
     state = IpcState(UnsupportedIpc())
     with pytest.raises(DomainError) as caught:
@@ -30,9 +30,9 @@ async def test_missing_state_consumer_reports_unavailable() -> None:
 
 
 async def test_home_set_requires_real_localization(tmp_path: Path) -> None:
-    from senior_control.agent.ports import IpcHomePort
-    from senior_control.storage.database import Database
-    from senior_control.waypoints.store import WaypointStore
+    from vehicle_manager.agent.local_adapters import IpcHomePort
+    from vehicle_manager.storage.bindings import Database
+    from vehicle_manager.storage.domain_bindings import WaypointStore
 
     async with Database(tmp_path / "robot.db") as database:
         store = WaypointStore(database, robot_id="robot-a")
@@ -47,9 +47,9 @@ async def test_home_set_requires_real_localization(tmp_path: Path) -> None:
 async def test_legacy_ipc_pose_without_reference_generation_cannot_set_home(tmp_path: Path) -> None:
     import time
 
-    from senior_control.agent.ports import IpcHomePort
-    from senior_control.storage.database import Database
-    from senior_control.waypoints.store import WaypointStore
+    from vehicle_manager.agent.local_adapters import IpcHomePort
+    from vehicle_manager.storage.bindings import Database
+    from vehicle_manager.storage.domain_bindings import WaypointStore
 
     class LegacyPose:
         async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
@@ -96,8 +96,8 @@ async def test_legacy_ipc_pose_without_reference_generation_cannot_set_home(tmp_
 async def test_stop_uses_an_independent_motion_ipc_client() -> None:
     from unittest.mock import AsyncMock
 
-    from senior_control.agent.connection import IpcMotion
-    from senior_control.protocol import SimpleEnvelope
+    from senior_contracts.wire import SimpleEnvelope
+    from vehicle_manager.agent.local_adapters import IpcMotion
 
     motion_ipc = AsyncMock()
     safety_ipc = AsyncMock()
@@ -122,10 +122,11 @@ async def test_stop_uses_an_independent_motion_ipc_client() -> None:
 async def test_fresh_generic_reference_can_set_home_without_environment_permission(tmp_path: Path):
     import time
 
-    from senior_control.agent.ports import IpcHomePort
-    from senior_control.models import Pose2D
-    from senior_control.storage.database import Database
-    from senior_control.waypoints.store import WaypointStore
+    from vehicle_manager.agent.local_adapters import IpcHomePort
+    from vehicle_manager.storage.bindings import Database
+    from vehicle_manager.storage.domain_bindings import WaypointStore
+
+    from vehicle_core.values import Pose2D
 
     sampled = time.monotonic()
 
@@ -173,8 +174,8 @@ async def test_fresh_generic_reference_can_set_home_without_environment_permissi
 
 
 async def test_learning_uses_regular_request_lane_with_original_deadline_and_typed_receipt():
-    from senior_control.agent.connection import IpcMotion
-    from senior_control.protocol import LearningStartEnvelope
+    from senior_contracts.wire import LearningStartEnvelope
+    from vehicle_manager.agent.local_adapters import IpcMotion
 
     calls = []
 
@@ -212,9 +213,8 @@ async def test_learning_uses_regular_request_lane_with_original_deadline_and_typ
 
 
 async def test_ipc_grid_id_is_optional_and_does_not_grant_localization():
+    from vehicle_manager.agent.local_adapters import IpcState
     from vehicle_manager.agent.local_state import StateReply
-
-    from senior_control.agent.ports import IpcState
 
     raw = {
         "v": 1,

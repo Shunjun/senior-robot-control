@@ -69,14 +69,14 @@ def test_old_allowed_actions_does_not_gate_prepare(node):
 async def test_limited_action_does_not_open_settings_or_navigation(tmp_path, monkeypatch):
     from types import SimpleNamespace as N
 
-    from senior_control.agent.ports import RuntimeState
-    from senior_control.agent.settings_wire import SettingsRuntime
-    from senior_control.settings.models import SettingsRequest, simulation_settings_profile
-    from senior_control.settings.service import RuntimeGate, SettingsService
-    from senior_control.settings.store import SettingsStore
-    from senior_control.storage.database import Database
+    from vehicle_manager.agent.local_state import RuntimeState
+    from vehicle_manager.agent.production_bindings import SettingsRuntime
+    from vehicle_manager.settings.models import SettingsRequest, simulation_settings_profile
+    from vehicle_manager.settings.service import RuntimeGate, SettingsService
+    from vehicle_manager.settings.store import SettingsStore
+    from vehicle_manager.storage.bindings import Database
 
-    monkeypatch.setattr("senior_control.agent.settings_wire.time.monotonic", lambda: 10.0)
+    monkeypatch.setattr("vehicle_manager.agent.local_adapters.time.monotonic", lambda: 10.0)
     frame = runtime(
         10.0, mode="braking", stationary=False, body_reference=None, allowed_actions=["acquire"]
     )

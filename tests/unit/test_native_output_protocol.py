@@ -11,7 +11,7 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from senior_control.models import Velocity
+from vehicle_core.values import Velocity
 
 ROOT = Path(__file__).resolve().parents[2]
 

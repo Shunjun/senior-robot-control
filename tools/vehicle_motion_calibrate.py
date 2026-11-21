@@ -26,7 +26,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from senior_control.sensors.sample_time import ClockTracker, SampleTime, map_sample
+from vehicle_core.sample_time import ClockTracker, SampleTime, map_sample
 
 PERIOD = 0.05
 ALLOWED_NODES = {

@@ -20,8 +20,8 @@ from senior_mapping.references import (
 )
 from senior_mapping.store import MapReferenceStore
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, OperationStatus, Pose2D
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, OperationStatus, Pose2D
 
 ROOT = Path(__file__).resolve().parents[4]
 CELL = 0.5

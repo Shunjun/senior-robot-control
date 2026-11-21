@@ -16,26 +16,26 @@ from senior_motion_msgs.msg import (
     SemanticAssociation,
     SemanticObject,
 )
-
-from senior_control.vision.depth_runtime import CameraInfoFrame
-from senior_control.vision.egress_receipt import (
+from senior_perception.vision.depth_runtime import CameraInfoFrame
+from senior_perception.vision.egress_receipt import (
     EgressAdmission,
     depth_capture_headers,
     egress_from_message,
 )
-from senior_control.vision.image_codec import _validate_layout, decode_rgb
-from senior_control.vision.raw_capture import (
+from senior_perception.vision.image_codec import _validate_layout, decode_rgb
+from senior_perception.vision.raw_capture import (
     RawCaptureGroup,
     capture_from_message,
     compatible_captures,
 )
-from senior_control.vision.semantic_coordinator import SemanticCoordinator
-from senior_control.vision.semantic_runtime import (
+from senior_perception.vision.semantic_coordinator import SemanticCoordinator
+from senior_perception.vision.semantic_runtime import (
     ColorCapture,
     SemanticSynchronizer,
     depth_snapshot,
 )
-from senior_control.vision.spawn_detector import SpawnInferenceWorker
+from senior_perception.vision.spawn_detector import SpawnInferenceWorker
+
 from senior_robot.motion_lifecycle import run
 from vehicle_core.diagnostics import process_diagnostics
 from vehicle_core.sensor_policy import default_policy

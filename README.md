@@ -25,15 +25,24 @@
 
 | 路径 | 内容 |
 | --- | --- |
-| `src/senior_control` | 协议、配置、存储、安全、地图、导航点、定位和本地任务 |
+| `vehicle_core/` | 共享时钟、IPC、诊断、进程资源、基础值与采集时间；由根 wheel 发布 |
+| `contracts/src/senior_contracts/` | 云端与车端共享通信契约 |
+| `senior_control/src/vehicle_manager/` | 车端管理、任务、设置、日志与平台操作装配 |
+| `cloud/src/cloud/` | 独立云端程序 |
+| `ros2/src/senior_perception/` | 回波学习、扫描处理、深度与视觉感知 |
+| `ros2/src/senior_motion_estimation/` | 自车运动估计、运动反馈与位姿运算 |
+| `ros2/src/senior_motion_control/` | 控制权、速度计算、控制入口与输出守卫 |
+| `ros2/src/senior_mapping/`、`senior_localization/`、`senior_navigation/` | 建图、定位、导航功能包 |
 | `ros2/src/senior_sim` | 仿真模型、世界和 `simulation.launch.py` |
-| `ros2/src/senior_robot` | 雷达过滤、安全门、仲裁、Nav2 适配、SLAM 适配、定位节点 |
+| `ros2/src/senior_robot` | 实车入口、设备接入与实车服务装配 |
 | `config/simulation.yaml` | 仿真外形与话题，供 Python 配置读取 |
 | `config/hardware.example.yaml` | 实车配置示例，不能当作已核对的实车参数 |
 | `docs/protocol/v1.md` | 当前命令类型 |
 | `docs/protocol/map-bundle.md` | 地图包格式 |
 | `docs/protocol/scheduling.md` | 本地任务调度 |
 | `docs/superpowers/plans/2026-10-27-robot-control-implementation.md` | 实施计划 |
+
+根目录 `src/` 已退役，旧 `senior_control.*` Python 导入不再提供。根发行名称仍为 `senior-control`，只发布 `vehicle_core`，保留安装依赖名称。旧版本进程及已生成的 service unit 需要在部署时按新入口更新；本次源码迁移不自动部署。
 
 ## 各端部署与启动
 
@@ -47,7 +56,7 @@
 
 CLI 源文件为单个 [bin/senior-robot.sh](bin/senior-robot.sh)，不编译、不随 Python wheel 注册同名 console-script。可执行 `sudo install -m 0755 bin/senior-robot.sh /usr/local/bin/senior-robot` 独立安装，更新旧环境后检查 `type -a senior-robot`，避免旧 venv 入口遮盖。Shell 拥有帮助、参数和交互，Python 只提供固定动作与原业务绑定。
 
-`senior-robot start/stop/restart/status/logs` 管宿主机；`senior-robot docker start/stop/restart/status/logs` 管本项目 Docker 服务。pair/doctor/deploy 使用同样分组。两模式分别只用所选运行位置的项目 `.venv`；Docker 宿主机仅需 Shell、jq、Docker、timeout/systemd 等系统工具，无需 Python，容器必须已经运行。停止不关闭共享容器，restart 停止失败不启动。停止容器上的 Docker `deploy --dry-run` 只 inspect 后报错，不启动容器；运行中的预览使用容器 `.venv`，不写配置/unit。配置默认 `~/senior-control/config.json`，native 按 `project_dir/.venv/bin/python` 选择解释器，可用绝对路径 `SENIOR_ROBOT_PYTHON` 显式选择；Docker 不使用此宿主覆盖。原 `python -m senior_control.cli` 保留 Compatible 入口，管理独立发行/真实 ROS 验收仍未完成。
+`senior-robot start/stop/restart/status/logs` 管宿主机；`senior-robot docker start/stop/restart/status/logs` 管本项目 Docker 服务。pair/doctor/deploy 使用同样分组。两模式分别只用所选运行位置的项目 `.venv`；Docker 宿主机仅需 Shell、jq、Docker、timeout/systemd 等系统工具，无需 Python，容器必须已经运行。停止不关闭共享容器，restart 停止失败不启动。停止容器上的 Docker `deploy --dry-run` 只 inspect 后报错，不启动容器；运行中的预览使用容器 `.venv`，不写配置/unit。配置默认 `~/senior-control/config.json`，native 按 `project_dir/.venv/bin/python` 选择解释器，可用绝对路径 `SENIOR_ROBOT_PYTHON` 显式选择；Docker 不使用此宿主覆盖。原 `python -m vehicle_manager.operator_cli` 保留 Compatible 入口，管理独立发行/真实 ROS 验收仍未完成。
 
 ### 开发与验收入口
 
@@ -124,7 +133,7 @@ M5D1 将实车 ROS 命令构造和可选视频环境探针归入已有
 独立 Robot wheel 的 provider 导入检查不代表 ROS 启动或管理独立部署验收。
 
 
-共享导入准备片将唯一 `ImageFrame` 放在 [image_frame.py](src/senior_control/image_frame.py)，
+共享导入准备片将唯一 `ImageFrame` 放在 [image_frame.py](vehicle_core/image_frame.py)，
 原 vision/agent 公开名字按需加载并保留对象身份；ROS所用手动执行类不再连带导入Agent主循环或管理投影。
 本片不改变Root发行依赖、生产入口或公共IPC/诊断/DrivingSettings，不表示独立部署完成。
 实际14文件、原失败基线和仓库外wheel证据见[管理记录](senior_control/README.md#共享导入准备片-imageframe与按需公开)。

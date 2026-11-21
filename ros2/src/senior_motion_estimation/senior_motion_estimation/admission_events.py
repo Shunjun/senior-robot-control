@@ -2,8 +2,8 @@
 
 from dataclasses import dataclass
 
-from senior_control.motion.source_modes import SourceView
 from senior_motion_estimation.observations import AdaptedObservation, Source, SourceRule
+from senior_motion_estimation.source_modes import SourceView
 
 
 @dataclass(frozen=True)

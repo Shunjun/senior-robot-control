@@ -6,14 +6,14 @@ from types import SimpleNamespace
 
 import pytest
 from control_process_test_support import generic_motion_profile
+from senior_motion_control.controller import Feedback, MotionController
+from senior_motion_estimation.observations import Source
+from senior_motion_estimation.stillness import stationary
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from test_unified_motion_runtime import point
 
-from senior_control.models import Velocity
-from senior_control.motion.controller import Feedback, MotionController
-from senior_control.motion.observations import Source
-from senior_control.motion.stillness import stationary
-from senior_control.runtime.diagnostics import RuntimeDiagnostics
+from vehicle_core.diagnostics import RuntimeDiagnostics
+from vehicle_core.values import Velocity
 
 
 def sample(vx=0.0, wz=0.0, *, epoch="wheel", axes=(True, True)):

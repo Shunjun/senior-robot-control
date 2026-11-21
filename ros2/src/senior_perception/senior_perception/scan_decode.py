@@ -6,8 +6,8 @@ plus sensor_error once. Learned self returns are excluded without pose/sweep exp
 
 import math
 
-from senior_control.config import DeviceProfile
 from senior_perception.self_filter import ScanObservation, filter_self
+from vehicle_core.config import DeviceProfile
 from vehicle_core.values import Pose2D
 
 

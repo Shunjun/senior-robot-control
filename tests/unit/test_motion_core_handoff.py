@@ -14,13 +14,14 @@ from control_process_test_support import (
     read_inputs,
 )
 from motion_reference_test_support import ReadySubscription
+from senior_motion_control.contracts import MotionEventKind as K
+from senior_motion_control.contracts import MotionTarget
+from senior_motion_control.state_machine import RecoveryObservation
+from senior_motion_control.trajectory import Trajectory
 from sensor_time_test_support import sample_time
 
-from senior_control.models import Velocity
-from senior_control.motion.contracts import MotionEventKind as K
-from senior_control.motion.contracts import MotionMode, MotionTarget
-from senior_control.motion.state_machine import RecoveryObservation
-from senior_control.motion.trajectory import Trajectory
+from vehicle_core.motion_state import MotionMode
+from vehicle_core.values import Velocity
 
 
 class Publisher:
@@ -249,7 +250,7 @@ def test_release_uses_one_steady_instant_and_does_not_create_clock_fault(core, m
 
 @pytest.mark.parametrize("corrected_ros", [1.0, 1_000_000_000.0])
 def test_body_projection_keeps_original_monotonic_expiry_across_ros_correction(core, corrected_ros):
-    from senior_control.motion.estimator import MotionObservation, Origin
+    from senior_motion_estimation.estimator import MotionObservation, Origin
 
     core.node._reception_test.sensors.estimator.ingest(
         MotionObservation(
