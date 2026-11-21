@@ -209,3 +209,50 @@ async def test_learning_uses_regular_request_lane_with_original_deadline_and_typ
     assert [kind for kind, _ in calls] == ["learning_capability", "learning"]
     assert calls[-1][1]["deadline_steady"] == 1.2
     assert '"controller_generation":2' in calls[-1][1]["envelope"]
+
+
+async def test_ipc_grid_id_is_optional_and_does_not_grant_localization():
+    from vehicle_manager.agent.local_state import StateReply
+
+    from senior_control.agent.ports import IpcState
+
+    raw = {
+        "v": 1,
+        "ok": True,
+        "sampled_at": 10.0,
+        "localized": False,
+        "safety_clear": False,
+        "manual_driving": False,
+        "map_id": "yard",
+        "reference_revision": 1,
+        "execution_status": "idle",
+        "map_generation": "reference-a",
+        "localization_generation": None,
+    }
+
+    class Client:
+        async def request(self, kind):
+            assert kind == "state.get"
+            return dict(raw)
+
+    ipc = IpcState(Client(), clock=lambda: 10.1)
+    assert (await ipc.read()).map_grid_id is None
+    for grid_id in ("grid-a", "x" * 128):
+        raw["map_grid_id"] = grid_id
+        state = await ipc.read()
+        assert state.map_grid_id == grid_id
+        assert state.map_generation == "reference-a"
+        assert state.map_ref == MapRef("yard", 1)
+        assert not state.localized and not state.navigation_ready
+        assert state.robot_pose is None and state.scan_points == ()
+    for grid_id in ("", "x" * 129, 1):
+        raw["map_grid_id"] = grid_id
+        with pytest.raises(DomainError):
+            await ipc.read()
+    raw.pop("map_grid_id")
+    legacy = StateReply.model_validate(raw)
+    assert "map_grid_id" not in legacy.model_dump()
+    assert '"map_grid_id"' not in legacy.model_dump_json()
+    raw["sampled_at"] = 9.0
+    with pytest.raises(DomainError):
+        await ipc.read()

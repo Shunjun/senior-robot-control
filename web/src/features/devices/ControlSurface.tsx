@@ -63,7 +63,9 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   const setView = mode === "manual" ? setManualView : setNavigationView;
   const { map: occupancy, gridId, waypoints, message, displayOnly, waypointWrites, navigationReady } =
     useWorkspaceMap(link, snapshot, { enabled: view === "map" || mode === "navigation", catalog: mode === "tasks", refresh: mapLoad });
-  const refKey = JSON.stringify([snapshot.map_ref, gridId]);
+  //Compatible: legacy interactions keep their original per-grid scope.
+  const referenceVersion = snapshot.map_grid_id === undefined ? gridId : snapshot.map_generation;
+  const refKey = JSON.stringify([snapshot.map_ref, referenceVersion]);
   const [selection, setSelection] = useState<{ refKey: string; pose: Pose | null }>({ refKey, pose: null });
   const [feedback, setFeedback] = useState<{ refKey: string; note: string } | null>(null);
   useLayoutEffect(() => {
@@ -94,7 +96,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   const activeMap = occupancy !== undefined && displayOnly !== true;
   const pickMap = activeMap ? map : { ...map, map_ref: null };
   const liveMapTelemetry = activeMap && snapshot.connected && !snapshot.stale && snapshot.localized
-    && snapshot.map_generation !== undefined && snapshot.map_generation === gridId
+    && snapshot.map_generation !== undefined && snapshot.map_generation === referenceVersion
     && snapshot.map_ref !== null && map.map_ref !== null
     && snapshot.map_ref.map_id === map.map_ref.map_id
     && snapshot.map_ref.reference_revision === map.map_ref.reference_revision;
@@ -102,7 +104,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   //Compatible: older vehicles advertise navigation eligibility only in the map manifest.
   const directNavigation = activeMap && (snapshot.navigation_ready ?? navigationReady) === true;
   const route = snapshot.route_progress;
-  const routeActive = activeMap && route !== undefined && route.map_generation === gridId
+  const routeActive = activeMap && route !== undefined && route.map_generation === referenceVersion
     && (route.status === "starting" || route.status === "running" || route.status === "cancel_pending");
   const [navigationBusy, setNavigationBusy] = useState(false);
   const navigationScope = useRef(0);
@@ -111,7 +113,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
     setNavigationBusy(false);
     setFeedback(null);
     return () => { navigationScope.current += 1; };
-  }, [robotId, link, refKey, gridId, snapshot.connected, snapshot.stale, mode]);
+  }, [robotId, link, refKey, snapshot.connected, snapshot.stale, mode]);
 
   async function runNavigation(action: "goal" | "return_home", pose?: Pose): Promise<void> {
     if (!directNavigation || gridId === undefined || !snapshot.localized || snapshot.map_ref === null || navigationBusy || routeActive) return;
@@ -184,7 +186,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
               {(occupancy !== undefined || mode === "navigation") && (
                 <>
                   <MapCanvas
-                    key={gridId ?? "unavailable"}
+                    key={snapshot.map_grid_id === undefined ? gridId ?? "unavailable" : refKey}
                     map={map}
                     compact={occupancy !== undefined}
                     robot={liveMapTelemetry ? snapshot.robot_pose ?? null : null}
@@ -222,7 +224,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
                 key={`pose:${refKey}`}
                 snapshot={snapshot}
                 map={pickMap}
-                draft={activeMap ? draft : null}
+                draft={snapshot.map_grid_id === undefined && !activeMap ? null : draft}
                 onDraftChange={setDraft}
                 pending={navigationBusy || routeActive}
                 onGoal={onGoal}

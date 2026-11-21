@@ -1196,6 +1196,7 @@ async def snapshot_polls(tmp_path, monkeypatch, request):
             self.points = [ScanPointPayload(x=1.0, y=2.0)]
             self.reason = None
             self.generation = "live-generation"
+            self.grid_id = None
             self.hold = None
             self.entered = asyncio.Event()
             self.initial_failed = False
@@ -1210,6 +1211,7 @@ async def snapshot_polls(tmp_path, monkeypatch, request):
                 scan_points=tuple(self.points),
                 navigation_block_reason=self.reason,
                 map_generation=self.generation,
+                map_grid_id=self.grid_id,
             )
             if self.hold is not None:
                 hold, self.hold = self.hold, None
@@ -1493,3 +1495,45 @@ async def test_learning_request_returns_only_original_start_receipt_without_jour
         assert await rig.journal.get("calibration") is None
     finally:
         await finish(task, rig)
+
+
+async def test_grid_id_round_trips_and_pushes_only_when_changed(snapshot_polls):
+    from senior_control.protocol import SnapshotEnvelope
+
+    runtime = snapshot_polls
+    initial = cache_frame(runtime.link.snapshots[0])
+    assert "map_grid_id" not in initial.payload.model_dump()
+    assert '"map_grid_id"' not in initial.model_dump_json()
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 1
+    for expected, grid_id in enumerate(("grid-1", "grid-2"), start=2):
+        runtime.state.grid_id = grid_id
+        await runtime.tick()
+        assert len(runtime.link.snapshots) == expected
+        sent = runtime.link.snapshots[-1]
+        assert sent.map_grid_id == grid_id
+        assert sent.map_generation == "live-generation"
+        wire = cache_frame(sent)
+        decoded = SnapshotEnvelope.model_validate_json(wire.model_dump_json())
+        assert snapshot_from_envelope(decoded).map_grid_id == grid_id
+        cache = SnapshotCache()
+        cached = cache.store(decoded)
+        assert cached.snapshot.map_grid_id == grid_id
+        from cloud.snapshots import snapshot_envelope as cloud_envelope
+
+        relayed = cloud_envelope(
+            cached.snapshot,
+            robot_id=ROBOT,
+            session_id="cache",
+            connection_epoch=1,
+            request_id="snapshot",
+            seq=0,
+            expires_at=20.0,
+        )
+        assert relayed.payload.model_dump()["map_grid_id"] == grid_id
+        await runtime.tick()
+        assert len(runtime.link.snapshots) == expected
+    runtime.state.grid_id = None
+    await runtime.tick()
+    assert len(runtime.link.snapshots) == 4
+    assert '"map_grid_id"' not in cache_frame(runtime.link.snapshots[-1]).model_dump_json()

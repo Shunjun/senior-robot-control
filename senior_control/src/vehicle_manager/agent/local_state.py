@@ -3,9 +3,9 @@
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
 from senior_contracts.navigation import RouteProgress
-from senior_contracts.wire import RobotPosePayload, ScanPointPayload
+from senior_contracts.wire import RobotPosePayload, ScanPointPayload, ShortText
 
 from vehicle_core.runtime_state import MotionRuntimeState, RuntimeObservation
 from vehicle_core.values import MapRef
@@ -36,6 +36,8 @@ class RuntimeState:
     task_lifecycle_version: int = 0
     task_evidence_ready: bool = False
     valid_until: float | None = None
+    # //Compatible: absent on legacy state sources; reference nonce remains independent.
+    map_grid_id: str | None = None
 
     def for_tasks(self, connected: bool) -> ExecutionContext:
         healthy = self.task_evidence_ready
@@ -69,6 +71,8 @@ class StateReply(BaseModel):
     execution_status: str
     # //Compatible: older state replies have no qualified reference or navigation fields.
     map_generation: str | None = None
+    # //Compatible: older state replies use map_generation as their raster ID.
+    map_grid_id: ShortText | None = None
     localization_generation: str | None = None
     # //Compatible: older IPC omits observation metadata.
     runtime_observation: RuntimeObservation | None = None
@@ -84,3 +88,11 @@ class StateReply(BaseModel):
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = Field(default=None, max_length=256)
     scan_points: list[ScanPointPayload] = Field(default_factory=list, max_length=96)
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: Any) -> dict[str, Any]:
+        result: dict[str, Any] = handler(self)
+        # //Compatible: preserve the omitted-field wire shape of legacy replies.
+        if self.map_grid_id is None:
+            result.pop("map_grid_id", None)
+        return result

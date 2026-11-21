@@ -62,6 +62,7 @@ def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
         snapshot.localized,
         snapshot.map_ref,
         snapshot.map_generation,
+        snapshot.map_grid_id,
         None
         if route is None
         else (
@@ -1125,6 +1126,7 @@ class Agent(Generic[ResultT]):
             tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
             map_generation=live.map_generation,
+            map_grid_id=live.map_grid_id,
             route_progress=live.route_progress,
             navigation_ready=live.navigation_ready,
             robot_pose=live.robot_pose,

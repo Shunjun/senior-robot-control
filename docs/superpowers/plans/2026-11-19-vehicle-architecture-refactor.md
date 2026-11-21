@@ -339,6 +339,119 @@ Ruff 检查及格式检查通过，适用 CRLF diff check 通过；launch、测�
 活动地图生产/自动落盘重启/UI 完成项继续保持未勾选。
 
 
+
+### E/G 数据版本片：独立 map_grid_id 快照传递（实现完成，待亲审，2026-11-21）
+
+基线 `feat/vehicle-architecture-refactor@6da877e`。严格十三文件皆修改，无新增/删除/配置：
+产品九份为 `senior_control/src/vehicle_manager/agent/{local_state,ipc_state,snapshots,
+ snapshot_state,main}.py`、`contracts/src/senior_contracts/wire.py`、
+`web/src/api/protocol.ts`、`web/src/features/map/useWorkspaceMap.ts`、
+`web/src/features/devices/ControlSurface.tsx`；测试三份精确路径为
+`senior_control/tests/test_agent.py`、`senior_control/tests/test_agent_ports.py`（IPC适配验证）、
+`web/src/features/devices/devices.test.tsx`；文档仅本计划。
+
+1. 状态及快照增加可选 `map_grid_id`，遵守现有 ShortText 长度；未提供时不改变旧发送的
+   序列化字节形状，显式 Compatible，旧网页继续用 map_generation 作为 grid ID。
+2. IPC解析→SnapshotState→Agent collect/change_key→快照序列化/反序列化保留独立栅格版本；
+   clone/compaction 沿原模型，不以栅格变化授予可信位姿或导航。
+   已只读核对 cloud/snapshots.py 的 model_copy(deep=True)、relay.py 的共享 snapshot_envelope
+   和 model_copy，字段可随共享模型透传，无需扩大 cloud 修改。
+3. 网页新路径以 map_grid_id 绑定 manifest/tile 和刷新；ref/nonce 管理草稿/pending，
+   迟到旧栅格响应丢弃。旧路径保留原 grid scope 与 display_only 例外；pose/route 仍按参考
+   map_generation 比较。未就绪禁止编辑/导航，保留 stale/freshness/retired epoch 保护及目标校验。
+4. 只新增/实质改写三个场景：IPC字段有无解析；Agent roundtrip/de-dupe/push与旧省略；
+   同ref/nonce的grid1→grid2及迟到tile隔离、刷新不丢导航草稿，其余原测试断言保留。
+   先观察新断言失败再实现，仅运行非仿真Python/web定向测试和受影响格式/类型检查。
+
+尚不修改生产 ROS provider、活动图owner、任务执行、cloud、UI交互或视觉元素；
+不启动开发服务、ROS/实车/仿真，不部署/推送，E/G生产交付仍不勾选。
+生产端必须先发布可按版本读取的完整栅格，再报告对应 map_grid_id；混合版本车辆未提供该字段
+仍走旧规则，不把旧 map_generation 当成新参考nonce后又省略独立栅格ID。
+实际命令、验证及生产缺口在完成时补记。
+
+#### 实际实现与验证
+
+本片仍严格十三个修改文件，产品9/测试3/工具文档1，新增/删除/配置0。
+RuntimeState、StateReply、LiveState 和 RobotSnapshot 的新增可选字段不移动旧位置参数；
+StateReply 与共享 SnapshotPayload 在字段为 None 时显式 Compatible 省略它。
+IPC 仍使用原0.5秒新鲜度和 map/localization generation 几何资格，SnapshotState 只传递数据版本，
+不通过 grid ID 设置 localized/navigation_ready。Agent change_key 包含 grid ID，
+相同数据不重复push，栅格变化独立push；snapshot envelope、反解和共享紧凑JSON序列化保留字段。
+cloud 的 cache/get/relay 继续对共享模型 deep copy，未改云端代码；新增Agent场景实际走
+SnapshotCache 和 cloud snapshot_envelope，确认克隆/透传保留新字段。
+
+网页解码拒绝空/超128字符/非字符串 grid ID；省略时对象也省略该字段。
+useWorkspaceMap 的新读取scope包含 robot/ref/nonce/grid ID，manifest必须精确匹配新grid ID，
+每个tile沿既有校验；旧scope的异步响应在完成后因 abort 丢弃，不拼接到新图。
+新路径草稿、pending 与canvas key按 ref/nonce管理，普通数据刷新不退休导航请求或清草稿；
+当前图未完整读完时不提供可操作图，仍保留后端目标检查和display_only禁写/禁导航。
+旧路径保留每grid交互scope、原display_only例外，未改 RobotClient freshness/retired epoch 保护。
+新增场景实际显示有效参考的robot marker，并确认同nonce数据更新后仍可用新grid ID发送目标。
+
+批准新增仅三个节点，既有场景断言不弱化：
+
+- `senior_control/tests/test_agent_ports.py::test_ipc_grid_id_is_optional_and_does_not_grant_localization`：
+  字段省略/合法/长度边界解析、未定位但有ref与grid、非法字段和过期拒绝、旧模型JSON省略。
+- `senior_control/tests/test_agent.py::test_grid_id_round_trips_and_pushes_only_when_changed`：
+  原确定时钟snapshot_polls夹具，旧字节无新字段、grid1/2变化push、不变去重、序列化/反解、
+  cloud缓存及深拷贝投影保留、重新省略时push；map_generation保持原参考值。
+- `web/src/features/devices/devices.test.tsx` 的
+  `refreshes grid data within one reference without losing drafts or accepting late tiles`：
+  新旧字段解码、同ref/nonce的grid1→grid2、延迟grid1 tile、草稿/导航pending跨刷新保持，
+  结束后目标请求携带grid2。原workspace API按link串行读，不改其队列：新snapshot到达后
+  旧tile退场才开始新manifest/tile，测试依真实调度验证旧响应不发布，而不伪造并行transport。
+
+TDD：Python两新场景先因RuntimeState/LiveState缺字段失败，网页新场景先因解码丢字段失败；
+实现后两项Python与一项web转绿。首次网页测试临时目录直接链接整份node_modules导致
+Vite写.vite-temp被沙箱拒绝，改为临时目录中链接依赖包而将Vite缓存留在临时目录解决，
+未在工作区增加node_modules或改变安装配置。
+
+Python使用前片已有解释器和版本（CPython3.12.15/pytest8.4.2/Pydantic2.14.1、macOS26.4 arm64）：
+
+```sh
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m pytest \
+  senior_control/tests/test_agent_ports.py senior_control/tests/test_agent.py \
+  tests/unit/test_live_map_geometry.py -q --tb=short
+```
+
+结果 **72 passed**，均为非仿真定向场景。另用内存模块加载 `git show 6da877e:<path>` 的原
+SnapshotEnvelope/serialize_envelope 与原StateReply，同一省略字段输入逐字节比较，
+共享快照wire bytes及StateReply JSON与基线完全相同；没有新测试文件或第四场景节点。
+
+工作区没有web/node_modules；将当前web源码/config复制到
+`/tmp/map-grid-2de9d8a5-check/web`，仅复用主仓库已有依赖包，缓存位于临时目录，
+其根src/contracts为当前仓库只读链接。Node24.14.1/Vitest5.0.5/TypeScript5.9.3使用已有安装，无联网安装或服务。
+在该目录执行：
+
+```sh
+./node_modules/.bin/vitest run src/features/devices/devices.test.tsx \
+  src/features/map/map.test.tsx src/features/mapping/mapping.test.tsx src/api/client.test.ts
+./node_modules/.bin/tsc --noEmit
+```
+
+首次为119 passed/3 failed，三项皆为既有protocol parity读取旧重导出壳找不到
+SimpleEnvelope/ResponsePayload/EnvelopeBase。用 `git show HEAD:web/src/features/devices/devices.test.tsx`
+原版替换临时副本，仅运行 `-t 'protocol parity'`，原基线也同样3失败；未改仓库原版以复现。
+经负责人答复批准（msg_dd831bebe14d）只将同一文件夹具的两处读取路径换为
+`contracts/src/senior_contracts/wire.py` 与 `contracts/src/senior_contracts/errors.py`，
+三项原parity断言和场景不变，不增加测试节点；完整四文件定向最终 **122 passed**，
+`tsc --noEmit`通过。未运行开发服务器、ROS/车辆/仿真、部署或推送。
+
+八个受影响Python文件执行 `python -m ruff check` 和 `python -m ruff format --check`，
+并执行适用的 `git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check`；
+最终均通过（Ruff八文件检查及格式检查通过、diff check无输出）；作者另行核对十三文件diff和
+新旧scope/定位资格边界，待负责人独立亲审。前述静态owner/launch代码及自动落盘流程均未修改。
+
+生产前置：先让已认证owner安装可按版本读取的完整immutable栅格，再通过state报告对应
+map_grid_id，参考nonce仍用于定位/路线；不应先报告新ID再让manifest回旧ID。
+在混合版本更新中，仍把grid ID放map_generation的旧发送者继续省略新字段，
+新发送者必须同时提供正确的独立grid ID；旧接收者尚不认识新StateReply字段时需先升级接收端，
+本片不放宽 strict extra/freshness 来掩盖版本不匹配。实际ROS provider尚未发送新字段，
+因此本片是协议/管理/网页消费链就绪，不是活动地图生产接通、自动一致checkpoint/重启或UI交付。
+任务执行与任务编辑仍保持原资格检查，未借本片扩大准入或修改执行身份。
+E/G生产、自动持久恢复和地图管理/独立Home项继续未勾选，后续另接可信生产数据来源。
+
+
 ## 第三阶段　联调和验收
 
 - [ ] 移除阶段一仅用于迁移的旧入口、兼容路径和测试占位组装。核对实车与仿真组装共用模块，核对 ROS 图和底盘唯一发布者。

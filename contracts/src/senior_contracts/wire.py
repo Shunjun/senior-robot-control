@@ -377,6 +377,8 @@ class SnapshotPayload(StrictModel):
     # home_edit.revision. 0 is the store's answer when that row does not exist yet.
     home_revision: int = Field(default=0, ge=0)
     map_generation: ShortText | None = None
+    # //Compatible: absent on legacy snapshots; map_generation remains their grid ID.
+    map_grid_id: ShortText | None = None
     route_progress: RouteProgress | None = None
     navigation_ready: bool = False
     # //Compatible: legacy snapshots have no live geometry.
@@ -395,6 +397,9 @@ class SnapshotPayload(StrictModel):
         for optional in ("vehicle_ui", "manual_controller_generation", "manual_agent_epoch"):
             if getattr(self, optional) is None:
                 result.pop(optional, None)
+        # //Compatible: do not add even a null field to legacy snapshot bytes.
+        if self.map_grid_id is None:
+            result.pop("map_grid_id", None)
         # //Compatible: omit generation in snapshots without a qualified source.
         if self.map_generation is None:
             result.pop("map_generation", None)
