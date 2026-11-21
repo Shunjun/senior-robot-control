@@ -49,6 +49,8 @@ class LiveState:
     vehicle_ui: dict[str, Any] | None = None
     manual_controller_generation: int | None = None
     manual_agent_epoch: int | None = None
+    # //Compatible: legacy producers omit an independent raster version.
+    map_grid_id: str | None = None
 
 
 class StatePort(Protocol):
@@ -85,6 +87,8 @@ class RobotSnapshot:
     vehicle_ui: dict[str, Any] | None = None
     manual_controller_generation: int | None = None
     manual_agent_epoch: int | None = None
+    # //Compatible: legacy producers omit an independent raster version.
+    map_grid_id: str | None = None
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -150,6 +154,7 @@ def snapshot_envelope(
             ],
             home_revision=snapshot.home_revision,
             map_generation=snapshot.map_generation,
+            map_grid_id=snapshot.map_grid_id,
             route_progress=snapshot.route_progress if not stale else None,
             navigation_block_reason=snapshot.navigation_block_reason,
             robot_pose=snapshot.robot_pose
@@ -202,6 +207,7 @@ def snapshot_from_envelope(
         ),
         home_revision=payload.home_revision,
         map_generation=payload.map_generation,
+        map_grid_id=payload.map_grid_id,
         route_progress=payload.route_progress,
         navigation_ready=readiness,
         robot_pose=payload.robot_pose,

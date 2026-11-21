@@ -51,6 +51,7 @@ def mapping_launch(monkeypatch):
     }
     assert defaults["capture_directory"] == ""
     assert defaults["use_sim_time"] == "false"
+    assert defaults["odom_frame"] == "odom"
     (select,) = [
         action.kwargs["function"]
         for action in actions
@@ -66,6 +67,8 @@ def test_default_mapping_keeps_stock_graph_and_adapter(mapping_launch):
         ("slam_toolbox", "async_slam_toolbox_node"),
         ("senior_mapping", "slam_adapter"),
     ]
+    assert actions[0].kwargs["parameters"][-1]["odom_frame"] == "odom"
+    assert actions[1].kwargs["parameters"][-1]["odom_frame"] == "odom"
 
 
 def test_mapping_capture_selects_single_native_graph_owner(mapping_launch, tmp_path):
@@ -80,6 +83,7 @@ def test_mapping_capture_selects_single_native_graph_owner(mapping_launch, tmp_p
     assert overrides["capture_directory"] == str(tmp_path)
     assert overrides["use_map_saver"] is False
     assert overrides["enable_interactive_mode"] is False
+    assert overrides["odom_frame"] == "odom"
 
 
 def test_mapping_capture_requires_absolute_directory(mapping_launch):
@@ -112,6 +116,7 @@ def test_verified_static_lidar_selects_dedicated_relay_and_native_owner(
     assert graph.kwargs["executable"] == "slam_graph_node"
     _, bridge = graph.kwargs["parameters"]
     assert bridge["capture_directory"] == capture_directory
+    assert bridge["odom_frame"] == "odom"
     assert bridge["bounded_scan_topic"] == "/safety/raw/scan"
     assert bridge["verified_static_lidar_tf_topic"] == relay_params["output_topic"]
     assert bridge["verified_static_lidar_frame"] == relay_params["camera_frame"]
@@ -121,12 +126,43 @@ def test_verified_static_lidar_selects_dedicated_relay_and_native_owner(
 
 
 @pytest.mark.parametrize(
-    ("argument", "value"), [("bounded_scan_topic", "/scan"), ("lidar_frame", "base_link")]
+    ("argument", "value"),
+    [
+        ("bounded_scan_topic", "/scan"),
+        ("lidar_frame", "base_link"),
+        ("odom_frame", ""),
+        ("odom_frame", "map"),
+        ("odom_frame", " "),
+    ],
 )
 def test_verified_static_lidar_rejects_unqualified_inputs(mapping_launch, argument, value):
     select, defaults = mapping_launch
     with pytest.raises(ValueError, match=argument):
         select({**defaults, "verified_static_lidar": "true", argument: value})
+
+
+@pytest.mark.parametrize("mode", ["stock", "capture", "verified"])
+def test_mapping_passes_explicit_odom_frame_to_selected_graph_and_adapter(
+    mapping_launch, tmp_path, mode
+):
+    select, defaults = mapping_launch
+    context = {**defaults, "odom_frame": "odom_combined"}
+    if mode == "capture":
+        context["capture_directory"] = str(tmp_path)
+    elif mode == "verified":
+        context["verified_static_lidar"] = "true"
+    nodes = select(context)
+    graphs = [node for node in nodes if node.kwargs["name"] == "slam_toolbox"]
+    assert len(graphs) == 1
+    assert graphs[0].kwargs["parameters"][-1]["odom_frame"] == "odom_combined"
+    if mode == "stock":
+        adapters = [node for node in nodes if node.kwargs["executable"] == "slam_adapter"]
+        assert len(adapters) == 1
+        assert adapters[0].kwargs["parameters"][-1]["odom_frame"] == "odom_combined"
+    else:
+        assert graphs[0].kwargs["package"] == "senior_mapping"
+        assert graphs[0].kwargs["executable"] == "slam_graph_node"
+        assert all(node.kwargs["executable"] != "slam_adapter" for node in nodes)
 
 
 def test_mapping_node_does_not_publish_cmd_vel():

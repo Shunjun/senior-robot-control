@@ -823,8 +823,8 @@ function fieldsOf(body: string): string[] {
 
 describe("protocol parity with src/senior_control/protocol.py", () => {
   const root = resolve(import.meta.dirname, "../../../..");
-  const protocol = readFileSync(resolve(root, "src/senior_control/protocol.py"), "utf8");
-  const errors = readFileSync(resolve(root, "src/senior_control/errors.py"), "utf8");
+  const protocol = readFileSync(resolve(root, "contracts/src/senior_contracts/wire.py"), "utf8");
+  const errors = readFileSync(resolve(root, "contracts/src/senior_contracts/errors.py"), "utf8");
 
   it("mirrors the request types", () => {
     const simple = literalOf(pythonClass(protocol, "SimpleEnvelope"));
@@ -1491,4 +1491,68 @@ describe("device unpairing", () => {
     fireEvent.click(screen.getByRole("button", { name: "确认删除配对" }));
     await screen.findByRole("heading", { name: "操作员登录" });
   });
+});
+
+
+it("refreshes grid data within one reference without losing drafts or accepting late tiles", async () => {
+  const parse = (map_grid_id?: unknown) => parseInbound(JSON.stringify(frame("snapshot", "robot-alpha", { ...wirePayload, map_grid_id })));
+  expect(parse()?.payload).not.toHaveProperty("map_grid_id");
+  expect(parse("grid-1")?.payload).toHaveProperty("map_grid_id", "grid-1");
+  for (const invalid of [null, "", "x".repeat(129), 1]) expect(parse(invalid)).toBeNull();
+  const link = new FakeLink();
+  const current = snapshot("robot-alpha", {
+    map_generation: "reference-1", map_grid_id: "grid-1", navigation_ready: true,
+    robot_pose: { x: 0.2, y: 0.4, yaw: 0 },
+    home: { waypoint_id: "home", status: "confirmed", map_ref: { map_id: "map-1", reference_revision: 2 } },
+  });
+  let activeGrid = "grid-1";
+  let firstTile = true;
+  let releaseOld!: (value: unknown) => void;
+  let releaseGoal!: (value: unknown) => void;
+  const oldTile = new Promise((resolve) => { releaseOld = resolve; });
+  const goalReply = new Promise((resolve) => { releaseGoal = resolve; });
+  const identity = (grid_id: string) => ({ robot_id: current.robot_id, map_ref: current.map_ref, grid_id });
+  const tile = (grid_id: string) => ({ data: { ...identity(grid_id), tile_x: 0, tile_y: 0, width: 1, height: 1, cells: [0] } });
+  link.requestImpl = async (type, payload) => {
+    if (type === "map.manifest") return { data: {
+      ...identity(activeGrid), width: 1, height: 1, resolution: 1,
+      origin: { x: 0, y: 0, yaw: 0 }, tile_size: 32, navigation_ready: true,
+    } };
+    if (type === "map.tile") {
+      const requested = (payload as { grid_id: string }).grid_id;
+      if (requested === "grid-1" && !firstTile) return oldTile;
+      firstTile = false;
+      return tile(requested);
+    }
+    if (type === "navigation.goal") return goalReply;
+    return { ok: true };
+  };
+  const { container } = mount("/robots/robot-alpha", new FakeApi(), link);
+  await waitFor(() => expect(link.connects).toEqual(["robot-alpha"]));
+  link.emit(current);
+  fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
+  await waitFor(() => expect(container.querySelector('[data-marker="robot"]')).not.toBeNull());
+  fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "0.5" } });
+  fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "0.5" } });
+  const confirm = () => screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement;
+  fireEvent.click(confirm());
+  expect(confirm().disabled).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "刷新地图" }));
+  await waitFor(() => expect(link.requests.filter(({ type }) => type === "map.tile")).toHaveLength(2));
+  activeGrid = "grid-2";
+  link.emit({ ...current, map_grid_id: "grid-2" });
+  // Existing workspace reads serialize per link: retire the old response before the new cut loads.
+  expect(confirm().disabled).toBe(true);
+  await act(async () => { releaseOld(tile("grid-1")); await oldTile; });
+  await waitFor(() => expect(link.requests.filter(({ type }) => type === "map.tile")).toHaveLength(3));
+  await waitFor(() => expect(container.querySelector('[data-marker="robot"]')).not.toBeNull());
+  expect((screen.getByLabelText("X (m)") as HTMLInputElement).value).toBe("0.5");
+  expect(confirm().disabled).toBe(true);
+  expect(confirm().disabled).toBe(true);
+  await act(async () => { releaseGoal({ ok: true }); await goalReply; });
+  expect(confirm().disabled).toBe(false);
+  expect((screen.getByLabelText("X (m)") as HTMLInputElement).value).toBe("0.5");
+  fireEvent.click(confirm());
+  await waitFor(() => expect(link.requests.filter(({ type }) => type === "navigation.goal")).toHaveLength(2));
+  expect(link.requests.filter(({ type }) => type === "navigation.goal")[1]?.payload).toMatchObject({ body: { grid_id: "grid-2", x: 0.5, y: 0.5 } });
 });

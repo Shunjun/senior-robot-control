@@ -62,6 +62,7 @@ class IpcState(Generic[StateT]):
                 state.localization_generation,
                 state.navigation_ready,
                 state.route_progress,
+                map_grid_id=state.map_grid_id,
                 robot_pose=state.robot_pose if geometry_live else None,
                 scan_points=tuple(state.scan_points) if geometry_live else (),
                 navigation_block_reason=state.navigation_block_reason,

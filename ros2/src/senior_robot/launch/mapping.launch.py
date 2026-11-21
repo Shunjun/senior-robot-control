@@ -21,6 +21,14 @@ def _mapping_nodes(context):
     share = FindPackageShare("senior_robot")
     use_sim_time = LaunchConfiguration("use_sim_time")
     params = PathJoinSubstitution([share, "config", "slam.yaml"])
+    odom_frame = LaunchConfiguration("odom_frame").perform(context)
+    if (
+        not odom_frame
+        or odom_frame == "map"
+        or len(odom_frame) > 128
+        or any(not 33 <= ord(character) <= 126 for character in odom_frame)
+    ):
+        raise ValueError("odom_frame must name a valid frame distinct from map")
     capture_directory = LaunchConfiguration("capture_directory").perform(context)
     verified_lidar = LaunchConfiguration("verified_static_lidar").perform(context) == "true"
     if capture_directory and not Path(capture_directory).is_absolute():
@@ -29,6 +37,7 @@ def _mapping_nodes(context):
         bridge_parameters = {
             "use_sim_time": use_sim_time,
             "capture_directory": capture_directory,
+            "odom_frame": odom_frame,
             "use_map_saver": False,
             "enable_interactive_mode": False,
         }
@@ -99,7 +108,7 @@ def _mapping_nodes(context):
             prefix=restart_prefix(),
             name="slam_toolbox",
             output="screen",
-            parameters=[params, {"use_sim_time": use_sim_time}],
+            parameters=[params, {"use_sim_time": use_sim_time, "odom_frame": odom_frame}],
         ),
         Node(
             package="senior_mapping",
@@ -107,7 +116,7 @@ def _mapping_nodes(context):
             prefix=restart_prefix(),
             name="slam_adapter",
             output="screen",
-            parameters=[{"use_sim_time": use_sim_time, "odom_frame": "odom"}],
+            parameters=[{"use_sim_time": use_sim_time, "odom_frame": odom_frame}],
         ),
     ]
 
@@ -116,6 +125,11 @@ def generate_launch_description():
     return LaunchDescription(
         [
             DeclareLaunchArgument("use_sim_time", default_value="false"),
+            DeclareLaunchArgument(
+                "odom_frame",
+                default_value="odom",
+                description="Single odometry frame shared by the selected graph owner and adapter.",
+            ),
             DeclareLaunchArgument(
                 "capture_directory",
                 default_value="",

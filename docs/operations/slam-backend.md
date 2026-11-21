@@ -89,3 +89,33 @@ C++ 里 `GetCorrectedPose().GetHeading()` 和 `GetNodeOrientation` 才是完整�
 长期层只接受几何确认写入，删除记录按该格确认时的几何锚点保存。回环时活格子和删除记录都按各自锚点重投影。`project_pose_graph` 不接收定位栅格。`clear_costmap` 不修改长期层，也不删除“已删除”记录。
 
 `map_id` 与 `reference_revision` 在栅格变大、原点变化和已证实的锚点重投影之后保持不变。另一张图或另一个里程计主人被拒绝。
+
+
+## 正式建图入口的里程计帧（2026-11-21）
+
+`senior_robot` 的 `mapping.launch.py` 提供显式 `odom_frame` 参数，默认仍为 `odom`，
+不修改 `slam.yaml` 或其他部署入口的默认值。stock SLAM graph 和 Python adapter 共用
+同一个选定值；native capture 和 verified static lidar 分支也将同一值覆盖到 graph 参数。
+每张图仍只绑定一个里程计主人，选择参数不会创建 TF、认证来源或自动迁移既有地图。
+参数按本 launch 既有 frame 命名校验，拒绝空值、空白/控制字符、超过128字符，以及
+与固定地图帧相同的 `map`；不自动寻找或猜测运动来源。
+
+现场在 `9b029b7`、Humble SLAM Toolbox 2.6.8 上曾临时改用 EKF 的 `odom_combined`，
+收到 115 × 188、0.05 m 栅格与 `map → odom_combined`，当时默认 `odom` 未产图。
+临时节点已停止，这份证据不代表当前默认入口已验证、已存地图已切换，或活动地图已接到生产/网页。
+现场具备相应 TF/来源并明确选择该帧时，可通过以下参数形式启动；这里只记录用法，
+本片未运行此命令、未部署或改变任何正在运行的车辆：
+
+```sh
+ros2 launch senior_robot mapping.launch.py odom_frame:=odom_combined
+```
+
+使用 native capture 或 verified 分支时，在原有参数后追加相同的
+`odom_frame:=odom_combined`，保留 capture 目录、扫描 receipt 和静态安装来源要求。
+切换里程计帧不是修改已绑定地图的捷径：已有地图仍须核对其 odom_owner，
+旧图恢复后可信重新匹配、连续证据接入、自动一致 checkpoint 和重启恢复另行实现。
+
+本文前面关于“桥尚未入仓”的内容是 Python 适配初始阶段记录；原生桥现已由 B5.3 迁入
+`ros2/src/senior_mapping/src/slam/`，`senior_slam_bridge` 保留消息/服务类型。
+本片只配置已有启动组合，不新增生产 transport 或来源认证，不开放导航/持久写图，
+亦不完成活动地图选择、独立 Home、WS 或网页刷新；没有手动保存步骤。
