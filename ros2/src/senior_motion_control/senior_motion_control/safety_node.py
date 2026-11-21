@@ -536,7 +536,7 @@ class SafetyGate(Node):
                 try:
                     self._learning_frames.offer(raw)
                 except (ValueError, TypeError, OverflowError):
-                    self._learning_frames.mark_gap()
+                    pass  # Optional learning may skip a malformed recording.
             self._scans.append(
                 self._scan_compensator.update(raw, self._input_bridge.core.poses, now=steady)
             )

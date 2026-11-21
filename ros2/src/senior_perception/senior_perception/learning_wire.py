@@ -70,7 +70,6 @@ class PhaseReport(SessionRequest):
 class RecordedFrame(FrozenFact):
     capture: RawCaptureHeader
     recorded_steady_ns: Nonnegative
-    index: int = Field(strict=True, ge=1)
     geometry: LearningGeometry
     transform_stamp: float = Field(allow_inf_nan=False)
     ranges: tuple[float | Literal["inf", "-inf", "nan"], ...] = Field(min_length=1, max_length=2048)
@@ -83,12 +82,9 @@ class RecordedFrame(FrozenFact):
 
 
 class FrameBatch(FrozenFact):
-    after_index: Nonnegative = 0
     type: Literal["frames"] = "frames"
     attempt_id: RunId
-    stream_id: RunId
     frames: tuple[RecordedFrame, ...] = Field(max_length=4)
-    gap: bool = False
     through_steady_ns: Nonnegative
 
 
@@ -174,7 +170,6 @@ class Reply(FrozenFact):
     proposal: BeginAttempt | None = None
     attempt_id: RunId | None = None
     data: dict[str, object] | None = None
-    through_index: Nonnegative = 0
     accepted_frames: Nonnegative = 0
     session: RunId | None = None
     revision: int | None = None

@@ -69,3 +69,38 @@ The service now reports whether the current attempt still accepts recordings. Th
 Selected scenarios: no new general scenarios for the mechanical alias deletion; existing import/functional checks are reused. One targeted regression covers the confirmed recording-lifetime defect: after a completed durable model the sender ignores even an input without message/header/ranges (proving no conversion occurs), and an explicit new attempt reopens recording. The real sender thread communicates with the actual service/owner using the existing in-process transport fixture. The defect was the absence of any completed-attempt stop condition, causing each incoming scan to be copied and transmitted even after the service discarded it.
 
 Validation at the follow-up commit: the prior eight-module 52-pass command plus this new client regression and `tests/unit/test_startup_learning.py::test_program_start_context_is_explicit_and_run_owned` produces **54 passed, 1 skipped**. The three test files whose imports migrated collect successfully (**41 scenarios**, collection only, not counted as executed passes). Ruff check and `git diff --check` pass. Previously reported stale-test failures and unavailable native ROS/Linux validation remain unchanged; they are not claimed fixed.
+
+## Final cleanup: no streaming learner or full-frame proof
+
+Version: the follow-up commit containing this section, based on `d2e57ea` on `feat/scan-matcher-performance`.
+
+Removed production streaming `SelfReturnModel.observe/validate/retain_recent/begin_segment`, 64-frame history, capture-history metadata and candidate fixpoint loop. Five frames now execute as one `ComputeRequest` through a lazy dedicated generic `ProcessWorker`; there is no learning-specific streaming kernel, finish flag, cumulative batch count or custom child polling loop. The shared worker implementation is unchanged and may stay alive for subsequent explicit calibration; this is not a claim of zero idle-process overhead.
+
+Removed raw transport index/stream IDs, per-batch ACK frontiers and the requirement to deliver every unselected scan. Recording remains bounded: the sender keeps 16 recent frames, and the service compacts a dense 128-frame sampling buffer to 64 time-ordered candidates preserving endpoints. The five-frame selector is exact over retained candidates; dense-input compaction may approximate the nearest quartile among the full original stream. Sample origin, monotonic clock/sequence, geometry and unique acquisitions are still checked. Failed optional recordings do not clear ordinary safety scans. Capture completion/failure still stops raw recording until the next explicit attempt.
+
+Removed startup's extra five-preframe gate and five-post-stopframe wait. The fixed three-second action, raw scan admission/TTL, final output limit, takeover and stationary fact remain. A stop fact can close a window after the reception watermark covers it, provided five in-window acquisitions were received before takeover. A later takeover cannot cancel already closed data; a late arrival recorded after takeover cannot be used to complete an earlier window. Durable commit and frozen-model restoration still use the existing owner/storage chain.
+
+Old tests were migrated rather than using compatibility methods: five-observation classification replaces sequential model mutation; source/duplicate/clock checks move to the actual job boundary; spatially adjacent surfaces replace the retired unlimited-gap connection policy; dense full-resolution reference retention, periodic/inclusive/float32 seam handling, alternate stable connection paths, one-centimeter boundaries, masking/occlusion and immutable filtering remain covered. History eviction/reordering tests tied solely to the deleted API were retired. Former tests calling nonexistent `complete`, legacy mutable core properties or retired `ScanGeometry` were repaired to use the current owner and actual composed learning consumer.
+
+Executed command:
+
+```sh
+.venv/bin/pytest -q \
+  ros2/src/senior_perception/test/test_learning_compute.py \
+  ros2/src/senior_perception/test/test_sampled_learning.py \
+  ros2/src/senior_perception/test/test_learning_client.py \
+  ros2/src/senior_perception/test/test_learning_record_owner.py \
+  ros2/src/senior_perception/test/test_learning_dual_clock.py \
+  ros2/src/senior_perception/test/test_learning_cleanup.py \
+  ros2/src/senior_perception/test/test_learning_service_linux.py \
+  tests/unit/test_startup_learning_review.py \
+  tests/unit/test_startup_learning.py \
+  tests/unit/test_startup_learning_timed.py \
+  tests/unit/test_learning_frozen_reference.py \
+  tests/unit/test_learning_surface_review.py \
+  tests/unit/test_body_return_geometry_only.py
+```
+
+Result: **124 passed, 1 skipped**. The skip is Linux-only native socket/service integration on macOS. The passing set includes a real spawned background process computing one complete five-frame task, service/owner/filesystem delivery, composed control-consumer frozen filtering, takeover/late-data handling, dense sampling, explicit recalibration and lifecycle timing. In-process transport remains substituted in service tests; this does not establish real ROS/lidar or Linux socket correctness. The previously reported stale fixture failures in this set are now repaired, not excluded from the final command.
+
+All 21 changed Python files pass Ruff lint, Ruff format check and `git diff --check`. Diff review checked source and clock boundaries, one-job delivery, stale-result identity, bounded sampling and temporal endpoints, stop/takeover ordering, retired wire fields, frozen-result compatibility and test assertions. Private IPC schema changes require a coordinated process restart; existing disk stream fields are accepted only for old-record decoding and no longer drive the new code.

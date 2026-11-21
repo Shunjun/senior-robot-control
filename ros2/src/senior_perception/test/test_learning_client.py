@@ -121,7 +121,7 @@ def test_read_only_observer_keeps_old_view_until_new_active_manifest_is_durable(
         run.close()
 
 
-def test_raw_sender_empty_heartbeat_preserves_index_when_attempt_changes(tmp_path, monkeypatch):
+def test_raw_sender_reopens_when_attempt_changes(tmp_path, monkeypatch):
     from dataclasses import asdict
     from types import SimpleNamespace as N
 
@@ -177,11 +177,9 @@ def test_raw_sender_empty_heartbeat_preserves_index_when_attempt_changes(tmp_pat
                 admitted=True,
             )
             identity = run.rpc(request).data["attempt_id"]
-        until(monitor, lambda: sender._attempt == identity and run.service.stream_id is not None)
-        assert run.service.through_index == 2
+        until(monitor, lambda: sender._attempt == identity and sender._recording)
         offer(3)
         until(monitor, lambda: run.service.accepted_frames == 1)
-        assert not run.service.gap
         assert run.service.frames[0].capture.sequence == 3
         assert run.service.frames[0].ranges[35] == "inf"
     finally:
@@ -278,11 +276,10 @@ def test_raw_sender_stops_after_completion_and_reopens_only_for_new_attempt(tmp_
             run.pump()
             run.pump()
         until(monitor, lambda: not sender._recording)
-        before = sender._index
         # A stopped recorder must return before looking at message/header/ranges.
         sender.offer(object())
         with sender._lock:
-            assert sender._index == before and not sender._frames
+            assert not sender._frames
         with lock:
             reply = run.rpc(
                 BeginAttempt(
@@ -301,7 +298,6 @@ def test_raw_sender_stops_after_completion_and_reopens_only_for_new_attempt(tmp_
             )
             identity = reply.data["attempt_id"]
         until(monitor, lambda: sender._attempt == identity and sender._recording)
-        assert sender._index == before
     finally:
         sender.close()
         run.close()

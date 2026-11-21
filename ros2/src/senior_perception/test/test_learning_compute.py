@@ -4,7 +4,7 @@ import math
 
 import pytest
 from learning_test_support import TestRun, geometry
-from senior_perception.learning_compute import ComputeBatch, LearningKernel
+from senior_perception.learning_compute import ComputeRequest, compute_samples, decode_observation
 from senior_perception.learning_wire import FrameBatch, MotionObservedThrough, RecordedFrame
 from sensor_time_test_support import sample_time
 from test_startup_learning_feasibility import BOUNDARY
@@ -18,7 +18,6 @@ def recorded(index, stamp, *, received=None):
     ranges[18] = 0.15
     ranges[35] = math.inf
     return RecordedFrame(
-        index=index,
         recorded_steady_ns=round((stamp if received is None else received) * 1e9),
         capture=RawCaptureHeader(
             time=sample_time(stamp_ns=ns, received_ros_ns=ns, received_steady_ns=ns),
@@ -44,7 +43,6 @@ def send(run, frames, through=None):
         run.service._accept_frames(
             FrameBatch(
                 attempt_id=run.owner.record.attempt_id,
-                stream_id=run.stream_id,
                 frames=tuple(part),
                 through_steady_ns=part[-1].recorded_steady_ns
                 if through is None
@@ -69,30 +67,17 @@ def test_kernel_keeps_complete_raw_identity_and_original_nonfinite_values():
     decoded = FrameBatch.model_validate_json(
         FrameBatch(
             attempt_id="a" * 32,
-            stream_id="b" * 32,
             frames=frames[:4],
             through_steady_ns=11_000_000_000,
         ).model_dump_json()
     )
     assert decoded.frames == frames[:4]
-    kernel = LearningKernel()
-    for offset in range(0, len(frames), 4):
-        result = kernel.update(
-            ComputeBatch(
-                "a" * 32, "c" * 32, frames[0].geometry, frames[offset : offset + 4], offset == 4
-            )
-        )
-        if offset == 0:
-            assert not result.finished and result.points is None and not kernel.model.learned
-    # The isolated interior hit cannot connect a separate far wall just because
-    # adjacent scan indices also contain valid hits.
-    assert result.finished and result.processed == 5 and len(result.points) == 1
-    assert [observation.scan.stamp for observation in kernel.observations] == [
-        frame.capture.stamp_ns / 1e9 for frame in frames
-    ]
+    result = compute_samples(ComputeRequest("a" * 32, frames[0].geometry, frames))
+    assert len(result.points) == 1
+    observations = [decode_observation(frame) for frame in frames]
+    assert [obs.scan.stamp for obs in observations] == [f.capture.stamp_ns / 1e9 for f in frames]
     assert all(
-        observation.scan.ranges[35] == math.inf and observation.rays[35].kind == "invalid"
-        for observation in kernel.observations
+        obs.scan.ranges[35] == math.inf and obs.rays[35].kind == "invalid" for obs in observations
     )
     assert all(frame.ranges[35] == "inf" for frame in frames)
 
@@ -103,7 +88,7 @@ def test_cancel_arrives_before_previously_recorded_final_batch_still_saves(tmp_p
         session = opened(run)
         motion = [recorded(i, 10 + i / 10) for i in range(1, 25)]
         validation = [recorded(25 + i, 13.1 + i / 10) for i in range(5)]
-        send(run, motion + validation[:4])
+        send(run, motion, through=12.4)
         run.rpc(
             MotionObservedThrough(
                 stationary=True,
@@ -135,8 +120,7 @@ def test_batch_before_cancel_cannot_use_frame_recorded_after_takeover(tmp_path):
         session = opened(run)
         motion = [recorded(i, 10 + i / 10) for i in range(1, 25)]
         validation = [recorded(25 + i, 13.1 + i / 10) for i in range(5)]
-        validation[-1] = validation[-1].model_copy(update={"recorded_steady_ns": 13_700_000_000})
-        run.service.motion_through = 13_400_000_000
+        motion = [f.model_copy(update={"recorded_steady_ns": 13_700_000_000}) for f in motion]
         send(run, motion + validation, through=13.9)
         assert run.owner.record.capture_summary.state == "open"
         run.rpc(
@@ -159,22 +143,31 @@ def test_batch_before_cancel_cannot_use_frame_recorded_after_takeover(tmp_path):
         run.close()
 
 
-def test_actual_service_fifo_overflow_cannot_publish_a_model(tmp_path):
-    run = TestRun(tmp_path / "overflow")
+def test_dense_capture_compacts_without_requiring_every_unselected_frame(tmp_path):
+    run = TestRun(tmp_path / "dense-capture")
     try:
         opened(run)
-        send(run, [recorded(i, 10 + i / 1000) for i in range(1, 130)])
+        motion = [recorded(i, 10 + i / 100) for i in range(1, 291)]
+        send(run, motion)
+        assert len(run.service.frames) <= 128
+        assert run.service.frames[0].capture.sequence == 1
+        assert run.service.frames[-1].capture.sequence == 290
+        assert run.owner.record.capture_summary.state == "open"
+        run.service._stationary = True
+        run.service.motion_through = 13_000_000_000
+        run.heartbeat(13_000_000_000)
         run.service.compute.held = False
         run.pump()
-        assert run.service.gap
-        assert run.owner.record.capture_summary.state == "incomplete"
-        assert run.owner.record.phase == "failed" and run.owner.active_record is None
-        assert run.owner.record.action.consumed
+        run.pump()
+        assert run.owner.active_record.model is not None
+        assert len(run.service.compute.requests) == 1
+        assert len(run.service.compute.requests[0].frames) == 5
     finally:
         run.close()
 
 
 def test_actual_tf_metadata_keeps_stream_open_and_kernel_uses_each_transform(tmp_path):
+    from senior_control.config import DeviceProfile
     from senior_control.models import Pose2D
     from senior_control.safety.self_filter import ScanObservation, filter_self
 
@@ -206,13 +199,11 @@ def test_actual_tf_metadata_keeps_stream_open_and_kernel_uses_each_transform(tmp
     try:
         send(run, [first, second])
         run.pump()
-        assert run.service.accepted_frames == 2 and not run.service.gap
+        assert run.service.accepted_frames == 2
         assert run.owner.record.capture_summary.state == "open"
-        kernel = LearningKernel()
+        observations = []
         for frame in (first, second):
-            result = kernel.update(
-                ComputeBatch("a" * 32, "c" * 32, frame.geometry, (frame,), False)
-            )
+            actual = decode_observation(frame)
             expected = filter_self(
                 ScanObservation(
                     tuple(float(value) for value in frame.ranges),
@@ -227,11 +218,11 @@ def test_actual_tf_metadata_keeps_stream_open_and_kernel_uses_each_transform(tmp
                     frame.geometry.body_frame,
                     frame.capture.stamp_ns / 1e9,
                 ),
-                kernel.profile,
+                DeviceProfile(),
             )
-            assert kernel.observations[-1] == expected
-        assert result.processed == 2
-        assert kernel.observations[0] != kernel.observations[1]
+            assert actual == expected
+            observations.append(actual)
+        assert observations[0] != observations[1]
         assert first.geometry.sensor_to_body != second.geometry.sensor_to_body
 
         changed = recorded(3, 10.3).model_copy(
@@ -243,19 +234,34 @@ def test_actual_tf_metadata_keeps_stream_open_and_kernel_uses_each_transform(tmp
         )
         send(run, [changed])
         run.pump()
-        assert run.service.gap and run.owner.record.capture_summary.state == "incomplete"
+        assert run.owner.record.reason == "learning_geometry_changed"
+        assert run.owner.record.capture_summary.state == "incomplete"
+        frames = tuple(recorded(i, 10 + i / 10) for i in range(1, 6))
         with pytest.raises(ValueError, match="learning_geometry_changed"):
-            kernel.update(ComputeBatch("a" * 32, "c" * 32, changed.geometry, (changed,), False))
-        body_change = second.geometry.model_copy(update={"body_frame": "other_body"})
-        with pytest.raises(ValueError, match="learning_geometry_changed"):
-            kernel.update(
-                ComputeBatch(
-                    "a" * 32,
-                    "c" * 32,
-                    second.geometry,
-                    (changed.model_copy(update={"geometry": body_change}),),
-                    False,
-                )
-            )
+            compute_samples(ComputeRequest("a" * 32, changed.geometry, frames))
     finally:
         run.close()
+
+
+def test_five_samples_execute_as_one_real_background_process_task():
+    import time
+
+    from senior_perception.learning_compute import LearningCompute
+
+    frames = tuple(recorded(i, 10 + i / 2) for i in range(1, 6))
+    resource = LearningCompute()
+    try:
+        assert resource._worker is None
+        resource.submit(ComputeRequest("a" * 32, frames[0].geometry, frames))
+        deadline = time.monotonic() + 10
+        result = None
+        while result is None and time.monotonic() < deadline:
+            result = resource.poll()
+            if result is None:
+                time.sleep(0.01)
+        assert result is not None
+        assert result.error is None
+        assert len(result.points) == 1
+        assert resource.flight is None and resource.poll() is None
+    finally:
+        resource.close()

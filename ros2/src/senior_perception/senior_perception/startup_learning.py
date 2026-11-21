@@ -277,12 +277,7 @@ class StartupLearning:
             self.validation_after_steady = now
         if self.state == "validating" and self.validation_after_steady is None and self._stationary:
             self.validation_after_steady = now
-        if (
-            self.state == "sampling"
-            and self.session is not None
-            and self.session.ready
-            and self.session.accepted_frames >= 5
-        ):
+        if self.state == "sampling" and self.session is not None and self.session.ready:
             self.state, self.reason = "moving", "learning_forward_window"
         self._observe(now)
         self._phase()

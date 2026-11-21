@@ -26,3 +26,14 @@ Existing cancel/order/overflow, single-writer/durable result, re-calibration, cl
 - [x] Select five frames only after capture closure and feed the existing four-frame IPC batches.
 - [x] Run the five selected scenarios and relevant existing regressions; inspect actual diff and report any baseline failures separately.
 - [x] Prepare implementation and evidence for the same commit; branch push and full ROS/hardware validation are subject to environment availability, not assumed successful.
+
+## 后续清理执行记录
+
+用户已批准并由当前会话直接完成：
+
+- [x] 删除生产中的旧逐帧算法及只供旧算法使用的历史状态；将仍有效的容差/过滤/连接测试迁到五帧接口，退役历史窗口与乱序插入专属断言。
+- [x] 改为一次完整五帧任务，复用按需创建的独立通用CPU资源；验证真实spawn进程执行，不使用假内核。
+- [x] 删除全帧index/stream/ACK完整性追踪，改为有界采样缓冲、真实样本身份验证；移除前后额外5帧等待，保留原动作时钟和停稳确认。
+- [x] 迁移当前控制模块的测试fixture和真实owner保存流程，完整定向集合124通过、1项Linux专属跳过；Ruff及diff检查通过。
+
+代码与测试适配共21个文件；本记录、设计和验证报告3个文档同步更新。没有另建功能分支，没有改动扫描匹配器代码。

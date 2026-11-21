@@ -48,7 +48,6 @@ async def test_native_service_restores_frozen_model_without_replaying_action(tmp
         for offset in range(0, len(frames), 4):
             batch = FrameBatch(
                 attempt_id=first.record.attempt_id,
-                stream_id="b" * 32,
                 frames=tuple(frames[offset : offset + 4]),
                 through_steady_ns=round((start + 3.6) * 1e9),
             )

@@ -1,14 +1,10 @@
 """The action is a fixed host window; learning compares relative scan positions."""
 
-from dataclasses import replace
-
 from learning_test_support import begin_action, learning_runs, startup_for  # noqa: F401
-from sensor_time_test_support import sample_time
 from test_startup_learning import side_observation
 from test_startup_learning_feasibility import BOUNDARY
 
 from senior_control.safety.self_learning import SelfReturnModel
-from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 def test_fixed_three_seconds_never_waits_for_exact_displacement(tmp_path):
@@ -61,7 +57,7 @@ def test_reliable_unmoved_record_can_continue_first_learning(tmp_path):
     first.session.close()
     restored = startup_for(path)
     restored.advance(0.0, now=10.0, stationary=True)
-    assert restored.state == "sampling"
+    assert restored.state == "moving"
     restored.state = "moving"
     assert restored.prepare_action()
 
@@ -73,91 +69,18 @@ def test_real_monotonic_regression_still_stops_action(tmp_path):
     assert owner.velocity == 0 and owner.reason == "learning_monotonic_clock_regressed"
 
 
-def test_original_stamp_and_source_identity_order_and_deduplicate_learning_frames():
-    model = SelfReturnModel(BOUNDARY)
-    for sequence, _ros in enumerate((1000.0, 900.0, 10000.0, 1.0, 2.0), 1):
-        observation = side_observation(0.15)
-        observation = replace(
-            observation, scan=replace(observation.scan, stamp=10 + sequence * 0.1)
-        )
-        model.observe(
-            observation,
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round((10 + sequence * 0.1) * 1e9),
-                    received_ros_ns=round((10 + sequence * 0.1) * 1e9),
-                    received_steady_ns=round((10 + sequence * 0.1) * 1e9),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=sequence,
-                valid=True,
-                reason="",
-            ),
-            segment_id="segment",
-        )
-    assert [m / 1e9 for m in model.frame_measurements] == [10.1, 10.2, 10.3, 10.4, 10.5]
-    proof = RawCaptureHeader(
-        time=sample_time(
-            stamp_ns=round((10.3) * 1e9),
-            received_ros_ns=round((10.3) * 1e9),
-            received_steady_ns=round((10.3) * 1e9),
-            clock_generation=1,
-        ),
-        frame_id="laser",
-        raw_gid="01",
-        bridge_gid="02",
-        source_epoch="producer",
-        bridge_boot_id="boot",
-        capture_generation=1,
-        sequence=3,
-        valid=True,
-        reason="",
-    )
-    assert not model.observe(side_observation(0.15), capture=proof, segment_id="segment")
-    model.begin_segment("new-segment")
-    assert not model.observe(side_observation(0.15), capture=proof, segment_id="segment")
-
-
 def test_stable_attachment_classifies_without_displacement_or_turn_proof():
     model = SelfReturnModel(BOUNDARY)
-    for i in range(12):
-        model.observe(
-            side_observation(0.15),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round((10 + i * 0.1) * 1e9),
-                    received_ros_ns=round((10 + i * 0.1) * 1e9),
-                    received_steady_ns=round((10 + i * 0.1) * 1e9),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=i + 1,
-                valid=True,
-                reason="",
-            ),
-            segment_id="small-se2",
-        )
-    assert model.validate() == 1
+    assert model.learn_samples((side_observation(0.15),) * 5) == 1
 
 
 def test_completed_result_restores_same_run_without_replaying_action(tmp_path):
-    from learning_test_support import geometry
+    from learning_test_support import geometry, save_completed
 
     path = tmp_path / "completed"
     first = startup_for(path)
     first.session.geometry(geometry(BOUNDARY))
-    first.session.complete(((0.0, 0.15),))
+    save_completed(first.session.run, ((0.0, 0.15),))
     first.session.close()
     restored = startup_for(path)
     restored.advance(0.0, now=100.0, stationary=True)
@@ -168,26 +91,4 @@ def test_completed_result_restores_same_run_without_replaying_action(tmp_path):
 
 def test_single_interior_echo_is_not_lost_by_external_point_subsampling():
     model = SelfReturnModel(BOUNDARY)
-    for i in range(12):
-        model.observe(
-            side_observation(0.15),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round((10 + i * 0.1) * 1e9),
-                    received_ros_ns=round((10 + i * 0.1) * 1e9),
-                    received_steady_ns=round((10 + i * 0.1) * 1e9),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=i + 1,
-                valid=True,
-                reason="",
-            ),
-            segment_id="segment",
-        )
-    assert model.validate() == 1
+    assert model.learn_samples((side_observation(0.15),) * 5) == 1
