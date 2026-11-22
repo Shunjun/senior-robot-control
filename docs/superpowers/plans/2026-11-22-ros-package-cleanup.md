@@ -95,4 +95,4 @@
 - Actual media/camera loopback tests with localhost UDP/Unix socket access: 48 passed in12.29s. No development or vehicle services started.
 - Final same-root collection: 2672 tests collected, exactly the three original collection errors.
 - Current layout/rebuild instructions and test evidence documented; historical B-stage READMEs explicitly marked as historical where they mention removed facades/packages.
-- Final code review removed redundant alias-to-itself checks in install verifier. Scope remains within the announced 280–350 file-path range. No independent worker review claimed; Orca bypass was explicitly authorized.
+- Final code review removed redundant alias-to-itself checks in install verifier. Final counting correction: Git rename-aware reporting is 305 logical files; counting both sides of moves per the original convention is 366 paths (81 added,174 modified,111 deleted), above the announced350 upper estimate. Extra paths are remaining dynamic fixture corrections and documentation; no further product scope is added. No independent worker review claimed; Orca bypass was explicitly authorized.
