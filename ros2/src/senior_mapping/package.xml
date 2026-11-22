@@ -15,8 +15,8 @@
   <depend>libtbb-dev</depend>
   <depend>libssl-dev</depend>
   <depend>rclcpp</depend>
-  <depend>senior_slam_bridge</depend>
-  <depend>senior_motion_msgs</depend>
+  <depend>senior_interfaces</depend>
+
   <depend>sensor_msgs</depend>
   <depend>tf2_ros</depend>
   <test_depend>ament_cmake_pytest</test_depend>
@@ -26,4 +26,5 @@
   <test_depend>senior_sensor_ingress</test_depend>
 
   <export><build_type>ament_cmake</build_type></export>
+<depend>senior_sensor_ingress</depend>
 </package>

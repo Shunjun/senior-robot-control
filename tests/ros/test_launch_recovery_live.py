@@ -78,8 +78,8 @@ def test_scan_receipt_crash_recovers_new_identity_and_rejects_old_capture(isolat
     from geometry_msgs.msg import TransformStamped
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import BoundedRawLaserScan, FencedFilteredScan
-    from senior_robot.scan_adapter import ScanAdapter
+    from senior_interfaces.msg import BoundedRawLaserScan, FencedFilteredScan
+    from senior_perception.scan_adapter import ScanAdapter
     from sensor_msgs.msg import LaserScan
     from test_scan_epoch_live import _room_scan
     from tf2_ros import StaticTransformBroadcaster
@@ -168,9 +168,9 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
     from senior_contracts.wire import SimpleEnvelope
-    from senior_motion_msgs.msg import FinalCommand
-    from senior_robot.command_node import CommandNode
-    from senior_robot.motion_lifecycle import MotionExecutor
+    from senior_interfaces.msg import FinalCommand
+    from senior_motion_control.command_node import CommandNode
+    from senior_sensor_ingress.ros_lifecycle import MotionExecutor
     from std_msgs.msg import String
     from vehicle_manager.settings.models import simulation_settings_profile
 

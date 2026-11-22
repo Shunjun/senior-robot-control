@@ -9,8 +9,8 @@
 #include <unistd.h>
 
 namespace fs = std::filesystem;
-using senior_slam_bridge::CaptureDirectory;
-using senior_slam_bridge::CappedArchive;
+using senior_mapping::CaptureDirectory;
+using senior_mapping::CappedArchive;
 
 int main(int argc, char ** argv)
 {
@@ -24,13 +24,13 @@ int main(int argc, char ** argv)
       output << "native";
       output.close();
     };
-  if (senior_slam_bridge::capture_native_archive(save, 6) !=
+  if (senior_mapping::capture_native_archive(save, 6) !=
     std::vector<char>{'n', 'a', 't', 'i', 'v', 'e'})
   {
     throw std::runtime_error("Unexpected native stream bytes");
   }
   try {
-    senior_slam_bridge::capture_native_archive(save, 5);
+    senior_mapping::capture_native_archive(save, 5);
     throw std::runtime_error("Unexpectedly accepted oversized native stream");
   } catch (const std::ios_base::failure &) {
   }

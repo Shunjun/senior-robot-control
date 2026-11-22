@@ -18,8 +18,8 @@ from probe_bounded_scan_ingress import BOUNDED_TOPIC, endpoint_gid, spin_for
 from probe_candidate_load import SERIALIZE, candidate, capture, pair_digest
 from probe_read_graph import BASE, LASER, MAP, ODOM, SCAN, SERVICE, scan_in_room, transform
 from rclpy.qos import qos_profile_sensor_data
-from senior_motion_msgs.msg import BoundedRawLaserScan
-from senior_slam_bridge.srv import ReadGraph
+from senior_interfaces.msg import BoundedRawLaserScan
+from senior_interfaces.srv import ReadGraph
 from sensor_msgs.msg import LaserScan
 from slam_toolbox.srv import SerializePoseGraph
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster

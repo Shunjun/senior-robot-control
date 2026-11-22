@@ -14,9 +14,9 @@
 
 #include "final_command_frame.hpp"
 #include "rclcpp/rclcpp.hpp"
-#include "senior_motion_msgs/msg/final_command.hpp"
+#include "senior_interfaces/msg/final_command.hpp"
 
-using Command = senior_motion_msgs::msg::FinalCommand;
+using Command = senior_interfaces::msg::FinalCommand;
 using namespace std::chrono_literals;
 
 // Private seqpacket framing: type, actual GID, four bounded UTF-8 strings,

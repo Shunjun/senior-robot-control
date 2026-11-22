@@ -1,6 +1,6 @@
 from pathlib import Path
 
-MESSAGES = Path(__file__).resolve().parents[2] / "ros2/src/senior_motion_msgs/msg"
+MESSAGES = Path(__file__).resolve().parents[2] / "ros2/src/senior_interfaces/msg"
 
 
 def test_tf_edge_uses_bounded_frame_names_and_fixed_pose():

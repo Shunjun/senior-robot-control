@@ -555,9 +555,9 @@ async def _launch_endpoint(path: Path) -> AsyncIterator[str | None]:
 
 def main() -> None:
     import rclpy
+    from senior_motion_control.command_node import CommandNode
+    from senior_sensor_ingress.ros_lifecycle import MotionExecutor, run
 
-    from senior_robot.command_node import CommandNode
-    from senior_robot.motion_lifecycle import MotionExecutor, run
     from vehicle_core.ipc import IpcServer
 
     def spin(node, executor, should_stop: Callable[[], bool]) -> None:

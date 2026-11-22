@@ -88,7 +88,7 @@ def _snapshot(stream: int, header: RawCaptureHeader, body: Any) -> _ImageBody | 
     body_type = type(body)
     expected = "BoundedRawImage" if stream < 2 else "BoundedRawCameraInfo"
     module = "_bounded_raw_image" if stream < 2 else "_bounded_raw_camera_info"
-    ros_module = sys.modules.get(f"senior_motion_msgs.msg.{module}")
+    ros_module = sys.modules.get(f"senior_interfaces.msg.{module}")
     if body_type is not SimpleNamespace and not (
         ros_module is not None and body_type is getattr(ros_module, expected, None)
     ):
@@ -98,7 +98,7 @@ def _snapshot(stream: int, header: RawCaptureHeader, body: Any) -> _ImageBody | 
     if capture_type is RawCaptureHeader:
         original = capture
     elif (
-        capture_module := sys.modules.get("senior_motion_msgs.msg._raw_capture_header")
+        capture_module := sys.modules.get("senior_interfaces.msg._raw_capture_header")
     ) is not None and capture_type is getattr(capture_module, "RawCaptureHeader", None):
         original = capture_from_message(capture)
     else:

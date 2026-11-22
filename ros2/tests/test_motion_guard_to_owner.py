@@ -14,7 +14,10 @@ from types import SimpleNamespace as N
 
 from control_process_test_support import capture_inputs
 from senior_motion_control.arbiter import FinalCommandFence
-from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
+from senior_motion_estimation.motion_observation_adapter import (
+    NativeObservations,
+    strict_reference_json,
+)
 from test_motion_core_chain import feed
 from test_motion_core_handoff import Publisher, core  # noqa: F401
 
@@ -61,7 +64,7 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
     )
     parent.setblocking(False)
     g._guard_socket = parent
-    monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: 10.3)
+    monkeypatch.setattr("senior_motion_control.motion_core_output.time.monotonic", lambda: 10.3)
     core.controller.trajectory.velocity = Velocity(0.4, 0)
     try:
         event_counts = []

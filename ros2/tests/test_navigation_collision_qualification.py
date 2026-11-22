@@ -19,7 +19,7 @@ from vehicle_core.values import OperationResult, OperationStatus
 @pytest.fixture
 def navigation_evidence(monkeypatch):
     monkeypatch.syspath_prepend("ros2/src/senior_robot")
-    lifecycle = ModuleType("senior_robot.motion_lifecycle")
+    lifecycle = ModuleType("senior_sensor_ingress.ros_lifecycle")
     lifecycle.with_dds_info = lambda callback: callback
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)
     path = Path("ros2/src/senior_robot/senior_robot/agent_adapter.py")
@@ -203,7 +203,7 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
         monkeypatch.setitem(sys.modules, name, module)
 
     fake_module("rclpy", ok=lambda: False)
-    fake_module("senior_robot.command_node", CommandNode=lambda **_: node)
+    fake_module("senior_motion_control.command_node", CommandNode=lambda **_: node)
     fake_module("senior_localization.hardware_reference", HardwareReference=lambda *a: runtime.ref)
     fake_module("senior_navigation.dedicated_controller", DedicatedController=Controller)
     fake_module(
@@ -212,7 +212,7 @@ def test_state_polling_does_not_log_running_route_qualification_loss(
         create_nav2_adapter=lambda _: None,
         create_planner_readiness=lambda _: lambda: True,
     )
-    lifecycle = sys.modules["senior_robot.motion_lifecycle"]
+    lifecycle = sys.modules["senior_sensor_ingress.ros_lifecycle"]
     lifecycle.MotionExecutor = object
     lifecycle.run = lambda factory, **kwargs: kwargs["spin"](
         factory(),

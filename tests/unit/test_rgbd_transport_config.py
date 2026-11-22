@@ -1,29 +1,27 @@
 """Selection and installation of the scoped RGB-D simulation transport."""
 
-import runpy
 import sys
 from pathlib import Path
 from types import ModuleType
-from unittest.mock import Mock, patch
 from xml.etree import ElementTree
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
-ROBOT = ROOT / "ros2/src/senior_robot"
-sys.path.insert(0, str(ROBOT))
+SIM = ROOT / "ros2/src/senior_sim"
+sys.path.insert(0, str(SIM))
 
 
 def select(env=None, enabled=True, profile=None, cwd=None, rmw="rmw_fastrtps_cpp"):
     if profile is None:
-        profile = str(ROBOT / "config/rgbd_transport.xml")
-    from senior_robot.rgbd_transport import transport_environment
+        profile = str(SIM / "config/rgbd_transport.xml")
+    from senior_sim.rgbd_transport import transport_environment
 
     return transport_environment(env or {}, enabled, profile, cwd or ROOT, lambda: rmw)
 
 
 def test_default_profile_for_humble_fastdds():
-    assert select() == {"FASTRTPS_DEFAULT_PROFILES_FILE": str(ROBOT / "config/rgbd_transport.xml")}
+    assert select() == {"FASTRTPS_DEFAULT_PROFILES_FILE": str(SIM / "config/rgbd_transport.xml")}
 
 
 def test_explicit_profile(tmp_path):
@@ -46,7 +44,7 @@ def test_detected_non_fastdds_does_not_read_profile():
 
 
 def test_unknown_rmw_query_fails_clearly():
-    from senior_robot.rgbd_transport import transport_environment
+    from senior_sim.rgbd_transport import transport_environment
 
     def unavailable():
         raise ImportError("no rclpy")
@@ -105,14 +103,10 @@ def test_working_directory_profile_is_preserved(tmp_path, filename):
 
 
 def test_profile_is_installed_and_contains_tested_transport():
-    setuptools = ModuleType("setuptools")
-    setuptools.setup = Mock()
-    with patch.dict(sys.modules, {"setuptools": setuptools}):
-        runpy.run_path(str(ROBOT / "setup.py"))
-    setup = setuptools.setup
-    files = dict(setup.call_args.kwargs["data_files"])["share/senior_robot/config"]
-    assert "config/rgbd_transport.xml" in files
-    root = ElementTree.parse(ROBOT / "config/rgbd_transport.xml").getroot()
+    cmake = (SIM / "CMakeLists.txt").read_text()
+    assert "install(DIRECTORY urdf worlds launch config DESTINATION share/${PROJECT_NAME})" in cmake
+    assert (SIM / "config/rgbd_transport.xml").is_file()
+    root = ElementTree.parse(SIM / "config/rgbd_transport.xml").getroot()
     ns = {"dds": "http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles"}
     assert root.find(".//dds:segment_size", ns).text == "16777216"
     assert root.find(".//dds:useBuiltinTransports", ns).text == "false"
@@ -192,7 +186,7 @@ def test_launch_scopes_transport_to_rgbd_children(monkeypatch):
         environment={},
         config={
             "enable_rgbd_transport": "true",
-            "rgbd_transport_profile": str(ROBOT / "config/rgbd_transport.xml"),
+            "rgbd_transport_profile": str(SIM / "config/rgbd_transport.xml"),
         },
     )
     rclpy = ModuleType("rclpy")
@@ -203,24 +197,3 @@ def test_launch_scopes_transport_to_rgbd_children(monkeypatch):
     additions = children[0].kwargs["function"](context)
     assert {action.args for action in additions} == set(select().items())
     assert context.environment == {}
-
-    # The old launch files remain argument-only Includes; no second node owner.
-    for filename in ("simulation_motion.launch.py", "simulation_rgbd.launch.py"):
-        spec = importlib.util.spec_from_file_location(
-            "compatible_launch", ROBOT / "launch" / filename
-        )
-        wrapper = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(wrapper)
-        items = wrapper.generate_launch_description().args[0]
-        arguments = {
-            item.args[0] for item in items if isinstance(item, actions.DeclareLaunchArgument)
-        }
-        includes = [item for item in items if isinstance(item, actions.IncludeLaunchDescription)]
-        assert len(includes) == 1
-        assert len(items) == len(arguments) + 1
-        forwarded = dict(includes[0].kwargs["launch_arguments"])
-        assert set(forwarded) == arguments
-        assert all(value.args == (name,) for name, value in forwarded.items())
-        target = includes[0].args[0].args[0].args[0]
-        assert target[0].args == ("senior_sim",)
-        assert target[1:] == ["launch", filename]

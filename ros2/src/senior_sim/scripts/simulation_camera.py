@@ -8,7 +8,7 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy
-from senior_robot.motion_lifecycle import MotionExecutor, with_dds_info
+from senior_sensor_ingress.ros_lifecycle import MotionExecutor, with_dds_info
 from sensor_msgs.msg import Image
 
 from vehicle_core.rgb1 import publish_image

@@ -417,10 +417,10 @@ async def test_single_map_odom_owner() -> None:
     assert store.odom_owner == "wheel_odom"
     assert store.map_ref == MAP
 
-    slam_yaml = (ROOT / "ros2" / "src" / "senior_robot" / "config" / "slam.yaml").read_text(
+    slam_yaml = (ROOT / "ros2" / "src" / "senior_mapping" / "config" / "slam.yaml").read_text(
         encoding="utf-8"
     )
-    launch = (ROOT / "ros2" / "src" / "senior_robot" / "launch" / "mapping.launch.py").read_text(
+    launch = (ROOT / "ros2" / "src" / "senior_mapping" / "launch" / "mapping.launch.py").read_text(
         encoding="utf-8"
     )
     assert slam_yaml.count("odom_frame:") == 1

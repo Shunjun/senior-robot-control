@@ -9,15 +9,15 @@
 #include <stdexcept>
 #include <string>
 
-#include <senior_motion_msgs/msg/bounded_raw_laser_scan.hpp>
+#include <senior_interfaces/msg/bounded_raw_laser_scan.hpp>
 #include "senior_sensor_ingress/sample_record.hpp"
 
 namespace senior_sensor_ingress {
 // One bounded raw scan source, independent of the image process and its clocks.
 class ScanLedger {
 public:
-  using Scan = senior_motion_msgs::msg::BoundedRawLaserScan;
-  using Header = senior_motion_msgs::msg::RawCaptureHeader;
+  using Scan = senior_interfaces::msg::BoundedRawLaserScan;
+  using Header = senior_interfaces::msg::RawCaptureHeader;
   enum class Match {exact, retired, missing};
 
   explicit ScanLedger(size_t capacity = 128, double age_limit = 3.0)

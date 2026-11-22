@@ -5,7 +5,7 @@ import subprocess
 
 
 def pytest_configure(config):
-    import senior_robot.motion_core_output as module
+    import senior_motion_control.motion_core_output as module
 
     source = subprocess.check_output(
         [

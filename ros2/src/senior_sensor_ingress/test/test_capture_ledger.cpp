@@ -2,7 +2,7 @@
 
 #include "senior_sensor_ingress/capture_ledger.hpp"
 
-using senior_motion_msgs::msg::RawCaptureHeader;
+using senior_interfaces::msg::RawCaptureHeader;
 using senior_sensor_ingress::CaptureLedger;
 
 TEST(CaptureLedger, MatchesExactIssuedHeaderAndNeverExtendsFirstReceipt)

@@ -30,8 +30,8 @@ from probe_read_graph import (
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
-from senior_motion_msgs.msg import BoundedRawLaserScan
-from senior_slam_bridge.srv import CaptureGraph, ReadGraph, ReadLoadedGraph
+from senior_interfaces.msg import BoundedRawLaserScan
+from senior_interfaces.srv import CaptureGraph, ReadGraph, ReadLoadedGraph
 from sensor_msgs.msg import LaserScan
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 

@@ -14,12 +14,12 @@ def test_cpp_age_queue_boundaries_and_transient_crossing(tmp_path: Path) -> None
     assert compiler is not None
     source = tmp_path / "policy.cpp"
     source.write_text(r"""
-#include "senior_motion_msgs/sensor_timing.hpp"
-#include "senior_motion_msgs/sample_time.hpp"
+#include "senior_sensor_ingress/sensor_timing.hpp"
+#include "senior_sensor_ingress/sample_time.hpp"
 #include <cassert>
 #include <limits>
 int main() {
-  using namespace senior_motion_msgs::time;
+  using namespace senior_sensor_ingress::time;
   const auto original = map_sample(99800000000LL, 100000000000LL, 20000000000ULL, 1);
   assert(original.sample_steady_ns == 19800000000ULL);
   assert(20150000000ULL - original.sample_steady_ns == 350000000ULL);
@@ -62,7 +62,7 @@ int main() {
             "-Wall",
             "-Wextra",
             "-Werror",
-            "-I" + str(Path("ros2/src/senior_motion_msgs/include").resolve()),
+            "-I" + str(Path("ros2/src/senior_sensor_ingress/include").resolve()),
             str(source),
             "-o",
             str(executable),

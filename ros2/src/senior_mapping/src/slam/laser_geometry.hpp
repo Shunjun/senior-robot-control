@@ -4,7 +4,7 @@
 #include <cmath>
 #include <cstddef>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 // Translation and quaternion of base <- laser, looked up at the original scan stamp.
 struct LaserTransform
@@ -70,6 +70,6 @@ inline bool matches_native_laser_geometry(
          std::abs(1 - 2 * (x * x + z * z) - handedness * cos_yaw) <= tolerance &&
          std::abs(2 * (y * z + x * w)) <= tolerance;
 }
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 #endif  // SENIOR_SLAM_BRIDGE__LASER_GEOMETRY_HPP_

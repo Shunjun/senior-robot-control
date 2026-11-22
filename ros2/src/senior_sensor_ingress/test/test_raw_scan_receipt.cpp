@@ -11,7 +11,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rcl/time.h>
 #include <sensor_msgs/msg/laser_scan.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_laser_scan.hpp>
+#include <senior_interfaces/msg/bounded_raw_laser_scan.hpp>
 
 #include "senior_sensor_ingress/raw_receipt.hpp"
 #include "senior_sensor_ingress/scan_receipt.hpp"
@@ -47,7 +47,7 @@ TEST(RawScanReceipt, RealMessageIdentityAndRetiredPublisherAfterSuccessor)
     }, true);
   auto fixture = std::make_shared<rclcpp::Node>("raw_scan_fixture");
   using Scan = sensor_msgs::msg::LaserScan;
-  using Bounded = senior_motion_msgs::msg::BoundedRawLaserScan;
+  using Bounded = senior_interfaces::msg::BoundedRawLaserScan;
   std::vector<Bounded> received;
   auto output = fixture->create_subscription<Bounded>(
     "/safety/raw/scan", rclcpp::SensorDataQoS(), [&](Bounded::ConstSharedPtr msg) {
@@ -193,7 +193,7 @@ TEST(RawScanReceipt, RollbackDuringQualificationCannotRelabelOldCallback)
   }
   auto fixture = std::make_shared<rclcpp::Node>("scan_clock_qualification_fixture");
   using Scan = sensor_msgs::msg::LaserScan;
-  using Bounded = senior_motion_msgs::msg::BoundedRawLaserScan;
+  using Bounded = senior_interfaces::msg::BoundedRawLaserScan;
   std::mutex mutex;
   std::vector<Bounded> received;
   auto publisher = fixture->create_publisher<Scan>("/scan", rclcpp::SensorDataQoS());

@@ -14,8 +14,8 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rcl/time.h>
 #include <sensor_msgs/msg/image.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_image.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_camera_info.hpp>
+#include <senior_interfaces/msg/bounded_raw_image.hpp>
+#include <senior_interfaces/msg/bounded_raw_camera_info.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include "senior_sensor_ingress/raw_receipt.hpp"
 
@@ -56,7 +56,7 @@ TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
     });
   auto fixture = std::make_shared<rclcpp::Node>("raw_binding_fixture");
   using Image = sensor_msgs::msg::Image;
-  using Bounded = senior_motion_msgs::msg::BoundedRawImage;
+  using Bounded = senior_interfaces::msg::BoundedRawImage;
   std::vector<Bounded> received;
   auto output = fixture->create_subscription<Bounded>(
     "/raw_binding_test/bounded_rgb", rclcpp::SensorDataQoS(),
@@ -177,7 +177,7 @@ TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
     return false;
   }));
   using Info = sensor_msgs::msg::CameraInfo;
-  using BoundedInfo = senior_motion_msgs::msg::BoundedRawCameraInfo;
+  using BoundedInfo = senior_interfaces::msg::BoundedRawCameraInfo;
   std::vector<Bounded> depths;
   std::vector<BoundedInfo> rgb_infos, depth_infos;
   auto depth_output = fixture->create_subscription<Bounded>(
@@ -301,7 +301,7 @@ TEST(RawReceipt, RetiredRealRawCallbackCannotRevokeSuccessor)
     }, true);
   auto fixture = std::make_shared<rclcpp::Node>("raw_retired_fixture");
   using Image = sensor_msgs::msg::Image;
-  using Bounded = senior_motion_msgs::msg::BoundedRawImage;
+  using Bounded = senior_interfaces::msg::BoundedRawImage;
   std::vector<Bounded> received;
   auto output = fixture->create_subscription<Bounded>(
     "/safety/raw/rgb", rclcpp::SensorDataQoS(), [&](Bounded::ConstSharedPtr value) {
@@ -401,9 +401,9 @@ TEST(RawReceipt, ImageAndCameraInfoRollbackDuringQualificationKeepOriginalSegmen
   auto fixture = std::make_shared<rclcpp::Node>("image_info_clock_qualification_fixture");
   using Image = sensor_msgs::msg::Image;
   using Info = sensor_msgs::msg::CameraInfo;
-  using RawImage = senior_motion_msgs::msg::BoundedRawImage;
-  using RawInfo = senior_motion_msgs::msg::BoundedRawCameraInfo;
-  using Header = senior_motion_msgs::msg::RawCaptureHeader;
+  using RawImage = senior_interfaces::msg::BoundedRawImage;
+  using RawInfo = senior_interfaces::msg::BoundedRawCameraInfo;
+  using Header = senior_interfaces::msg::RawCaptureHeader;
   struct Record {int stream; Header capture;};
   std::mutex mutex;
   std::vector<Record> received;

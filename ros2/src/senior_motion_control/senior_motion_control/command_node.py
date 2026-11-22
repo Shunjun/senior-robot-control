@@ -22,7 +22,7 @@ from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.subscription import Subscription
 from senior_contracts.wire import Envelope, ManualIntentEnvelope, RecoveryEnvelope, SimpleEnvelope
-from senior_motion_msgs.msg import DriveExecutionFeedback, FinalCommand
+from senior_interfaces.msg import DriveExecutionFeedback, FinalCommand
 from senior_sensor_ingress.native_receipt import with_dds_info
 from std_msgs.msg import String
 from vehicle_manager.settings.models import DrivingSettings
@@ -1297,6 +1297,6 @@ class CommandNode(Node):
 
 
 def main() -> None:
-    from senior_motion_control.motion_lifecycle import MotionExecutor, run
+    from senior_sensor_ingress.ros_lifecycle import MotionExecutor, run
 
     run(CommandNode, cli=True, executor_factory=MotionExecutor)

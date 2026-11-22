@@ -7,6 +7,7 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+import senior_motion_control.motion_core_output as module
 from control_process_test_support import (
     capture_inputs,
     generic_motion_profile,
@@ -14,7 +15,6 @@ from control_process_test_support import (
     make_core,
     read_inputs,
 )
-from senior_robot import motion_core_output as module
 from sensor_time_test_support import sample_time
 from test_motion_reference_backlog import Node
 
@@ -25,7 +25,7 @@ CASE = json.loads(Path("tests/fixtures/reference_clock_frontier.json").read_text
 def witness(monkeypatch):
     message = ModuleType("std_msgs.msg")
     message.String = lambda: N(data="")
-    lifecycle = ModuleType("senior_robot.motion_lifecycle")
+    lifecycle = ModuleType("senior_sensor_ingress.ros_lifecycle")
     lifecycle.with_dds_info = lambda f: f
     monkeypatch.setitem(sys.modules, message.__name__, message)
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)

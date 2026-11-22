@@ -11,10 +11,10 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <senior_motion_msgs/msg/bounded_depth_evidence.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_camera_info.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_image.hpp>
-#include <senior_motion_msgs/msg/fenced_depth_evidence.hpp>
+#include <senior_interfaces/msg/bounded_depth_evidence.hpp>
+#include <senior_interfaces/msg/bounded_raw_camera_info.hpp>
+#include <senior_interfaces/msg/bounded_raw_image.hpp>
+#include <senior_interfaces/msg/fenced_depth_evidence.hpp>
 
 #include "senior_sensor_ingress/raw_receipt.hpp"
 
@@ -50,10 +50,10 @@ TEST(DepthEgress, RealSourcesPreserveHeadersAndRejectCurrentHeaderMutation)
   auto fixture = std::make_shared<rclcpp::Node>("depth_egress_fixture");
   using Image = sensor_msgs::msg::Image;
   using Info = sensor_msgs::msg::CameraInfo;
-  using RawImage = senior_motion_msgs::msg::BoundedRawImage;
-  using RawInfo = senior_motion_msgs::msg::BoundedRawCameraInfo;
-  using Depth = senior_motion_msgs::msg::BoundedDepthEvidence;
-  using Fenced = senior_motion_msgs::msg::FencedDepthEvidence;
+  using RawImage = senior_interfaces::msg::BoundedRawImage;
+  using RawInfo = senior_interfaces::msg::BoundedRawCameraInfo;
+  using Depth = senior_interfaces::msg::BoundedDepthEvidence;
+  using Fenced = senior_interfaces::msg::FencedDepthEvidence;
   std::mutex mutex;
   std::vector<RawImage> images;
   std::vector<RawInfo> infos;

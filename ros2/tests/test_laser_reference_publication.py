@@ -8,6 +8,7 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+import senior_motion_control.motion_core_output as motion_core_output
 from control_process_test_support import (
     capture_inputs,
     generic_motion_profile,
@@ -16,7 +17,6 @@ from control_process_test_support import (
 )
 from motion_reference_test_support import ReadySubscription
 from senior_motion_estimation.motion_observation_adapter import NativeObservationRosBridge
-from senior_robot import motion_core_output
 from sensor_time_test_support import capture_fields, sample_time
 
 from vehicle_core.sample_time import SampleTime
@@ -137,10 +137,10 @@ def phase(monkeypatch):
         "rclpy.qos": {"qos_profile_sensor_data": N()},
         "rclpy.time": {"Time": N},
         "sensor_msgs.msg": {"Imu": N},
-        "senior_motion_msgs.msg": {"ScanMotion": N},
+        "senior_interfaces.msg": {"ScanMotion": N},
         "std_msgs.msg": {"String": lambda: N(data="")},
         "tf2_ros": {"TransformException": type("TransformException", (Exception,), {})},
-        "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
+        "senior_sensor_ingress.ros_lifecycle": {"with_dds_info": lambda callback: callback},
     }.items():
         module = ModuleType(name)
         vars(module).update(fields)

@@ -220,24 +220,18 @@ def verify_production_entry(*, compatible: bool = False) -> None:
 
 
 def verify_navigation() -> None:
-    """Verify the real SDK aliases, then ROS prefix paths when ROS is installed."""
-    import senior_navigation.route as old_route
+    """Verify canonical navigation contracts and the functional ROS installation."""
     from senior_navigation import navigation_adapter, route
-    from senior_robot import navigation_adapter as old_adapter
 
     from vehicle_core.errors import DomainError, ErrorCode
     from vehicle_core.values import MapRef, Pose2D
 
-    for name in ("RoutePlan", "QualifiedRoute", "RouteRejected", "RouteProgress", "RouteStatus"):
-        assert getattr(old_route, name) is getattr(route, name)
-    for name in ("NavigationAdapter", "RouteService", "MapGoal", "NavigationRejected", "main"):
-        assert getattr(old_adapter, name) is getattr(navigation_adapter, name)
     assert route.MapRef is MapRef and route.Pose2D is Pose2D
     assert issubclass(route.RouteRejected, DomainError)
     assert route.RouteRejected().code is ErrorCode.UNAVAILABLE
     assert route.RoutePlan.__module__ == "vehicle_core.route_plan"
     assert navigation_adapter.RouteService.__module__ == "senior_navigation.navigation_adapter"
-    print("installed navigation canonical route and historical SDK identities: PASS")
+    print("installed navigation canonical route contracts: PASS")
     try:
         from ament_index_python.packages import get_package_prefix, get_package_share_directory
     except ModuleNotFoundError as exc:
@@ -246,24 +240,22 @@ def verify_navigation() -> None:
         print("navigation ROS executable/share installation: UNVERIFIED (ament/ROS prefix absent)")
         return
     from senior_navigation.dedicated_controller import DedicatedController
-    from senior_robot.dedicated_controller import DedicatedController as OldController
 
-    assert OldController is DedicatedController
+    assert DedicatedController.__module__ == "senior_navigation.dedicated_controller"
     nav = Path(get_package_share_directory("senior_navigation"))
-    robot = Path(get_package_share_directory("senior_robot"))
-    for package in ("senior_navigation", "senior_robot"):
-        executable = Path(get_package_prefix(package)) / "lib" / package / "navigation_adapter"
-        assert executable.is_file() and executable.stat().st_mode & 0o111, executable
+    executable = (
+        Path(get_package_prefix("senior_navigation")) / "lib/senior_navigation/navigation_adapter"
+    )
+    assert executable.is_file() and executable.stat().st_mode & 0o111, executable
     for asset in (
         "config/nav2.yaml",
         "config/lattice_diff.json",
         "behavior_trees/navigate.xml",
         "behavior_trees/navigate_through_poses.xml",
+        "launch/navigation.launch.py",
     ):
-        assert (nav / asset).read_bytes() == (robot / asset).read_bytes(), asset
-    for share in (nav, robot):
-        assert (share / "launch/navigation.launch.py").is_file()
-    print("installed navigation new/old ROS executable and byte-identical share assets: PASS")
+        assert (nav / asset).is_file(), asset
+    print("installed navigation canonical executable and assets: PASS")
 
 
 def verify_platform_runtime() -> None:
@@ -1371,9 +1363,10 @@ def verify_route_execution(*, compatible: bool = False) -> None:
         import vehicle_manager.tasks.executor as old_executor
         from senior_navigation import navigation_adapter, route
         from senior_robot import agent_adapter
-        from senior_robot import navigation_adapter as old_adapter
         from vehicle_manager.storage.domain_bindings import TaskStore as LegacyStore
         from vehicle_manager.storage.domain_bindings import WaypointStore
+
+        from vehicle_core.route_plan import RoutePlan as old_adapter_RoutePlan
 
         for owner in (old_route, route):
             assert owner.RoutePlan is RoutePlan and owner.RouteRejected is RouteRejected
@@ -1381,7 +1374,7 @@ def verify_route_execution(*, compatible: bool = False) -> None:
         assert (
             navigation_adapter.RoutePlan
             is agent_adapter.RoutePlan
-            is old_adapter.RoutePlan
+            is old_adapter_RoutePlan
             is RoutePlan
         )
         assert ports.IpcNavigation is composition.IpcNavigation is IpcNavigation

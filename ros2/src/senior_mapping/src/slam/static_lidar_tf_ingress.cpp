@@ -1,16 +1,16 @@
 #include "static_lidar_tf_ingress.hpp"
-#include <senior_motion_msgs/sample_time.hpp>
+#include <senior_sensor_ingress/sample_time.hpp>
 
 #include <iterator>
 #include <stdexcept>
 #include <utility>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 namespace
 {
 using namespace std::chrono_literals;
-using Receipt = senior_motion_msgs::msg::BoundedStaticTf;
+using Receipt = senior_interfaces::msg::BoundedStaticTf;
 
 template<typename Bytes>
 std::string gid_hex(const Bytes & bytes)
@@ -110,7 +110,7 @@ StaticLidarTfIngress::StaticLidarTfIngress(
 
 bool StaticLidarTfIngress::current_owners(const Receipt & receipt) const
 {
-  return sole_owner(node_, topic_, relay_node_, "senior_motion_msgs/msg/BoundedStaticTf",
+  return sole_owner(node_, topic_, relay_node_, "senior_interfaces/msg/BoundedStaticTf",
            receipt.bridge_gid) &&
          sole_owner(node_, raw_topic_, raw_node_, "tf2_msgs/msg/TFMessage", receipt.raw_gid);
 }
@@ -220,7 +220,7 @@ void StaticLidarTfIngress::poll()
     // has never admitted a scan. Unadmitted valid receipts may still be promoted.
     startup_cursor_ = candidate;
   }
-  const double now_steady = static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
+  const double now_steady = static_cast<double>(senior_sensor_ingress::time::monotonic_ns()) / 1e9;
   if (!candidate->valid || !candidate->admitted || candidate->generation == 0 ||
     candidate->bridge_boot_id.empty() || candidate->bridge_boot_id.size() > 64 ||
     !valid_times(*candidate, 0, now_steady))
@@ -261,7 +261,7 @@ void StaticLidarTfIngress::poll()
   startup_cursor_.reset();
 }
 
-bool StaticLidarTfIngress::admits(const senior_motion_msgs::msg::RawCaptureHeader & scan)
+bool StaticLidarTfIngress::admits(const senior_interfaces::msg::RawCaptureHeader & scan)
 {
   if (!source_active()) {
     return false;
@@ -274,7 +274,7 @@ bool StaticLidarTfIngress::admits(const senior_motion_msgs::msg::RawCaptureHeade
 }
 
 StaticLidarTfIngress::Receipt::ConstSharedPtr StaticLidarTfIngress::verify_mount(
-  const senior_motion_msgs::msg::RawCaptureHeader & scan, LaserTransform actual)
+  const senior_interfaces::msg::RawCaptureHeader & scan, LaserTransform actual)
 {
   if (!admits(scan)) {
     return nullptr;
@@ -285,4 +285,4 @@ StaticLidarTfIngress::Receipt::ConstSharedPtr StaticLidarTfIngress::verify_mount
   }
   return active_;
 }
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping

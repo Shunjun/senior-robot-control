@@ -128,7 +128,7 @@ class OptionalMotionInputs:
         self._course_frame = None if profile.gps_input is None else profile.gps_input.course_frame
         self._subscriptions = []
         from nav_msgs.msg import Odometry
-        from senior_motion_msgs.msg import FencedRgbdCandidate
+        from senior_interfaces.msg import FencedRgbdCandidate
 
         for name, cls, handler in (
             ("gps", Odometry, self.gps),

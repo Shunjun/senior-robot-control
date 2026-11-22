@@ -126,7 +126,7 @@ async def test_compression_consumer_does_not_restart_shared_capture():
 async def test_production_preview_releases_lease_source_and_encoder(service_root, monkeypatch):
     import threading
 
-    from senior_robot import ros_video
+    import senior_sensor_ingress.ros_video as ros_video
     from vehicle_manager.agent.config import AgentConfig
     from vehicle_manager.agent.production import _media_binding
     from vehicle_manager.media.stream import SessionDescription, VideoSession
@@ -204,7 +204,7 @@ async def test_production_preview_releases_lease_source_and_encoder(service_root
 
 
 def test_compression_gate_limits_work_to_fifteen_fps_and_keeps_latest_payload():
-    from senior_robot.camera_rate_limit import LatestImageGate
+    from senior_sensor_ingress.camera_rate_limit import LatestImageGate
 
     gate = LatestImageGate()
     emitted = []

@@ -11,7 +11,7 @@ from contextlib import contextmanager
 import rclpy
 from geometry_msgs.msg import TransformStamped
 from rclpy.qos import qos_profile_sensor_data
-from senior_slam_bridge.srv import ReadGraph
+from senior_interfaces.srv import ReadGraph
 from sensor_msgs.msg import LaserScan
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 

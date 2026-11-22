@@ -41,7 +41,7 @@ def camera_actions(context):
         stream = "color" if component == "jpeg" else "depth"
         limited = f"/senior_camera/{stream}/compression_input"
         limiter = Node(
-            package="senior_robot",
+            package="senior_sensor_ingress",
             executable="camera_rate_limit",
             name=f"limit_{stream}_compression",
             parameters=[{"input_topic": f"/camera/{stream}/image_raw", "output_topic": limited}],

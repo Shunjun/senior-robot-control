@@ -5,7 +5,7 @@
 
 #include "senior_sensor_ingress/scan_ledger.hpp"
 
-using senior_motion_msgs::msg::BoundedRawLaserScan;
+using senior_interfaces::msg::BoundedRawLaserScan;
 using senior_sensor_ingress::ScanLedger;
 
 TEST(ScanLedger, RawSafetyAndFilteredBeamsRemainBoundToIssuedFrame)

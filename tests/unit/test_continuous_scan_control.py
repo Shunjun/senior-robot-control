@@ -15,11 +15,11 @@ from senior_motion_control.constraints import (
 )
 from senior_motion_control.contracts import BodyMotion, MotionTarget, ResponseBounds
 from senior_motion_control.controller import Feedback, MotionController
+from senior_motion_control.motion_core_output import MotionCoreOutput
 from senior_motion_estimation.source_modes import SourceMode
+from senior_perception.raw_safety_observation import RawSafetyObservation
+from senior_perception.scan_decode import ScanGeometry
 from senior_perception.space_estimator import SpaceEstimation
-from senior_robot.motion_core_output import MotionCoreOutput
-from senior_robot.motion_core_perception import ScanGeometry
-from senior_robot.raw_safety_observation import RawSafetyObservation
 from sensor_time_test_support import capture_fields, sample_time
 
 from vehicle_core.config import DeviceProfile
@@ -191,9 +191,9 @@ def run_scan_trace(hz, delay, *, real_pose=False):
         import multiprocessing as mp
         from types import SimpleNamespace
 
-        from senior_robot.control_inputs import ControlInputs
-        from senior_robot.motion_observation_adapter import NativeObservations
-        from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+        from senior_motion_control.control_inputs import ControlInputs
+        from senior_motion_estimation.motion_observation_adapter import NativeObservations
+        from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
 
         from vehicle_core.diagnostics import RuntimeDiagnostics
         from vehicle_core.process_resources import LatestSnapshot

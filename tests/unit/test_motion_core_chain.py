@@ -7,7 +7,10 @@ from types import SimpleNamespace as N
 
 from control_process_test_support import capture_inputs, publish_inputs
 from senior_motion_control.constraint_worker import ConstraintScheduler
-from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
+from senior_motion_estimation.motion_observation_adapter import (
+    NativeObservations,
+    strict_reference_json,
+)
 from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier, core  # noqa: F401 -- shared fake ROS fixture
 
@@ -115,7 +118,7 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
         N(node_name="motion_fusion", node_namespace="/", endpoint_gid=b"fusion")
     ]
     now = [10.0]
-    monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: now[0])
+    monkeypatch.setattr("senior_motion_control.motion_core_output.time.monotonic", lambda: now[0])
 
     def tick(t):
         now[0] = t
@@ -201,7 +204,7 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
 
 def test_disabled_learning_prefetch_submits_latest_scan_before_control_tick(core, monkeypatch):  # noqa: F811
     from control_process_test_support import LocalWorker
-    from senior_robot.motion_core_perception import ScanGeometry
+    from senior_perception.scan_decode import ScanGeometry
     from test_continuous_scan_control import scan
 
     assert core.startup.state == "disabled" and core._learning_geometry is None

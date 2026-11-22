@@ -8,7 +8,7 @@ from types import SimpleNamespace as N
 import pytest
 from control_process_test_support import generic_motion_profile
 from pydantic import ValidationError
-from senior_robot.motion_core_output import MotionCoreOutput
+from senior_motion_control.motion_core_output import MotionCoreOutput
 from test_motion_core_handoff import Node, barrier, core  # noqa: F401
 from test_navigation_command_clock import navigation  # noqa: F401
 from test_runtime_guard_ready import CASE, ready  # noqa: F401

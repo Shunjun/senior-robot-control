@@ -9,8 +9,8 @@ import pytest
 @pytest.mark.parametrize("mode", ["shutdown", "live_failure"])
 def test_library_run_restores_sigint_and_propagates_live_failures(monkeypatch, mode):
     pytest.importorskip("rclpy")
+    import senior_sensor_ingress.ros_lifecycle as lifecycle
     from rclpy.executors import ExternalShutdownException
-    from senior_robot import motion_lifecycle as lifecycle
 
     events = []
     node = SimpleNamespace(destroy_node=lambda: events.append("destroyed"))
@@ -48,7 +48,7 @@ def test_library_run_restores_sigint_and_propagates_live_failures(monkeypatch, m
 
 def test_cli_mode_does_not_swallow_a_live_runtime_failure(monkeypatch):
     pytest.importorskip("rclpy")
-    from senior_robot import motion_lifecycle as lifecycle
+    import senior_sensor_ingress.ros_lifecycle as lifecycle
 
     events = []
     node = SimpleNamespace(destroy_node=lambda: events.append("destroyed"))
@@ -84,7 +84,7 @@ def test_context_shutdown_between_factory_and_spin_cleans_up_without_global_exec
     script = """
 import rclpy
 from rclpy.node import Node
-from senior_robot.motion_lifecycle import run
+from senior_sensor_ingress.ros_lifecycle import run
 
 def factory():
     node = Node("shutdown_before_spin")
@@ -104,7 +104,7 @@ print("SHUTDOWN_COMPLETE", flush=True)
 
 def test_factory_cleans_partial_resources_before_reraising_interrupt(monkeypatch):
     pytest.importorskip("rclpy")
-    from senior_robot import motion_lifecycle as lifecycle
+    import senior_sensor_ingress.ros_lifecycle as lifecycle
 
     events = []
     monkeypatch.setattr(lifecycle.rclpy, "init", lambda: None)
@@ -253,7 +253,7 @@ import threading
 import time
 import rclpy
 from rclpy.node import Node
-from senior_robot.motion_lifecycle import run
+from senior_sensor_ingress.ros_lifecycle import run
 
 seen = []
 def prior(signum, frame):
@@ -280,7 +280,7 @@ print("NATIVE_WAKE_COMPLETE", flush=True)
 
 def test_cli_initialization_failure_restores_original_signal_handler(monkeypatch):
     pytest.importorskip("rclpy")
-    from senior_robot import motion_lifecycle as lifecycle
+    import senior_sensor_ingress.ros_lifecycle as lifecycle
 
     previous = signal.getsignal(signal.SIGINT)
     previous_term = signal.getsignal(signal.SIGTERM)
@@ -351,7 +351,7 @@ print("LIVE_ERROR_PRESERVED", flush=True)
 @pytest.mark.parametrize("cli", [False, True])
 def test_cli_joins_native_signal_thread_before_executor_guard_destruction(monkeypatch, cli):
     pytest.importorskip("rclpy")
-    from senior_robot import motion_lifecycle as lifecycle
+    import senior_sensor_ingress.ros_lifecycle as lifecycle
 
     events = []
     monkeypatch.setattr(lifecycle.rclpy, "init", lambda **_: None)

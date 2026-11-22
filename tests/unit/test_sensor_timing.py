@@ -88,10 +88,10 @@ def test_cpp_standard_mapping_and_age_use_same_integer_contract(tmp_path):
         pytest.skip("C++ compiler unavailable")
     source = tmp_path / "sample_time.cpp"
     source.write_text(r"""
-#include "senior_motion_msgs/sample_time.hpp"
-#include "senior_motion_msgs/sensor_timing.hpp"
+#include "senior_sensor_ingress/sample_time.hpp"
+#include "senior_sensor_ingress/sensor_timing.hpp"
 #include <cassert>
-using namespace senior_motion_msgs::time;
+using namespace senior_sensor_ingress::time;
 int main() {
   const auto sample = map_sample(99'800'000'000,100'000'000'000,20'000'000'000,1);
   assert(sample.sample_steady_ns == 19'800'000'000);
@@ -115,7 +115,7 @@ int main() {
             "-Wall",
             "-Wextra",
             "-Werror",
-            "-I" + str(Path("ros2/src/senior_motion_msgs/include").resolve()),
+            "-I" + str(Path("ros2/src/senior_sensor_ingress/include").resolve()),
             str(source),
             "-o",
             str(executable),

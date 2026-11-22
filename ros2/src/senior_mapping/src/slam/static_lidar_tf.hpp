@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 struct StaticLidarEdge
 {
@@ -124,6 +124,6 @@ inline bool matches_static_lidar_mount(LaserTransform expected, LaserTransform a
     std::hypot(expected.qx - sign * actual.qx, expected.qy - sign * actual.qy),
     std::hypot(expected.qz - sign * actual.qz, expected.qw - sign * actual.qw)) <= tolerance;
 }
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 #endif  // SENIOR_SLAM_BRIDGE__STATIC_LIDAR_TF_HPP_

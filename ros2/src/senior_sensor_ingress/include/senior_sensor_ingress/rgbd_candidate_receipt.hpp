@@ -1,7 +1,7 @@
 #pragma once
 
-#include "senior_motion_msgs/sensor_timing.hpp"
-#include "senior_motion_msgs/sample_time.hpp"
+#include "senior_sensor_ingress/sensor_timing.hpp"
+#include "senior_sensor_ingress/sample_time.hpp"
 
 #include <array>
 #include <deque>
@@ -12,11 +12,11 @@
 #include <set>
 #include <string>
 #include <rclcpp/rclcpp.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_camera_info.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_image.hpp>
-#include <senior_motion_msgs/msg/bounded_static_tf.hpp>
-#include <senior_motion_msgs/msg/fenced_rgbd_candidate.hpp>
-#include <senior_motion_msgs/msg/rgbd_motion_candidate.hpp>
+#include <senior_interfaces/msg/bounded_raw_camera_info.hpp>
+#include <senior_interfaces/msg/bounded_raw_image.hpp>
+#include <senior_interfaces/msg/bounded_static_tf.hpp>
+#include <senior_interfaces/msg/fenced_rgbd_candidate.hpp>
+#include <senior_interfaces/msg/rgbd_motion_candidate.hpp>
 #include "senior_sensor_ingress/rgbd_candidate_ledger.hpp"
 
 namespace senior_sensor_ingress {
@@ -26,12 +26,12 @@ public:
 
 private:
   friend class RgbdCandidateReceiptTestPeer;
-  using Image = senior_motion_msgs::msg::BoundedRawImage;
-  using Info = senior_motion_msgs::msg::BoundedRawCameraInfo;
-  using Header = senior_motion_msgs::msg::RawCaptureHeader;
-  using Static = senior_motion_msgs::msg::BoundedStaticTf;
-  using Candidate = senior_motion_msgs::msg::RgbdMotionCandidate;
-  using Fenced = senior_motion_msgs::msg::FencedRgbdCandidate;
+  using Image = senior_interfaces::msg::BoundedRawImage;
+  using Info = senior_interfaces::msg::BoundedRawCameraInfo;
+  using Header = senior_interfaces::msg::RawCaptureHeader;
+  using Static = senior_interfaces::msg::BoundedStaticTf;
+  using Candidate = senior_interfaces::msg::RgbdMotionCandidate;
+  using Fenced = senior_interfaces::msg::FencedRgbdCandidate;
   struct Source {
     std::string bridge_gid, last_bridge_gid, last_bridge_boot, raw_gid, epoch;
     uint64_t sequence = 0;
@@ -61,7 +61,7 @@ private:
   std::string raw_boot_, tf_gid_, tf_boot_, tf_raw_gid_, producer_gid_, producer_boot_, relay_boot_;
   std::set<std::string> retired_boots_, retired_tf_gids_, retired_tf_raw_gids_, retired_producer_gids_;
   uint64_t tf_generation_ = 0, raw_generation_ = 0, producer_generation_ = 0, producer_sequence_ = 0, relay_sequence_ = 0;
-  senior_motion_msgs::time::ClockTracker clock_;
+  senior_sensor_ingress::time::ClockTracker clock_;
   double producer_floor_steady_ = 0.0;
   bool failed_ = false, tf_ready_ = false, tf_needs_new_generation_ = false, producer_ready_ = false;
   sensor_timing::Policy sensor_policy_;

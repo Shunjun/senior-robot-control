@@ -16,7 +16,7 @@ from probe_candidate_load import candidate
 from probe_read_graph import LASER, scan_in_room
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.serialization import deserialize_message
-from senior_motion_msgs.msg import BoundedRawLaserScan
+from senior_interfaces.msg import BoundedRawLaserScan
 from sensor_msgs.msg import LaserScan
 
 RAW = "/probe_acquire_scan"

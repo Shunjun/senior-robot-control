@@ -8,7 +8,7 @@
 #include <utility>
 #include <vector>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 inline constexpr std::size_t max_graph_file_bytes = 64 * 1024 * 1024;
 
@@ -56,6 +56,6 @@ public:
 private:
   int directory_;
 };
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 #endif  // SENIOR_SLAM_BRIDGE__NATIVE_CAPTURE_HPP_

@@ -25,7 +25,7 @@ from vehicle_core.sample_time import ClockTracker, SampleTime, map_sample
 TOPICS = {
     "clock": ("/clock", "rosgraph_msgs/msg/Clock"),
     "scan": ("/scan", "sensor_msgs/msg/LaserScan"),
-    "scan_motion": ("/motion/scan", "senior_motion_msgs/msg/ScanMotion"),
+    "scan_motion": ("/motion/scan", "senior_interfaces/msg/ScanMotion"),
     "motion": ("/motion/core_reference", "std_msgs/msg/String"),
     "wheel": ("/wheel/odom", "nav_msgs/msg/Odometry"),
     "imu": ("/imu/data", "sensor_msgs/msg/Imu"),
@@ -286,7 +286,7 @@ class RosCapture:
         from rclpy.qos import qos_profile_sensor_data
         from rosidl_runtime_py.convert import message_to_ordereddict
         from rosidl_runtime_py.utilities import get_message
-        from senior_robot.motion_lifecycle import MotionExecutor, with_dds_info
+        from senior_sensor_ingress.ros_lifecycle import MotionExecutor, with_dds_info
 
         self.ros = rclpy
         self.context = rclpy.Context()

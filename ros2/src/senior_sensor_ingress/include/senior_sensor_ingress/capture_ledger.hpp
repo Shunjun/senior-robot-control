@@ -15,7 +15,7 @@ namespace senior_sensor_ingress {
 // Bounded first-receipt metadata only; never retains an image payload.
 class CaptureLedger {
 public:
-  using Header = senior_motion_msgs::msg::RawCaptureHeader;
+  using Header = senior_interfaces::msg::RawCaptureHeader;
   enum class Match {exact, retired, missing};
 
   explicit CaptureLedger(size_t capacity = 128, double age_limit_ms = 1000.0)

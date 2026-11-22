@@ -106,7 +106,7 @@ def _media_binding(config: AgentConfig) -> MediaBinding:
         lease: CameraLease | None = None
         if config.ros_video_topic is not None:
             try:
-                from senior_robot.ros_video import RosCameraSource
+                from senior_sensor_ingress.ros_video import RosCameraSource
             except ModuleNotFoundError as exc:
                 if exc.name != "senior_robot":
                     raise

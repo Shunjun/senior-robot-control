@@ -40,7 +40,7 @@ def mapping_launch(monkeypatch):
         vars(module).update(members)
         monkeypatch.setitem(sys.modules, name, module)
     launch_file = (
-        Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/launch/mapping.launch.py"
+        Path(__file__).resolve().parents[2] / "ros2/src/senior_mapping/launch/mapping.launch.py"
     )
     description = runpy.run_path(str(launch_file))["generate_launch_description"]()
     actions = description.args[0]

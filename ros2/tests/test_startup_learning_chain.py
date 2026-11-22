@@ -11,9 +11,9 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from control_process_test_support import generic_motion_profile
 from learning_test_support import TestRun, learning_point
+from senior_motion_control.motion_core_output import MotionCoreOutput
 from senior_motion_estimation.observations import Source
-from senior_robot.motion_core_output import MotionCoreOutput
-from senior_robot.raw_safety_observation import RawSafetyObservation
+from senior_perception.raw_safety_observation import RawSafetyObservation
 from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier
 from test_native_output_protocol import output_module  # noqa: F401
@@ -32,7 +32,9 @@ class LearningRig:
         messages.String = lambda: SimpleNamespace(data="")
         monkeypatch.setitem(sys.modules, "std_msgs.msg", messages)
         monkeypatch.setenv("SENIOR_STARTUP_LEARNING_CLAIM", str(self.run.path))
-        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: self.now)
+        monkeypatch.setattr(
+            "senior_motion_control.motion_core_output.time.monotonic", lambda: self.now
+        )
         monkeypatch.setattr(
             "senior_perception.learning_runtime.LearningClient",
             lambda _, **kwargs: self.run.client(**kwargs),
@@ -485,9 +487,9 @@ def test_recovered_core_stays_read_only_until_handoff_then_can_run_a_new_explici
 
 
 def uncached_scan(core, raw, *, avoidance=False):
+    import senior_perception.scan_decode as perception
     from senior_perception.learning_view import LearningFilterView
     from senior_perception.self_learning import SelfReturnModel
-    from senior_robot import motion_core_perception as perception
 
     decode = perception.avoidance_observation if avoidance else perception.scan_observation
     expected = decode(raw, core.node._body)
@@ -502,8 +504,11 @@ def uncached_scan(core, raw, *, avoidance=False):
 
 
 def assert_original_scan_result(core, raw, actual, now, *, avoidance=False):
+    from senior_motion_control.vehicle_speed import limit_velocity as perception_limit_velocity
+    from senior_perception.collision import (
+        directional_clearance as perception_directional_clearance,
+    )
     from senior_perception.startup_visibility import startup_visibility
-    from senior_robot import motion_core_perception as perception
 
     expected = uncached_scan(core, raw, avoidance=avoidance)
     # JSON gives NaN its original nonfinite category; finite coordinates compare exactly.
@@ -512,19 +517,19 @@ def assert_original_scan_result(core, raw, actual, now, *, avoidance=False):
     )
     flags = dict(front_stop=True, rear_stop=True)
     assert startup_visibility(actual, **flags) == startup_visibility(expected, **flags)
-    clearance = perception.directional_clearance([raw], core.profile, now, filtered=actual)
-    reference = perception.directional_clearance([raw], core.profile, now, filtered=expected)
+    clearance = perception_directional_clearance([raw], core.profile, now, filtered=actual)
+    reference = perception_directional_clearance([raw], core.profile, now, filtered=expected)
     assert clearance == reference
     if clearance is not None:
         arguments = (Velocity(0.05, 0), Velocity(0.01, 0), 0.0)
-        assert perception.limit_velocity(*arguments, clearance, core.profile, 0.05) == (
-            perception.limit_velocity(*arguments, reference, core.profile, 0.05)
+        assert perception_limit_velocity(*arguments, clearance, core.profile, 0.05) == (
+            perception_limit_velocity(*arguments, reference, core.profile, 0.05)
         )
     return clearance
 
 
 def checked_current_velocity(core, now, function, *arguments):
-    from senior_robot.motion_core_perception import directional_clearance
+    from senior_perception.collision import directional_clearance
 
     raw = core.node._scans[-1]
     filtered = uncached_scan(core, raw, avoidance=bool(raw.predictions))
@@ -665,8 +670,8 @@ def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning
 ):
     from senior_motion_control import vehicle_speed
     from senior_perception import learning_runtime as motion_core_output
+    from senior_perception.raw_safety_observation import PredictedReturn
     from senior_perception.vision.raw_capture import capture_from_message
-    from senior_robot.raw_safety_observation import PredictedReturn
 
     rig.start()
     seed = capture_from_message(rig.core.node._scans[-1].message.raw_capture)
@@ -912,8 +917,8 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
     import socket
 
     from senior_motion_control import vehicle_speed
+    from senior_perception.scan_decode import scan_observation
     from senior_perception.startup_learning import StartupLearning
-    from senior_robot.motion_core_perception import scan_observation
 
     gc_settings = gc.isenabled(), gc.get_threshold()
     module = request.getfixturevalue("output_module")

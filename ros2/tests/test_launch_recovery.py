@@ -482,7 +482,7 @@ def production_command_owner(clock):
 @contextmanager
 def native_recovery_codec(tmp_path):
     """Dynamic input through the actual v3 C++ guard header and Python decoder."""
-    from senior_robot.final_command_frame import decode_frame
+    from senior_motion_control.final_command_frame import decode_frame
 
     compiler = os.environ.get("CXX") or shutil.which("c++")
     if not compiler:
@@ -582,7 +582,7 @@ def _check_command_guard_core_recovery(monkeypatch, tmp_path):
         node = production_command_owner(clock)
         requests, _ = wire_owner(monkeypatch, rig.run)
         monkeypatch.setattr(
-            "senior_robot.vehicle_learning.LearningClient", learning_client.LearningClient
+            "senior_perception.learning_runtime.LearningClient", learning_client.LearningClient
         )
         monkeypatch.setenv("SENIOR_LAUNCH_RECOVERED", "1")
         first = rig.new_core()

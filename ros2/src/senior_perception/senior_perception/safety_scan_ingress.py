@@ -8,7 +8,8 @@ from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from senior_motion_msgs.msg import BoundedRawLaserScan, BoundedSafetyScan
+from senior_interfaces.msg import BoundedRawLaserScan, BoundedSafetyScan
+from senior_sensor_ingress.ros_lifecycle import run
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from senior_perception.vision.raw_capture import RawCaptureAdmission, capture_from_message
@@ -173,3 +174,8 @@ class SafetyScanIngress(Node):
             self._publisher.publish(value)
         except (ValueError, OverflowError, UnicodeError, TransformException) as exc:
             self._new_epoch(str(exc) or "raw_scan_invalid", now_steady, now_ns / 1e9, scan.capture)
+
+
+def main():
+    """Assemble the shared functional node with the existing bounded ROS lifecycle."""
+    run(SafetyScanIngress, cli=True)

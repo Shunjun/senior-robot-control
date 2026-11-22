@@ -8,10 +8,10 @@ from senior_motion_control.constraints import ConstraintConfig, ConstraintEngine
 from senior_motion_control.contracts import MotionTarget
 from senior_motion_control.controller import MotionController
 from senior_motion_control.hardware_profile import load_hardware_profile
+from senior_motion_control.motion_core_output import MotionCoreOutput
 from senior_motion_control.stopping_input import StoppingRisk
+from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
 from senior_motion_estimation.observations import Source
-from senior_robot.motion_core_output import MotionCoreOutput
-from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from sensor_time_test_support import sample_time
 from shapely.geometry import GeometryCollection, Point, box
 from test_unified_motion_runtime import point
@@ -291,7 +291,7 @@ def test_hardware_profile_schema_and_launch_resolver_preserve_other_parameters()
     import json
 
     from senior_motion_control.hardware_profile import HardwareMotionProfile
-    from senior_robot.motion_profile import select_motion_profile
+    from senior_motion_control.motion_profile import select_motion_profile
 
     schema = json.loads((ROOT / "config/hardware-motion.schema.json").read_text())
     assert schema == HardwareMotionProfile.model_json_schema()

@@ -65,15 +65,15 @@ def core(monkeypatch):
     msg = ModuleType("std_msgs.msg")
     msg.String = lambda: N(data="")
     monkeypatch.setitem(sys.modules, "std_msgs.msg", msg)
-    lifecycle = ModuleType("senior_robot.motion_lifecycle")
+    lifecycle = ModuleType("senior_sensor_ingress.ros_lifecycle")
 
     def with_info(callback):
         callback._senior_dds_info = True
         return callback
 
     lifecycle.with_dds_info = with_info
-    monkeypatch.setitem(sys.modules, "senior_robot.motion_lifecycle", lifecycle)
-    monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: 10.0)
+    monkeypatch.setitem(sys.modules, "senior_sensor_ingress.ros_lifecycle", lifecycle)
+    monkeypatch.setattr("senior_motion_control.motion_core_output.time.monotonic", lambda: 10.0)
     local_resources(monkeypatch)
     c = make_core(monkeypatch, Node(), generic_motion_profile())
     yield c
@@ -241,7 +241,9 @@ def test_release_uses_one_steady_instant_and_does_not_create_clock_fault(core, m
     core._event(K.MANUAL_START, 10.0, "authority")
     core.target = MotionTarget(Velocity(0.2, 0), "manual", "authority:42", 10.2)
     clock = iter([10.01, 10.02, 10.03])
-    monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: next(clock))
+    monkeypatch.setattr(
+        "senior_motion_control.motion_core_output.time.monotonic", lambda: next(clock)
+    )
     assert core.command(barrier("release"))
     assert core.machine.state.fault_revision == 0
     assert core.machine.state.mode is not MotionMode.EXECUTION_FAULT

@@ -4,7 +4,7 @@
 TEST(RgbdCandidateLedger, MatchesExactRawHeaderLayoutAndOriginalBodyHash)
 {
   senior_sensor_ingress::RgbdCandidateLedger ledger;
-  senior_motion_msgs::msg::BoundedRawImage image;
+  senior_interfaces::msg::BoundedRawImage image;
   image.capture.valid = true;
   image.capture.sequence = 1;
   image.capture.bridge_boot_id = "boot";
@@ -18,7 +18,7 @@ TEST(RgbdCandidateLedger, MatchesExactRawHeaderLayoutAndOriginalBodyHash)
   image.encoding = "rgb8";
   image.data = {'a', 'b', 'c'};
   ASSERT_TRUE(ledger.remember_image(0, image));
-  senior_motion_msgs::msg::RawImageLayout layout;
+  senior_interfaces::msg::RawImageLayout layout;
   layout.capture = image.capture;
   layout.width = image.width;
   layout.height = image.height;
@@ -39,7 +39,7 @@ TEST(RgbdCandidateLedger, MatchesExactRawHeaderLayoutAndOriginalBodyHash)
 TEST(RgbdCandidateLedger, SameHeaderDifferentBodyFailsClosedAndInfoMustMatchExactly)
 {
   senior_sensor_ingress::RgbdCandidateLedger ledger;
-  senior_motion_msgs::msg::BoundedRawImage image;
+  senior_interfaces::msg::BoundedRawImage image;
   image.capture.valid = true;
   image.capture.sequence = 1;
   image.width = image.height = 1;
@@ -54,7 +54,7 @@ TEST(RgbdCandidateLedger, SameHeaderDifferentBodyFailsClosedAndInfoMustMatchExac
   EXPECT_FALSE(ledger.remember_image(0, image));
   ++image.capture.sequence;
   EXPECT_TRUE(ledger.remember_image(0, image));
-  senior_motion_msgs::msg::BoundedRawCameraInfo info;
+  senior_interfaces::msg::BoundedRawCameraInfo info;
   info.capture.valid = true;
   info.capture.sequence = 1;
   info.width = info.height = 1;

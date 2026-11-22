@@ -25,7 +25,7 @@ def core(monkeypatch):
 
 def setup_stop(c, monkeypatch):
     clock = [10.0]
-    monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: clock[0])
+    monkeypatch.setattr("senior_motion_control.motion_core_output.time.monotonic", lambda: clock[0])
     monkeypatch.setattr(
         c,
         "_observation",

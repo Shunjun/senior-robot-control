@@ -22,14 +22,14 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
     from senior_motion_control.hardware_profile import load_hardware_profile
-    from senior_motion_estimation.observations import Source
-    from senior_robot.motion_lifecycle import MotionExecutor, run, with_dds_info
-    from senior_robot.motion_observation_adapter import (
+    from senior_motion_estimation.motion_observation_adapter import (
         NativeObservationRosBridge,
         NativeObservations,
     )
-    from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+    from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
+    from senior_motion_estimation.observations import Source
     from senior_sensor_ingress.native_receipt import subscribe
+    from senior_sensor_ingress.ros_lifecycle import MotionExecutor, run, with_dds_info
     from std_msgs.msg import String
 
     from vehicle_core.diagnostics import RuntimeDiagnostics

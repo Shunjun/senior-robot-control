@@ -3,9 +3,9 @@
 #include <limits>
 #include <stdexcept>
 
-using senior_slam_bridge::Keyframe;
-using senior_slam_bridge::SnapshotStatus;
-using senior_slam_bridge::validate_snapshot;
+using senior_mapping::Keyframe;
+using senior_mapping::SnapshotStatus;
+using senior_mapping::validate_snapshot;
 
 int main()
 {

@@ -40,7 +40,7 @@ bool stamp_ok(const builtin_interfaces::msg::Time & value)
 
 double steady_now()
 {
-  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
+  return static_cast<double>(senior_sensor_ingress::time::monotonic_ns()) / 1e9;
 }
 
 bool dimensions_ok(uint32_t width, uint32_t height)
@@ -113,21 +113,21 @@ RawReceipt::RawReceipt(const rclcpp::NodeOptions & options, BeforeVerify before_
   boot_id_ = new_epoch();
   for (auto & source : sources_) source.epoch = new_epoch();
   const auto qos = rclcpp::SensorDataQoS().keep_last(4);
-  depth_fenced_pub_ = create_publisher<senior_motion_msgs::msg::FencedDepthEvidence>(depth_output, qos);
+  depth_fenced_pub_ = create_publisher<senior_interfaces::msg::FencedDepthEvidence>(depth_output, qos);
   rclcpp::SubscriptionOptions depth_options;
   if (test_reentrant_callbacks) {
     depth_callback_group_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     depth_options.callback_group = depth_callback_group_;
   }
-  depth_body_sub_ = create_subscription<senior_motion_msgs::msg::BoundedDepthEvidence>(
+  depth_body_sub_ = create_subscription<senior_interfaces::msg::BoundedDepthEvidence>(
     depth_input_topic_, qos,
-    [this](senior_motion_msgs::msg::BoundedDepthEvidence::ConstSharedPtr message,
+    [this](senior_interfaces::msg::BoundedDepthEvidence::ConstSharedPtr message,
            const rclcpp::MessageInfo & info) {on_depth(*message, info);}, depth_options);
-  semantic_fenced_pub_ = create_publisher<senior_motion_msgs::msg::FencedSemanticEvidence>(
+  semantic_fenced_pub_ = create_publisher<senior_interfaces::msg::FencedSemanticEvidence>(
     semantic_output, qos);
-  semantic_body_sub_ = create_subscription<senior_motion_msgs::msg::BoundedSemanticEvidence>(
+  semantic_body_sub_ = create_subscription<senior_interfaces::msg::BoundedSemanticEvidence>(
     semantic_input_topic_, qos,
-    [this](senior_motion_msgs::msg::BoundedSemanticEvidence::ConstSharedPtr message,
+    [this](senior_interfaces::msg::BoundedSemanticEvidence::ConstSharedPtr message,
            const rclcpp::MessageInfo & info) {on_semantic(*message, info);}, depth_options);
   rgb_publisher_ = create_publisher<RawImage>(outputs[0], qos);
   depth_publisher_ = create_publisher<RawImage>(outputs[1], qos);
@@ -226,7 +226,7 @@ void RawReceipt::invalidate_all(const std::string & reason, size_t trigger,
 
 bool RawReceipt::clock_ok(int64_t ros_ns, uint64_t steady_ns)
 {
-  senior_motion_msgs::time::ClockObservation observed;
+  senior_sensor_ingress::time::ClockObservation observed;
   try {
     observed = clock_.observe(ros_ns, steady_ns);
   } catch (const std::invalid_argument & error) {
@@ -288,7 +288,7 @@ std::optional<ReceiptClock> RawReceipt::begin_receipt()
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   const auto ros = get_clock()->now().nanoseconds();
-  const auto steady = senior_motion_msgs::time::monotonic_ns();
+  const auto steady = senior_sensor_ingress::time::monotonic_ns();
   if (!clock_ok(ros, steady)) return std::nullopt;
   return ReceiptClock{ros, steady, clock_generation_};
 }
@@ -297,7 +297,7 @@ std::optional<ReceiptClock> RawReceipt::begin_receipt()
 // its coordinates are never retaken or mapped into the replacement segment.
 bool RawReceipt::current_receipt(const ReceiptClock & receipt)
 {
-  return clock_ok(get_clock()->now().nanoseconds(), senior_motion_msgs::time::monotonic_ns()) &&
+  return clock_ok(get_clock()->now().nanoseconds(), senior_sensor_ingress::time::monotonic_ns()) &&
     receipt.generation == clock_generation_;
 }
 
@@ -305,7 +305,7 @@ void RawReceipt::inspect_topology()
 {
   std::lock_guard<std::mutex> lock(state_mutex_);
   if (!clock_ok(get_clock()->now().nanoseconds(),
-                senior_motion_msgs::time::monotonic_ns())) return;
+                senior_sensor_ingress::time::monotonic_ns())) return;
   inspect_depth_owner();
   inspect_semantic_owner();
   std::array<bool, 4> changed{};
@@ -341,7 +341,7 @@ void RawReceipt::on_image(size_t index, const sensor_msgs::msg::Image & message,
   if (!current_receipt(*receipt) ||
       !qualify_source(index, incoming, message.header, received_ros_ns,
                                      received_steady_ns)) return;
-  std::optional<senior_motion_msgs::time::SampleTime> sample;
+  std::optional<senior_sensor_ingress::time::SampleTime> sample;
   try {
     sample = sources_[index].stamps.accept(message.header.stamp, received_ros_ns,
                                          received_steady_ns, receipt->generation);
@@ -394,7 +394,7 @@ void RawReceipt::on_info(size_t index, const sensor_msgs::msg::CameraInfo & mess
   if (!current_receipt(*receipt) ||
       !qualify_source(index, incoming, message.header, received_ros_ns,
                                      received_steady_ns)) return;
-  std::optional<senior_motion_msgs::time::SampleTime> sample;
+  std::optional<senior_sensor_ingress::time::SampleTime> sample;
   try {
     sample = sources_[index].stamps.accept(message.header.stamp, received_ros_ns,
                                          received_steady_ns, receipt->generation);
@@ -452,14 +452,14 @@ bool RawReceipt::retire_gid(std::set<std::string> & retired, const std::string &
 
 void RawReceipt::invalidate_depth(
   const std::string & reason, bool owner_lost,
-  const senior_motion_msgs::msg::BoundedDepthEvidence * body)
+  const senior_interfaces::msg::BoundedDepthEvidence * body)
 {
   if (failed_ || (depth_invalid_ && !owner_lost)) return;
   if (depth_relay_sequence_ == std::numeric_limits<uint64_t>::max()) {
     failed_ = true;
     return;
   }
-  senior_motion_msgs::msg::FencedDepthEvidence output;
+  senior_interfaces::msg::FencedDepthEvidence output;
   if (body != nullptr) output.body = *body;
   clear_depth_history();
   if (semantic_active_) invalidate_semantic("depth_invalid", false, true);
@@ -493,7 +493,7 @@ void RawReceipt::inspect_depth_owner()
 }
 
 void RawReceipt::on_depth(
-  const senior_motion_msgs::msg::BoundedDepthEvidence & message,
+  const senior_interfaces::msg::BoundedDepthEvidence & message,
   const rclcpp::MessageInfo & info)
 {
   const auto incoming = info.get_rmw_message_info().publisher_gid;
@@ -564,7 +564,7 @@ void RawReceipt::on_depth(
     failed_ = true;
     return;
   }
-  senior_motion_msgs::msg::FencedDepthEvidence output;
+  senior_interfaces::msg::FencedDepthEvidence output;
   output.body = message;
   auto & header = output.owner;
   header.relay_gid = gid_hex(depth_fenced_pub_->get_gid());
@@ -593,14 +593,14 @@ void RawReceipt::clear_depth_history()
 
 void RawReceipt::invalidate_semantic(
   const std::string & reason, bool owner_lost, bool upstream_invalid,
-  const senior_motion_msgs::msg::BoundedSemanticEvidence * body)
+  const senior_interfaces::msg::BoundedSemanticEvidence * body)
 {
   if (failed_ || (semantic_invalid_ && !owner_lost)) return;
   if (semantic_relay_sequence_ == std::numeric_limits<uint64_t>::max()) {
     failed_ = true;
     return;
   }
-  senior_motion_msgs::msg::FencedSemanticEvidence output;
+  senior_interfaces::msg::FencedSemanticEvidence output;
   if (body != nullptr) output.body = *body;
   auto & header = output.owner;
   header.relay_gid = gid_hex(semantic_fenced_pub_->get_gid());
@@ -633,7 +633,7 @@ void RawReceipt::inspect_semantic_owner()
 }
 
 void RawReceipt::on_semantic(
-  const senior_motion_msgs::msg::BoundedSemanticEvidence & message,
+  const senior_interfaces::msg::BoundedSemanticEvidence & message,
   const rclcpp::MessageInfo & info)
 {
   const auto incoming = info.get_rmw_message_info().publisher_gid;
@@ -734,7 +734,7 @@ void RawReceipt::on_semantic(
     failed_ = true;
     return;
   }
-  senior_motion_msgs::msg::FencedSemanticEvidence output;
+  senior_interfaces::msg::FencedSemanticEvidence output;
   output.body = message;
   auto & header = output.owner;
   header.relay_gid = gid_hex(semantic_fenced_pub_->get_gid());

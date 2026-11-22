@@ -75,7 +75,7 @@ def test_bad_precision_slip_replay_and_expired_sample_are_unready():
 def test_explicit_enu_adapter_initializes_without_heading_or_tf(monkeypatch):
     from types import SimpleNamespace as N
 
-    from senior_robot.optional_motion_inputs import OptionalMotionInputs
+    from senior_motion_estimation.optional_motion_inputs import OptionalMotionInputs
 
     from vehicle_core.diagnostics import RuntimeDiagnostics
 
@@ -98,7 +98,9 @@ def test_explicit_enu_adapter_initializes_without_heading_or_tf(monkeypatch):
     for i, x in ((1, 0), (3, 0.4)):
         motion(observer, 1, i, domain="test-boot")
         adapter.node = N(get_clock=lambda i=i: N(now=lambda: N(nanoseconds=i * 1e9)))
-        monkeypatch.setattr("senior_robot.optional_motion_inputs.time.monotonic", lambda i=i: i)
+        monkeypatch.setattr(
+            "senior_motion_estimation.optional_motion_inputs.time.monotonic", lambda i=i: i
+        )
         message = N(
             header=N(stamp=N(sec=i, nanosec=0), frame_id="enu"),
             child_frame_id="enu",

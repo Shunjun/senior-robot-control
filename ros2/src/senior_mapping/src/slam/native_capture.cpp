@@ -12,7 +12,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 namespace
 {
@@ -248,4 +248,4 @@ CaptureArtifact CaptureDirectory::write_pair(
   }
   return {"capture/graph", std::move(digest)};
 }
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping

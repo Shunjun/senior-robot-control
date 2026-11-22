@@ -38,7 +38,7 @@ def fenced_scan_fixture(monkeypatch):
 
     pytest.importorskip("rclpy")
     from rclpy.time import Time
-    from senior_motion_msgs.msg import FencedSafetyScan
+    from senior_interfaces.msg import FencedSafetyScan
 
     from vehicle_core.sample_time import map_sample
 

@@ -62,7 +62,7 @@ def test_loaded_disabled_direction_allows_over_50_percent_nonempty_learning(
     import math
 
     from control_process_test_support import generic_motion_profile
-    from senior_robot.motion_profile import configure_startup_learning
+    from senior_motion_control.motion_profile import configure_startup_learning
 
     profile = generic_motion_profile()
     core.profile = configure_startup_learning(
@@ -104,7 +104,7 @@ def test_false_switches_still_block_real_obstacle_in_actual_core(
     tmp_path,
     monkeypatch,
 ):
-    from senior_robot.motion_profile import configure_startup_learning
+    from senior_motion_control.motion_profile import configure_startup_learning
 
     core.profile = configure_startup_learning(core.profile, front_stop=False, rear_stop=False)
     original = core._filtered_scan

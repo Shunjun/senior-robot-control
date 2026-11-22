@@ -13,6 +13,7 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+import senior_motion_control.motion_core_output as module
 from control_process_test_support import (
     capture_inputs,
     generic_motion_profile,
@@ -22,7 +23,6 @@ from control_process_test_support import (
     read_inputs,
 )
 from motion_reference_test_support import ReadySubscription
-from senior_robot import motion_core_output as module
 
 from vehicle_core.config import DeviceProfile
 from vehicle_core.values import Velocity
@@ -84,7 +84,7 @@ class Node:
 def replay(monkeypatch):
     message = ModuleType("std_msgs.msg")
     message.String = lambda: N(data="")
-    lifecycle = ModuleType("senior_robot.motion_lifecycle")
+    lifecycle = ModuleType("senior_sensor_ingress.ros_lifecycle")
     lifecycle.with_dds_info = lambda callback: callback
     monkeypatch.setitem(sys.modules, message.__name__, message)
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)

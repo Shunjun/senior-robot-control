@@ -11,12 +11,12 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/camera_info.hpp>
 #include <sensor_msgs/msg/image.hpp>
-#include <senior_motion_msgs/msg/bounded_depth_evidence.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_camera_info.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_image.hpp>
-#include <senior_motion_msgs/msg/bounded_semantic_evidence.hpp>
-#include <senior_motion_msgs/msg/fenced_depth_evidence.hpp>
-#include <senior_motion_msgs/msg/fenced_semantic_evidence.hpp>
+#include <senior_interfaces/msg/bounded_depth_evidence.hpp>
+#include <senior_interfaces/msg/bounded_raw_camera_info.hpp>
+#include <senior_interfaces/msg/bounded_raw_image.hpp>
+#include <senior_interfaces/msg/bounded_semantic_evidence.hpp>
+#include <senior_interfaces/msg/fenced_depth_evidence.hpp>
+#include <senior_interfaces/msg/fenced_semantic_evidence.hpp>
 
 #include "senior_sensor_ingress/raw_receipt.hpp"
 
@@ -52,12 +52,12 @@ TEST(SemanticEgress, RealFourStreamDepthReceiptAndBodyMutation)
   auto fixture = std::make_shared<rclcpp::Node>("semantic_egress_fixture");
   using Image = sensor_msgs::msg::Image;
   using Info = sensor_msgs::msg::CameraInfo;
-  using RawImage = senior_motion_msgs::msg::BoundedRawImage;
-  using RawInfo = senior_motion_msgs::msg::BoundedRawCameraInfo;
-  using Depth = senior_motion_msgs::msg::BoundedDepthEvidence;
-  using DepthOutput = senior_motion_msgs::msg::FencedDepthEvidence;
-  using Semantic = senior_motion_msgs::msg::BoundedSemanticEvidence;
-  using SemanticOutput = senior_motion_msgs::msg::FencedSemanticEvidence;
+  using RawImage = senior_interfaces::msg::BoundedRawImage;
+  using RawInfo = senior_interfaces::msg::BoundedRawCameraInfo;
+  using Depth = senior_interfaces::msg::BoundedDepthEvidence;
+  using DepthOutput = senior_interfaces::msg::FencedDepthEvidence;
+  using Semantic = senior_interfaces::msg::BoundedSemanticEvidence;
+  using SemanticOutput = senior_interfaces::msg::FencedSemanticEvidence;
   std::mutex mutex;
   std::vector<RawImage> rgb, depth;
   std::vector<RawInfo> rgb_info, depth_info;

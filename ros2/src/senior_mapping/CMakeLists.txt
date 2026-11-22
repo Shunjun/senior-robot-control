@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(senior_mapping)
 find_package(ament_cmake REQUIRED)
+find_package(senior_sensor_ingress REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS scripts/slam_adapter DESTINATION lib/${PROJECT_NAME})
@@ -14,8 +15,7 @@ endif()
 find_package(Boost REQUIRED COMPONENTS serialization thread)
 find_package(OpenSSL REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(senior_slam_bridge REQUIRED)
-find_package(senior_motion_msgs 0.3.0 REQUIRED)
+find_package(senior_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(slam_toolbox 2.6.8 EXACT REQUIRED)
 find_package(tf2_ros REQUIRED)
@@ -35,7 +35,7 @@ add_executable(slam_graph_node
   src/slam/slam_graph_node.cpp src/slam/staged_graph.cpp src/slam/native_capture.cpp src/slam/bounded_scan_ingress.cpp
   src/slam/static_lidar_tf_ingress.cpp)
 target_compile_features(slam_graph_node PRIVATE cxx_std_17)
-ament_target_dependencies(slam_graph_node rclcpp senior_slam_bridge senior_motion_msgs sensor_msgs slam_toolbox tf2_ros)
+ament_target_dependencies(slam_graph_node rclcpp senior_interfaces senior_interfaces sensor_msgs slam_toolbox tf2_ros senior_sensor_ingress)
 target_link_libraries(slam_graph_node
   "${SLAM_TOOLBOX_ASYNC_LIBRARY}"
   "${SLAM_TOOLBOX_COMMON_LIBRARY}"
@@ -44,7 +44,7 @@ target_link_libraries(slam_graph_node
 )
 add_executable(acquire_scan_receipt src/slam/acquire_scan_receipt.cpp)
 target_compile_features(acquire_scan_receipt PRIVATE cxx_std_17)
-ament_target_dependencies(acquire_scan_receipt rclcpp senior_motion_msgs)
+ament_target_dependencies(acquire_scan_receipt rclcpp senior_interfaces senior_sensor_ingress)
 install(TARGETS slam_graph_node acquire_scan_receipt DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS scripts/candidate_preflight.py DESTINATION lib/${PROJECT_NAME}
   RENAME candidate_preflight)
@@ -193,4 +193,5 @@ if(BUILD_TESTING)
   )
 endif()
 
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 ament_package()

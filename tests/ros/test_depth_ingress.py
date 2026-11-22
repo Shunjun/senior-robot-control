@@ -11,8 +11,8 @@ def test_depth_ingress_publishes_original_typed_geometry_and_invalid(monkeypatch
     rclpy = pytest.importorskip("rclpy")
     from geometry_msgs.msg import TransformStamped
     from rclpy.parameter import Parameter
-    from senior_motion_msgs.msg import BoundedDepthEvidence, BoundedRawCameraInfo, BoundedRawImage
-    from senior_robot.depth_ingress import DepthIngress
+    from senior_interfaces.msg import BoundedDepthEvidence, BoundedRawCameraInfo, BoundedRawImage
+    from senior_perception.depth_ingress import DepthIngress
 
     rclpy.init()
     node = DepthIngress(
@@ -128,8 +128,8 @@ def test_depth_gate_revokes_tickets_on_new_invalid_and_replaced_epoch(monkeypatc
     rclpy = pytest.importorskip("rclpy")
     from rclpy.parameter import Parameter
     from rclpy.time import Time
-    from senior_motion_msgs.msg import BoundedDepthEvidence, DepthSample, FencedDepthEvidence
-    from senior_robot.safety_node import SafetyGate
+    from senior_interfaces.msg import BoundedDepthEvidence, DepthSample, FencedDepthEvidence
+    from senior_motion_control.safety_node import SafetyGate
 
     rclpy.init()
     gate = SafetyGate(
@@ -252,14 +252,14 @@ def test_real_ros_depth_publication_reaches_gate_and_invalid_revokes():
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import (
+    from senior_interfaces.msg import (
         BoundedDepthEvidence,
         BoundedRawCameraInfo,
         BoundedRawImage,
         FencedDepthEvidence,
     )
-    from senior_robot.depth_ingress import DepthIngress
-    from senior_robot.safety_node import SafetyGate
+    from senior_motion_control.safety_node import SafetyGate
+    from senior_perception.depth_ingress import DepthIngress
 
     rclpy.init()
     ingress = DepthIngress(
@@ -414,7 +414,7 @@ def test_default_required_depth_missing_stops_after_freshness_checks(monkeypatch
     import time
 
     rclpy = pytest.importorskip("rclpy")
-    from senior_robot.safety_node import SafetyGate
+    from senior_motion_control.safety_node import SafetyGate
 
     from vehicle_core.values import Velocity
 
@@ -447,8 +447,8 @@ def test_default_required_depth_missing_stops_after_freshness_checks(monkeypatch
 def test_depth_ingress_uses_only_bounded_bridge_types_and_embeds_captures():
     rclpy = pytest.importorskip("rclpy")
     from rclpy.parameter import Parameter
-    from senior_motion_msgs.msg import BoundedDepthEvidence, BoundedRawCameraInfo, BoundedRawImage
-    from senior_robot.depth_ingress import DepthIngress
+    from senior_interfaces.msg import BoundedDepthEvidence, BoundedRawCameraInfo, BoundedRawImage
+    from senior_perception.depth_ingress import DepthIngress
 
     rclpy.init()
     node = DepthIngress(
@@ -505,8 +505,8 @@ def test_native_bridge_depth_ingress_gate_end_to_end_and_raw_failure(native_brid
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
-    from senior_robot.depth_ingress import DepthIngress
-    from senior_robot.safety_node import SafetyGate
+    from senior_motion_control.safety_node import SafetyGate
+    from senior_perception.depth_ingress import DepthIngress
     from sensor_msgs.msg import CameraInfo, Image
 
     bridge = native_bridge_process

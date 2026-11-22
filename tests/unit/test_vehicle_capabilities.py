@@ -1,6 +1,6 @@
 """Approved unavailable production facade and unconfirmed-map scenarios."""
 
-from senior_robot.vehicle_capabilities import VehicleCapabilities
+from senior_motion_control.vehicle_capabilities import VehicleCapabilities
 from test_startup_learning_chain import rig  # noqa: F401
 
 

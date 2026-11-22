@@ -1,4 +1,4 @@
-#include <senior_motion_msgs/sample_time.hpp>
+#include <senior_sensor_ingress/sample_time.hpp>
 #include <optional>
 #include <set>
 // Humble-compatible DDS receipts over an inherited, private AF_UNIX channel.
@@ -27,8 +27,8 @@
 #include "nav_msgs/msg/odometry.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
-#include "senior_motion_msgs/msg/scan_motion.hpp"
-#include "senior_motion_msgs/msg/drive_execution_feedback.hpp"
+#include "senior_interfaces/msg/scan_motion.hpp"
+#include "senior_interfaces/msg/drive_execution_feedback.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
 
@@ -72,9 +72,9 @@ class NativeReceipt : public rclcpp::Node {
       if (type == "nav_msgs/msg/Odometry") add<nav_msgs::msg::Odometry>(id, qos);
       else if (type == "sensor_msgs/msg/NavSatFix") add<sensor_msgs::msg::NavSatFix>(id, qos);
       else if (type == "sensor_msgs/msg/Imu") add<sensor_msgs::msg::Imu>(id, qos);
-      else if (type == "senior_motion_msgs/msg/ScanMotion") add<senior_motion_msgs::msg::ScanMotion>(id, qos);
-      else if (type == "senior_motion_msgs/msg/DriveExecutionFeedback")
-        add<senior_motion_msgs::msg::DriveExecutionFeedback>(id, qos);
+      else if (type == "senior_interfaces/msg/ScanMotion") add<senior_interfaces::msg::ScanMotion>(id, qos);
+      else if (type == "senior_interfaces/msg/DriveExecutionFeedback")
+        add<senior_interfaces::msg::DriveExecutionFeedback>(id, qos);
       else if (type == "std_msgs/msg/String") add<std_msgs::msg::String>(id, qos);
       else if (type == "std_msgs/msg/Bool") add<std_msgs::msg::Bool>(id, qos);
       else if (type == "nav_msgs/msg/OccupancyGrid") add<nav_msgs::msg::OccupancyGrid>(id, qos);
@@ -83,9 +83,9 @@ class NativeReceipt : public rclcpp::Node {
       else throw std::invalid_argument("unsupported receipt type");
     }
     timer_ = create_wall_timer(20ms, [this]() {
-      if (!observe_clock(get_clock()->now().nanoseconds(), senior_motion_msgs::time::monotonic_ns())) return;
+      if (!observe_clock(get_clock()->now().nanoseconds(), senior_sensor_ingress::time::monotonic_ns())) return;
       for (size_t id = 0; id < inputs_.size(); ++id) {
-        topology(id); frame(id, inputs_[id].valid ? 2 : 0, senior_motion_msgs::time::monotonic_ns(), nullptr, nullptr);
+        topology(id); frame(id, inputs_[id].valid ? 2 : 0, senior_sensor_ingress::time::monotonic_ns(), nullptr, nullptr);
       }
     });
   }
@@ -99,7 +99,7 @@ class NativeReceipt : public rclcpp::Node {
     std::set<Gid> retired_gids;
     std::string rejection_reason;
   };
-  senior_motion_msgs::time::ClockTracker clock_;
+  senior_sensor_ingress::time::ClockTracker clock_;
   uint64_t clock_generation_ = 1;
   int fd_;
   std::vector<Input> inputs_;
@@ -108,7 +108,7 @@ class NativeReceipt : public rclcpp::Node {
 
   void write_all(const uint8_t *p, size_t size, uint64_t deadline) {
     while (size) {
-      if (senior_motion_msgs::time::monotonic_ns() >= deadline) _exit(static_cast<int>(ExitCode::write_deadline));
+      if (senior_sensor_ingress::time::monotonic_ns() >= deadline) _exit(static_cast<int>(ExitCode::write_deadline));
       const auto sent = ::send(fd_, p, size, MSG_DONTWAIT | MSG_NOSIGNAL);
       if (sent > 0) { p += sent; size -= sent; continue; }
       if (sent == 0 || (errno != EAGAIN && errno != EWOULDBLOCK && errno != EINTR)) _exit(static_cast<int>(ExitCode::send_failure));
@@ -118,7 +118,7 @@ class NativeReceipt : public rclcpp::Node {
   }
   void frame(size_t id, uint8_t kind, uint64_t received,
              const rmw_message_info_t *info, const rclcpp::SerializedMessage *message, uint8_t time_mode = 0,
-             const std::optional<senior_motion_msgs::time::SampleTime> &sample = std::nullopt) {
+             const std::optional<senior_sensor_ingress::time::SampleTime> &sample = std::nullopt) {
     const auto &in = inputs_[id];
     const size_t size = message ? message->size() : 0;
     if (size > MAX_PAYLOAD) _exit(static_cast<int>(ExitCode::oversize_payload));
@@ -138,7 +138,7 @@ class NativeReceipt : public rclcpp::Node {
     number(header, sample ? sample->sample_steady_ns : 0, 8);
     number(header, sample ? sample->clock_generation : 0, 8);
     number(header, size, 4);
-    const auto deadline = senior_motion_msgs::time::monotonic_ns() + 100000000ULL;
+    const auto deadline = senior_sensor_ingress::time::monotonic_ns() + 100000000ULL;
     write_all(header.data(), header.size(), deadline);
     if (size) write_all(message->get_rcl_serialized_message().buffer, size, deadline);
   }
@@ -158,7 +158,7 @@ class NativeReceipt : public rclcpp::Node {
       if (in.retired_gids.size() >= 256) _exit(static_cast<int>(ExitCode::retired_source_exhaustion));
       in.latest_stamp.reset();
       in.valid = good; in.gid = next; ++in.generation;
-      frame(id, 0, senior_motion_msgs::time::monotonic_ns(), nullptr, nullptr);  // invalidate before any new sample
+      frame(id, 0, senior_sensor_ingress::time::monotonic_ns(), nullptr, nullptr);  // invalidate before any new sample
     }
     return good;
   }
@@ -169,10 +169,10 @@ class NativeReceipt : public rclcpp::Node {
   }
   static bool bounded(const sensor_msgs::msg::NavSatFix &m) { return m.header.frame_id.size() <= 128; }
   static bool bounded(const sensor_msgs::msg::Imu &m) { return m.header.frame_id.size() <= 128; }
-  static bool bounded(const senior_motion_msgs::msg::ScanMotion &m) {
+  static bool bounded(const senior_interfaces::msg::ScanMotion &m) {
     return m.header.frame_id.size() <= 128 && m.source_epoch.size() <= 128 && m.reason.size() <= 512;
   }
-  static bool bounded(const senior_motion_msgs::msg::DriveExecutionFeedback &m) {
+  static bool bounded(const senior_interfaces::msg::DriveExecutionFeedback &m) {
     return m.robot_id.size() <= 128 && m.owner_boot_id.size() <= 128 &&
       m.session_id.size() <= 128 && m.request_id.size() <= 128 &&
       m.status.size() <= 32 && m.reason.size() <= 512;
@@ -193,7 +193,7 @@ class NativeReceipt : public rclcpp::Node {
     frame(id, 0, received, nullptr, nullptr);
   }
   bool observe_clock(int64_t ros, uint64_t steady) {
-    senior_motion_msgs::time::ClockObservation observed;
+    senior_sensor_ingress::time::ClockObservation observed;
     try {
       observed = clock_.observe(ros, steady);
     } catch (const std::invalid_argument &error) {
@@ -223,30 +223,30 @@ class NativeReceipt : public rclcpp::Node {
     return stamp_ns(m.header.stamp);
   }
   template<class Message>
-  static std::optional<senior_motion_msgs::time::SampleTime> derived_sample(const Message &) {
+  static std::optional<senior_sensor_ingress::time::SampleTime> derived_sample(const Message &) {
     return std::nullopt;
   }
-  static std::optional<senior_motion_msgs::time::SampleTime> derived_sample(
-      const senior_motion_msgs::msg::ScanMotion &m) {
+  static std::optional<senior_sensor_ingress::time::SampleTime> derived_sample(
+      const senior_interfaces::msg::ScanMotion &m) {
     if (!m.valid) return std::nullopt;
     const auto &c = m.second_capture;
     if (!c.valid || c.clock_generation == 0 || c.stamp != m.header.stamp ||
         m.first_capture.stamp != m.interval_start)
       throw std::invalid_argument("invalid derived capture");
-    return senior_motion_msgs::time::SampleTime{stamp_ns(c.stamp), stamp_ns(c.received_ros),
+    return senior_sensor_ingress::time::SampleTime{stamp_ns(c.stamp), stamp_ns(c.received_ros),
       c.received_steady_ns, c.sample_steady_ns, c.clock_generation};
   }
   template<class Message> void add(size_t id, const rclcpp::QoS &qos) {
     subscriptions_.push_back(create_subscription<Message>(inputs_[id].topic, qos,
       [this, id](typename Message::ConstSharedPtr msg, const rclcpp::MessageInfo &info) {
-        const auto received = senior_motion_msgs::time::monotonic_ns();  // original native callback receipt, before IPC/serialization
+        const auto received = senior_sensor_ingress::time::monotonic_ns();  // original native callback receipt, before IPC/serialization
         const auto received_ros = get_clock()->now().nanoseconds();
         if (!observe_clock(received_ros, received)) return;
         if (!topology(id)) return;
         const auto &native = info.get_rmw_message_info();
         if (!std::equal(inputs_[id].gid.begin(), inputs_[id].gid.end(), native.publisher_gid.data)) return;
         if (!bounded(*msg)) { reject_sample(id, received, "raw_dimensions_invalid"); return; }
-        std::optional<senior_motion_msgs::time::SampleTime> sample;
+        std::optional<senior_sensor_ingress::time::SampleTime> sample;
         uint8_t time_mode = 0;
         try {
           const auto stamp = raw_stamp(*msg);
@@ -257,7 +257,7 @@ class NativeReceipt : public rclcpp::Node {
               reject_sample(id, received, "raw_stamp_out_of_order");
               return;
             }
-            sample = senior_motion_msgs::time::map_sample(*stamp, received_ros, received,
+            sample = senior_sensor_ingress::time::map_sample(*stamp, received_ros, received,
                                                           clock_generation_);
             in.latest_stamp = stamp;
             time_mode = 1;

@@ -6,10 +6,10 @@
 
 namespace
 {
-using senior_slam_bridge::LaserRayLayout;
-using senior_slam_bridge::LaserTransform;
-using senior_slam_bridge::matches_native_laser_geometry;
-using senior_slam_bridge::NativeLaserOffset;
+using senior_mapping::LaserRayLayout;
+using senior_mapping::LaserTransform;
+using senior_mapping::matches_native_laser_geometry;
+using senior_mapping::NativeLaserOffset;
 
 constexpr double pi = 3.14159265358979323846;
 constexpr double yaw = 0.7;

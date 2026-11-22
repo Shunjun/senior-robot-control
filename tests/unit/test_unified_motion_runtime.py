@@ -2,9 +2,9 @@ from types import SimpleNamespace as N
 
 import pytest
 from control_process_test_support import generic_motion_profile
+from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
 from senior_motion_estimation.observations import Frame, Source, SourceStatus
 from senior_motion_estimation.sample_types import PointObservation
-from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from sensor_time_test_support import sample_time
 
 from vehicle_core.diagnostics import RuntimeDiagnostics
@@ -61,7 +61,7 @@ def test_runtime_partial_axis_hard_cutoff_survives_other_axis_updates():
 
 
 def test_leaf_bridge_local_sink_does_not_run_old_numerical_qualification():
-    from senior_robot.motion_observation_adapter import NativeObservations
+    from senior_motion_estimation.motion_observation_adapter import NativeObservations
 
     p = generic_motion_profile()
     seen = []
@@ -121,7 +121,7 @@ def test_raw_wheel_imu_stillness_does_not_depend_on_independent_samples():
 
 
 def test_laser_delta_retains_both_raw_capture_receipts_through_processing_delay():
-    from senior_robot.motion_observation_adapter import NativeObservations
+    from senior_motion_estimation.motion_observation_adapter import NativeObservations
     from test_optional_motion_inputs import header, stamp
 
     p = generic_motion_profile()
@@ -151,7 +151,7 @@ def test_laser_delta_retains_both_raw_capture_receipts_through_processing_delay(
 
 
 def test_ros_imu_unavailable_sentinel_removes_only_imu_contribution():
-    from senior_robot.motion_observation_adapter import NativeObservations
+    from senior_motion_estimation.motion_observation_adapter import NativeObservations
     from test_optional_motion_inputs import stamp
 
     profile = generic_motion_profile()
@@ -228,7 +228,7 @@ def test_bad_future_ingress_clock_does_not_replace_still_valid_earlier_input():
 
 
 def test_invalid_scan_motion_withdraws_source_without_fabricating_endpoints():
-    from senior_robot.motion_observation_adapter import NativeObservations
+    from senior_motion_estimation.motion_observation_adapter import NativeObservations
     from test_unified_estimator import observation
 
     profile = generic_motion_profile()

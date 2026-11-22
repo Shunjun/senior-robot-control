@@ -179,7 +179,7 @@ def test_actual_scan_alignment_has_same_recent_budget_after_ten_and_sixty_second
     import math
     from types import SimpleNamespace as N
 
-    from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+    from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
     from test_motion_core_handoff import core as core_fixture
 
     from vehicle_core.config import DeviceProfile

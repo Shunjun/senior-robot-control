@@ -107,7 +107,7 @@ def test_completion_cannot_retire_unrelated_or_non_navigation_identity(rig, sour
 
 @pytest.mark.parametrize("outcome", ["succeeded", "failed", "canceled"])
 async def test_only_real_route_success_uses_completion_retirement(outcome):
-    from senior_robot.navigation_adapter import NavigationAdapter, RouteService
+    from senior_navigation.navigation_adapter import NavigationAdapter, RouteService
 
     result = asyncio.get_running_loop().create_future()
     closed = []

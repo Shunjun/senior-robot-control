@@ -12,9 +12,16 @@
   <exec_depend>sensor_msgs</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
-  <exec_depend>senior_motion_msgs</exec_depend>
-  <exec_depend>senior_sensor_ingress</exec_depend>
-  <exec_depend>senior_scan_matcher</exec_depend>
+  <depend>senior_interfaces</depend>
+  <depend>senior_sensor_ingress</depend>
+
   <test_depend>ament_cmake_pytest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
+<depend>slam_toolbox</depend>
+<depend>rclcpp</depend>
+<depend>diagnostic_msgs</depend>
+<depend>geometry_msgs</depend>
+<depend>boost</depend>
+<depend>libtbb-dev</depend>
+<test_depend>ament_cmake_gtest</test_depend>
 </package>

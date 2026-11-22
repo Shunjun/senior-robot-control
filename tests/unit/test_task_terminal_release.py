@@ -190,7 +190,7 @@ def test_success_is_also_a_durable_identity_obligation():
 async def test_real_cancel_route_reducer_core_allows_distinct_next_execution(rig, previous_phase):
     import asyncio
 
-    from senior_robot.navigation_adapter import NavigationAdapter, RouteService
+    from senior_navigation.navigation_adapter import NavigationAdapter, RouteService
 
     from vehicle_core.route_plan import RoutePlan
     from vehicle_core.values import OperationResult, OperationStatus

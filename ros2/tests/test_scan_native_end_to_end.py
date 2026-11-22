@@ -19,19 +19,19 @@ def test_real_native_scan_filter_receipt_reaches_matcher(native_scan_process, tm
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import BoundedRawLaserScan, FencedFilteredScan, ScanMotion
+    from senior_interfaces.msg import BoundedRawLaserScan, FencedFilteredScan, ScanMotion
     from senior_perception.scan_adapter import ScanAdapter
     from sensor_msgs.msg import LaserScan
     from test_scan_epoch_live import _room_scan
     from tf2_ros import StaticTransformBroadcaster
 
-    params = Path(__file__).parents[2] / "ros2/src/senior_robot/config/simulation_motion.yaml"
+    params = Path(__file__).parents[2] / "ros2/src/senior_sim/config/simulation_motion.yaml"
     with (tmp_path / "native-matcher.log").open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             [
                 "ros2",
                 "run",
-                "senior_scan_matcher",
+                "senior_motion_estimation",
                 "scan_motion_node",
                 "--ros-args",
                 "--params-file",

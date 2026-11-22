@@ -14,6 +14,7 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+import senior_motion_control.motion_core_output as module
 from control_process_test_support import generic_motion_profile, make_core, publish_inputs
 from motion_reference_test_support import ReadySubscription
 from senior_motion_control.constraints import (
@@ -26,7 +27,6 @@ from senior_motion_control.contracts import BrakeKind, MotionEventKind
 from senior_motion_control.manual_control import MotionRuntimeReceiver
 from senior_motion_control.state_machine import RecoveryObservation
 from senior_motion_control.trajectory import Trajectory
-from senior_robot import motion_core_output as module
 from sensor_time_test_support import sample_time
 from test_navigation_command_clock import navigation  # noqa: F401
 
@@ -164,7 +164,7 @@ def replay(monkeypatch):
     msg = ModuleType("std_msgs.msg")
     msg.String = lambda: N(data="")
     monkeypatch.setitem(sys.modules, "std_msgs.msg", msg)
-    lifecycle = ModuleType("senior_robot.motion_lifecycle")
+    lifecycle = ModuleType("senior_sensor_ingress.ros_lifecycle")
     lifecycle.with_dds_info = lambda callback: callback
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)
     capture = json.loads(Path("tests/fixtures/navigation_startup_reference.json").read_text())

@@ -157,7 +157,7 @@ def generate_fixture(
         controllers[node]["ros__parameters"]["use_sim_time"] = True
     (output / "controllers.yaml").write_text(yaml.safe_dump(controllers))
     (output / "bridge.yaml").write_bytes((sim / "config/bridge.yaml").read_bytes())
-    params = source_root / "ros2/src/senior_robot/config/simulation_motion.yaml"
+    params = source_root / "ros2/src/senior_sim/config/simulation_motion.yaml"
     scan_parameters = yaml.safe_load(params.read_text())
     search_speed = max(0.5, plan.max_linear_mps * 1.1)
     scan_parameters["scan_motion_node"]["ros__parameters"]["max_linear_speed"] = search_speed
@@ -193,8 +193,8 @@ def generate_launch_description():
              'drive','--controller-manager','/controller_manager']),
         Node(package='senior_sensor_ingress', executable='scan_receipt_node',
              parameters=[{str(params)!r}]),
-        Node(package='senior_robot', executable='scan_adapter', parameters=[{str(params)!r}]),
-        Node(package='senior_scan_matcher', executable='scan_motion_node',
+        Node(package='senior_perception', executable='scan_adapter', parameters=[{str(params)!r}]),
+        Node(package='senior_motion_estimation', executable='scan_motion_node',
              parameters=[{str(params)!r}]),
     ])
 """

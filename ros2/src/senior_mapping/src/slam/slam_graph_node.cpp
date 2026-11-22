@@ -23,16 +23,16 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include "rclcpp/rclcpp.hpp"
-#include "senior_slam_bridge/srv/capture_graph.hpp"
-#include "senior_slam_bridge/srv/match_stationary_scan.hpp"
-#include "senior_slam_bridge/srv/read_graph.hpp"
-#include "senior_slam_bridge/srv/read_graph_commit.hpp"
-#include "senior_slam_bridge/srv/read_loaded_graph.hpp"
+#include "senior_interfaces/srv/capture_graph.hpp"
+#include "senior_interfaces/srv/match_stationary_scan.hpp"
+#include "senior_interfaces/srv/read_graph.hpp"
+#include "senior_interfaces/srv/read_graph_commit.hpp"
+#include "senior_interfaces/srv/read_loaded_graph.hpp"
 //Compatible: the Humble slam_toolbox 2.6.10 subclass exposes the mapper and its mutex.
 #include "slam_toolbox/slam_toolbox_async.hpp"
 #include "slam_toolbox/serialization.hpp"
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 class SlamGraphNode final : public slam_toolbox::AsynchronousSlamToolbox
 {
@@ -744,12 +744,12 @@ private:
   rclcpp::Service<MatchStationaryScan>::SharedPtr stationary_match_service_;
   bool stationary_match_spent_{false};
 };
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<senior_slam_bridge::SlamGraphNode>(rclcpp::NodeOptions{});
+  auto node = std::make_shared<senior_mapping::SlamGraphNode>(rclcpp::NodeOptions{});
   try {
     node->start();
     rclcpp::spin(node);

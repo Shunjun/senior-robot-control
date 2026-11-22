@@ -6,8 +6,8 @@ from functools import partial
 
 import pytest
 from senior_motion_control.constraints import NoReturnPolicy
+from senior_perception.scan_decode import ScanGeometry, prepare_scan_geometry
 from senior_perception.self_filter import filter_self
-from senior_robot.motion_core_perception import ScanGeometry, prepare_scan_geometry
 from test_directional_constraints import engine, snapshot
 from test_motion_core_perception import observation
 

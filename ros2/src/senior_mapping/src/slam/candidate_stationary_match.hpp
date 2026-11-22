@@ -12,7 +12,7 @@
 
 #include <karto_sdk/Mapper.h>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 struct StationaryMatchQuery
 {
@@ -271,5 +271,5 @@ inline std::optional<StationaryMatchDiagnostic> stationary_match(
   }
   return result;
 }
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 #endif  // SENIOR_SLAM_BRIDGE__CANDIDATE_STATIONARY_MATCH_HPP_

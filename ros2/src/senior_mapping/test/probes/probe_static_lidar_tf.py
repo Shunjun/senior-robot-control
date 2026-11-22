@@ -33,8 +33,8 @@ from probe_read_graph import (
 from rclpy.duration import Duration
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.serialization import serialize_message
-from senior_motion_msgs.msg import BoundedRawLaserScan, BoundedStaticTf, StaticTransformEdge
-from senior_slam_bridge.srv import CaptureGraph, ReadGraph, ReadGraphCommit
+from senior_interfaces.msg import BoundedRawLaserScan, BoundedStaticTf, StaticTransformEdge
+from senior_interfaces.srv import CaptureGraph, ReadGraph, ReadGraphCommit
 from sensor_msgs.msg import LaserScan
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 

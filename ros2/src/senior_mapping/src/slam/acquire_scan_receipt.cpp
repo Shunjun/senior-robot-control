@@ -11,7 +11,7 @@
 namespace
 {
 using namespace std::chrono_literals;
-namespace admission = senior_slam_bridge::scan_receipt_admission;
+namespace admission = senior_mapping::scan_receipt_admission;
 using admission::Message;
 
 Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
