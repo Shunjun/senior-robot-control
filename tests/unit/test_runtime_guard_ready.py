@@ -7,11 +7,10 @@ from types import SimpleNamespace as N
 
 import pytest
 from motion_reference_test_support import ReadySubscription
+from senior_motion_control.arbiter import Arbiter
+from senior_motion_control.manual_authority import ManualAuthorityState
+from senior_motion_control.manual_control import ManualIngress, MotionRuntimeReceiver
 from test_navigation_command_clock import navigation  # noqa: F401
-
-from senior_control.agent.manual_control import ManualIngress, MotionRuntimeReceiver
-from senior_control.motion.manual_authority import ManualAuthorityState
-from senior_control.safety.arbiter import Arbiter
 
 CASE = json.loads(Path("tests/fixtures/runtime_guard_ready.json").read_text())
 
@@ -91,8 +90,8 @@ def test_duplicate_wrong_source_and_wrong_robot_cannot_replace_receiver(ready):
 
 
 def manual_target(ready):
-    from senior_control.motion.contracts import ManualIntent
-    from senior_control.settings.models import simulation_settings_profile
+    from senior_motion_control.contracts import ManualIntent
+    from vehicle_manager.settings.models import simulation_settings_profile
 
     ingress = ready.node._manual_ingress
     now = ready.clock.mono

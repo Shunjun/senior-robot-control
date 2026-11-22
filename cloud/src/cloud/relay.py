@@ -42,7 +42,7 @@ from cloud.limits import CloudLimits
 from cloud.ports import DequeFactory, FrameQueue
 from cloud.snapshots import SnapshotCache, snapshot_envelope
 
-logger = logging.getLogger("senior_control.cloud.relay")
+logger = logging.getLogger("cloud.runtime_relay")
 
 SAFETY_TYPES = frozenset({"drive.stop", "safety.estop"})
 AUTHORITY_TYPES = frozenset({"control.acquire", "control.release"})

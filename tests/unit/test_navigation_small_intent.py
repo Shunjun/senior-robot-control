@@ -3,10 +3,10 @@
 from types import SimpleNamespace as N
 
 import pytest
+from senior_motion_control.arbiter import Arbiter
 from test_navigation_command_clock import navigation as clock_fixture
 
-from senior_control.models import Velocity
-from senior_control.safety.arbiter import Arbiter
+from vehicle_core.values import Velocity
 
 
 @pytest.fixture

@@ -41,6 +41,57 @@ LaserScan room(Pose sensor, double stamp)
 }
 }  // namespace
 
+TEST(LocalMatcher, CachedReferenceMatchesFreshReference)
+{
+  const auto anchor = room({0, 0, 0}, 1.0);
+  LocalMatcher cached;
+  cached.update(anchor);
+  for (int i = 1; i <= 8; ++i) {
+    const auto query = room({0.008 * i, -0.002 * i, 0.004 * i}, 1.0 + 0.03 * i);
+    LocalMatcher fresh;
+    fresh.update(anchor);
+    const auto expected = fresh.update(query);
+    const auto actual = cached.update(query);
+    ASSERT_TRUE(expected.valid) << expected.reason;
+    ASSERT_TRUE(actual.valid) << actual.reason;
+    ASSERT_TRUE(actual.diagnostics.match.has_value());
+    const auto & a = *actual.diagnostics.match;
+    const auto & b = *expected.diagnostics.match;
+    EXPECT_DOUBLE_EQ(a.response, b.response);
+    EXPECT_DOUBLE_EQ(a.residual, b.residual);
+    EXPECT_EQ(a.inliers, b.inliers);
+    EXPECT_EQ(a.total, b.total);
+    EXPECT_DOUBLE_EQ(a.anchor.x, b.anchor.x);
+    EXPECT_DOUBLE_EQ(a.anchor.y, b.anchor.y);
+    EXPECT_DOUBLE_EQ(a.anchor.yaw, b.anchor.yaw);
+    EXPECT_EQ(a.covariance, b.covariance);
+  }
+}
+
+TEST(LocalMatcher, ResetDiscardsPreparedReference)
+{
+  LocalMatcher reused;
+  reused.update(room({0, 0, 0}, 1.0));
+  ASSERT_TRUE(reused.update(room({0.05, 0, 0}, 1.1)).valid);
+  reused.reset();
+  LocalMatcher fresh;
+  const auto anchor = room({0.4, 0.2, 0.1}, 2.0);
+  EXPECT_EQ(reused.update(anchor).reason, "initializing");
+  fresh.update(anchor);
+  const auto query = room({0.44, 0.21, 0.12}, 2.1);
+  const auto expected = fresh.update(query);
+  const auto actual = reused.update(query);
+  ASSERT_TRUE(expected.valid) << expected.reason;
+  ASSERT_TRUE(actual.valid) << actual.reason;
+  EXPECT_EQ(actual.reason, expected.reason);
+  EXPECT_EQ(actual.covariance, expected.covariance);
+  EXPECT_DOUBLE_EQ(actual.response, expected.response);
+  EXPECT_DOUBLE_EQ(actual.residual, expected.residual);
+  EXPECT_DOUBLE_EQ(actual.sensor_delta.x, expected.sensor_delta.x);
+  EXPECT_DOUBLE_EQ(actual.sensor_delta.y, expected.sensor_delta.y);
+  EXPECT_DOUBLE_EQ(actual.sensor_delta.yaw, expected.sensor_delta.yaw);
+}
+
 TEST(LocalMatcher, TracksIndependentTranslationAndYaw)
 {
   LocalMatcher matcher;

@@ -8,13 +8,13 @@ from sensor_time_test_support import sample_time
 
 cv2 = pytest.importorskip("cv2")
 
-from senior_control.vision.independent_motion import (  # noqa: E402
+from senior_perception.vision.independent_motion import (  # noqa: E402
     Calibration,
     Frame,
     IndependentMotion,
     Profile,
 )
-from senior_control.vision.raw_capture import RawCaptureHeader  # noqa: E402
+from senior_perception.vision.raw_capture import RawCaptureHeader  # noqa: E402
 
 
 def header(seq: int) -> RawCaptureHeader:
@@ -142,7 +142,7 @@ def test_missing_depth_and_unqualified_profile_never_produce_motion():
 
 
 def test_camera_translation_and_body_transform_follow_rigid_oracle():
-    from senior_control.vision.independent_motion import camera_to_body_transform
+    from senior_perception.vision.independent_motion import camera_to_body_transform
 
     first_image, first_depth = scene()
     # f=250, translation=0.048m gives exact pixel shifts at z=2,3,4.
@@ -294,7 +294,7 @@ def test_missing_opencv_returns_unavailable(monkeypatch):
 
 
 def test_exclusion_mask_protects_descriptor_neighborhood():
-    from senior_control.vision.independent_motion import _feature_mask
+    from senior_perception.vision.independent_motion import _feature_mask
 
     excluded = np.zeros((100, 100), np.uint8)
     excluded[50, 50] = 255
@@ -518,7 +518,7 @@ def test_repeated_texture_and_single_patch_distribution_rejected():
 
 
 def test_body_transform_full_extrinsics_matches_point_by_point_oracle():
-    from senior_control.vision.independent_motion import camera_to_body_transform
+    from senior_perception.vision.independent_motion import camera_to_body_transform
 
     r1, _ = cv2.Rodrigues(np.array([0.2, -0.1, 0.3]))
     r2, _ = cv2.Rodrigues(np.array([-0.15, 0.25, 0.05]))
@@ -603,7 +603,7 @@ def test_new_generation_recovers_and_retired_lineage_cannot_return():
 
 
 def test_pose_quality_rejects_near_degenerate_nonplanar_rays():
-    from senior_control.vision.independent_motion import _pose_quality
+    from senior_perception.vision.independent_motion import _pose_quality
 
     rng = np.random.default_rng(12)
     points = np.column_stack(
@@ -619,7 +619,7 @@ def test_pose_quality_rejects_near_degenerate_nonplanar_rays():
 
 
 def test_pose_quality_rejects_inconsistent_spatial_group_solutions():
-    from senior_control.vision.independent_motion import _pose_quality
+    from senior_perception.vision.independent_motion import _pose_quality
 
     rng = np.random.default_rng(13)
     points = np.column_stack(

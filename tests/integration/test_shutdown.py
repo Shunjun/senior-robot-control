@@ -37,13 +37,13 @@ from agent_fakes import (
     stop,
     until,
 )
+from vehicle_manager.agent.local_adapters import IpcMotion
+from vehicle_manager.agent.production_bindings import AgentJournal
+from vehicle_manager.agent.runtime_bindings import Agent
+from vehicle_manager.storage.bindings import Database
 
-from senior_control.agent import Agent
-from senior_control.agent.connection import IpcMotion
-from senior_control.agent.journal import AgentJournal
-from senior_control.errors import DomainError
-from senior_control.runtime.ipc import MAX_FRAME, IpcClient, IpcError, IpcServer
-from senior_control.storage.database import Database
+from vehicle_core.errors import DomainError
+from vehicle_core.ipc import MAX_FRAME, IpcClient, IpcError, IpcServer
 
 
 @pytest.fixture
@@ -326,11 +326,11 @@ class ArbiterRig:
     """
 
     def __init__(self):
-        from senior_control.safety.arbiter import Arbiter
+        from senior_motion_control.arbiter import Arbiter
 
         self.now = 100.0
         self.arbiter = Arbiter(ROBOT, 300)
-        from senior_control.motion.state_machine import MotionStateMachine
+        from senior_motion_control.state_machine import MotionStateMachine
 
         self.machine = MotionStateMachine()
         self.events = 0
@@ -349,7 +349,7 @@ class ArbiterRig:
         )
 
     def submit(self, envelope, received_at=None):
-        from senior_control.motion.contracts import MotionEvent, MotionEventKind
+        from senior_motion_control.contracts import MotionEvent, MotionEventKind
 
         if envelope.type == "safety.estop":
             self.events += 1
@@ -363,7 +363,7 @@ class ArbiterRig:
         pass  # Connection retirement does not clear a durable emergency stop.
 
     async def send(self, kind, envelope=None, **fields):
-        from senior_control.protocol import serialize_envelope
+        from senior_contracts.wire import serialize_envelope
 
         message = {"v": 1, "type": kind, **fields}
         if envelope is not None:
@@ -378,7 +378,7 @@ def test_adapter_has_no_raw_velocity_write() -> None:
 
 
 async def test_background_failure_keeps_agent_reporting(tmp_path: Path, socket_path: Path) -> None:
-    from senior_control.agent.connection import HeartbeatFrame
+    from vehicle_manager.agent.connection import HeartbeatFrame
 
     local = ArbiterRig()
     local.now = time.monotonic()
@@ -427,8 +427,7 @@ async def test_background_failure_keeps_agent_reporting(tmp_path: Path, socket_p
 
 async def test_buffered_stop_then_estop_latches_estop(tmp_path: Path, socket_path: Path) -> None:
     from agent_fakes import simple
-
-    from senior_control.agent.connection import HeartbeatFrame
+    from vehicle_manager.agent.connection import HeartbeatFrame
 
     local = ArbiterRig()
     local.now = time.monotonic()
@@ -469,8 +468,7 @@ async def test_disconnect_keeps_buffered_estop_while_stop_ipc_is_blocked(
     tmp_path: Path, socket_path: Path
 ) -> None:
     from agent_fakes import simple
-
-    from senior_control.agent.connection import HeartbeatFrame
+    from vehicle_manager.agent.connection import HeartbeatFrame
 
     local = ArbiterRig()
     local.now = time.monotonic()
@@ -524,8 +522,7 @@ async def test_background_fault_preserves_cloud_while_safety_ipc_is_blocked(
     tmp_path: Path, socket_path: Path
 ) -> None:
     from agent_fakes import simple
-
-    from senior_control.agent.connection import HeartbeatFrame
+    from vehicle_manager.agent.connection import HeartbeatFrame
 
     local = ArbiterRig()
     local.now = time.monotonic()
@@ -592,9 +589,8 @@ async def test_newer_or_other_session_estop_is_not_swallowed(
     tmp_path: Path, socket_path: Path, second_session: str, first_inflight: bool, fill: bool
 ) -> None:
     from agent_fakes import simple
-
-    from senior_control.agent.main import MAX_SAFETY_PENDING
-    from senior_control.safety.arbiter import Arbiter
+    from senior_motion_control.arbiter import Arbiter
+    from vehicle_manager.agent.main import MAX_SAFETY_PENDING
 
     rig = ArbiterRig()
     rig.arbiter = Arbiter(ROBOT, 1000)
@@ -696,8 +692,7 @@ async def test_capacity_fault_then_immediate_release_delivers_every_accepted_est
     tmp_path, socket_path
 ):
     from agent_fakes import simple
-
-    from senior_control.agent.main import MAX_SAFETY_PENDING
+    from vehicle_manager.agent.main import MAX_SAFETY_PENDING
 
     owner = ArbiterRig()
     server = IpcServer(socket_path, owner.core.handle)
@@ -746,8 +741,7 @@ async def test_blocked_estop_transport_has_bounded_release_and_explicit_unconfir
     tmp_path, socket_path, caplog
 ):
     from agent_fakes import simple
-
-    from senior_control.agent.dispatcher import Deadlines
+    from vehicle_manager.agent.dispatcher import Deadlines
 
     entered, release = asyncio.Event(), asyncio.Event()
     owner = ArbiterRig()

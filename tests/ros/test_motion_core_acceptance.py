@@ -15,8 +15,8 @@ from uuid import uuid4
 
 import pytest
 
-from senior_control.protocol import MotionRuntimeState
-from senior_control.runtime.ipc import IpcClient
+from vehicle_core.ipc import IpcClient
+from vehicle_core.runtime_state import MotionRuntimeState
 
 CASES = {
     "low_start_stop": ("low", 1.0, 0.0, 12.0),

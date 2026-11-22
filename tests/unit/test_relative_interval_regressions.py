@@ -4,10 +4,9 @@ from dataclasses import replace
 
 import pytest
 from control_process_test_support import read_inputs, read_observation
+from senior_motion_estimation.estimator import MotionEstimation, MotionObservation, Origin
+from senior_motion_estimation.pose_estimator import PoseEstimation
 from sensor_time_test_support import capture_fields, sample_time
-
-from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
-from senior_control.motion.pose_estimator import PoseEstimation
 
 
 def sample(t, sequence, *, source="laser", yaw=0.0, missing_linear=False, lateral=None):
@@ -183,7 +182,7 @@ def test_actual_scan_alignment_has_same_recent_budget_after_ten_and_sixty_second
     from senior_robot.motion_sensor_runtime import MotionSensorRuntime
     from test_motion_core_handoff import core as core_fixture
 
-    from senior_control.config import DeviceProfile
+    from vehicle_core.config import DeviceProfile
 
     fixture = core_fixture.__wrapped__(monkeypatch)
     c = next(fixture)
@@ -283,7 +282,7 @@ def test_actual_scan_alignment_has_same_recent_budget_after_ten_and_sixty_second
 
 
 def test_midsegment_pose_uses_recorded_motion_when_endpoint_velocity_changes():
-    from senior_control.motion.kinematics import compose, inverse
+    from senior_motion_estimation.kinematics import compose, inverse
 
     p, e, _, old = run(10.05, yaw=0.4)
     t = old.stamp_ros + 0.05
@@ -365,8 +364,9 @@ def test_exact_three_axis_reproduction_is_bounded_without_resetting_global_error
 
 
 def test_epoch_nanosecond_recorded_path_requires_exact_continuous_coverage():
-    from senior_control.motion.estimator import MotionPath, MotionPathSegment
-    from senior_control.sensors.sample_time import StampInterval
+    from senior_motion_estimation.estimator import MotionPath, MotionPathSegment
+
+    from vehicle_core.sample_time import StampInterval
 
     e = MotionEstimation()
     assert e.ingest(sample(1.0, 1, lateral=0.0))

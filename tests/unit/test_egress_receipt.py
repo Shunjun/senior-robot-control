@@ -6,7 +6,7 @@ from sensor_time_test_support import capture_fields, sample_time
 
 
 def test_retired_owner_packet_does_not_revoke_successor():
-    from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
+    from senior_perception.vision.egress_receipt import EgressAdmission, EgressHeader
 
     admission = EgressAdmission(max_age_ms=300)
     old = EgressHeader(
@@ -40,7 +40,7 @@ def test_retired_owner_packet_does_not_revoke_successor():
 
 
 def test_current_invalid_is_idempotent_and_a_later_valid_message_recovers():
-    from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
+    from senior_perception.vision.egress_receipt import EgressAdmission, EgressHeader
 
     admission = EgressAdmission(max_age_ms=300)
     good = EgressHeader(
@@ -68,7 +68,7 @@ def test_current_invalid_is_idempotent_and_a_later_valid_message_recovers():
 
 
 def test_wrong_relay_gid_and_old_generation_cannot_replace_current_owner():
-    from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
+    from senior_perception.vision.egress_receipt import EgressAdmission, EgressHeader
 
     admission = EgressAdmission(max_age_ms=300)
     good = EgressHeader(
@@ -95,7 +95,7 @@ def test_wrong_relay_gid_and_old_generation_cannot_replace_current_owner():
 
 
 def test_topology_loss_invalidates_once_and_new_owner_can_recover():
-    from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
+    from senior_perception.vision.egress_receipt import EgressAdmission, EgressHeader
 
     admission = EgressAdmission(max_age_ms=300)
     good = EgressHeader(
@@ -134,7 +134,7 @@ def test_topology_loss_invalidates_once_and_new_owner_can_recover():
 def test_wire_owner_header_conversion_preserves_topology_failure_fields():
     from types import SimpleNamespace
 
-    from senior_control.vision.egress_receipt import EgressHeader, egress_from_message
+    from senior_perception.vision.egress_receipt import EgressHeader, egress_from_message
 
     wire = SimpleNamespace(
         relay_gid="01" * 24,
@@ -166,7 +166,7 @@ def test_wire_owner_header_conversion_preserves_topology_failure_fields():
 def test_depth_body_capture_check_uses_original_receipts_and_current_bridge_gids():
     from types import SimpleNamespace
 
-    from senior_control.vision.egress_receipt import depth_capture_headers
+    from senior_perception.vision.egress_receipt import depth_capture_headers
 
     def wire(raw_gid, bridge_gid, sequence):
         return SimpleNamespace(
@@ -219,7 +219,7 @@ def test_depth_body_capture_check_uses_original_receipts_and_current_bridge_gids
 
 
 def test_upstream_failure_revokes_once_without_retiring_healthy_semantic_owner():
-    from senior_control.vision.egress_receipt import EgressAdmission, EgressHeader
+    from senior_perception.vision.egress_receipt import EgressAdmission, EgressHeader
 
     admission = EgressAdmission(max_age_ms=300)
     good = EgressHeader(
@@ -248,8 +248,7 @@ def test_upstream_failure_revokes_once_without_retiring_healthy_semantic_owner()
 
 def test_scan_egress_can_use_explicit_three_second_observation_profile():
     import pytest
-
-    from senior_control.vision.egress_receipt import EgressAdmission
+    from senior_perception.vision.egress_receipt import EgressAdmission
 
     with pytest.raises(ValueError):
         EgressAdmission(max_age_ms=3000)
@@ -260,7 +259,7 @@ def test_scan_egress_can_use_explicit_three_second_observation_profile():
 def test_safety_scan_capture_requires_original_clocks_and_native_endpoint():
     from types import SimpleNamespace
 
-    from senior_control.vision.egress_receipt import safety_scan_capture
+    from senior_perception.vision.egress_receipt import safety_scan_capture
 
     stamp = SimpleNamespace(sec=1, nanosec=0)
     header = SimpleNamespace(

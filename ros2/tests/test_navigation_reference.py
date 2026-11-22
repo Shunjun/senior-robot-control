@@ -12,8 +12,8 @@ from types import SimpleNamespace as N
 
 import pytest
 
-from senior_control.models import Pose2D
-from senior_control.sensors.sample_time import map_sample
+from vehicle_core.sample_time import map_sample
+from vehicle_core.values import Pose2D
 
 
 @pytest.fixture
@@ -201,8 +201,9 @@ def test_standard_pose_payload_validation_preserved(reference, failure):
 
 
 def test_standard_reference_pose_reply_satisfies_existing_home_ipc_schema(reference):
-    from senior_control.agent.ports import PoseReply
-    from senior_control.models import MapRef
+    from vehicle_manager.agent.pose_reply import PoseReply
+
+    from vehicle_core.values import MapRef
 
     r = reference
     r.ref._grid.map_ref = MapRef("map", 1)

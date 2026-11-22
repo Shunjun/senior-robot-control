@@ -22,10 +22,10 @@ from test_docker_start_helper import service_root as endpoint_root  # noqa: F401
 
 @contextmanager
 def recovered_process(tmp_path, code):
-    from senior_control.runtime.launch_recovery import restart_prefix
+    from vehicle_core.launch_recovery import restart_prefix
 
     environment = dict(os.environ)
-    environment["PYTHONPATH"] = str(Path(__file__).parents[2] / "src")
+    environment["PYTHONPATH"] = str(Path(__file__).parents[2])
     environment.pop("SENIOR_LAUNCH_RECOVERED", None)
     environment["SENIOR_STARTUP_LEARNING_CLAIM"] = "unchanged-run"
     with (tmp_path / "recovery.log").open("w+") as log:
@@ -144,7 +144,7 @@ def _dedicated_controller_class(root):
     """Exercise the actual spawn/stop methods without importing a ROS context."""
     from contextlib import AsyncExitStack, asynccontextmanager, suppress
 
-    from senior_control.runtime.launch_recovery import owner_command
+    from vehicle_core.launch_recovery import owner_command
 
     path = Path("ros2/src/senior_navigation/senior_navigation/dedicated_controller.py")
     source = next(
@@ -364,7 +364,7 @@ async def test_dedicated_startup_cancel_reaps_native_process(tmp_path):
             os.killpg(process.pid, 0)
         # A bootstrap whose expected spawning parent has already gone must
         # return without ever exec'ing the native command.
-        from senior_control.runtime.launch_recovery import owner_command
+        from vehicle_core.launch_recovery import owner_command
 
         command = owner_command([sys.executable, "-c", "raise SystemExit(29)"])
         command[command.index("--owner") + 1] = str(os.getppid())
@@ -379,9 +379,11 @@ async def test_dedicated_startup_cancel_reaps_native_process(tmp_path):
 
 def test_recovery_handoff_restores_original_estop_revision_without_reset(monkeypatch, tmp_path):
     """Recovery shares the existing explicit revision-matched reset semantics."""
-    from senior_control.motion.contracts import MotionEvent, MotionMode
-    from senior_control.motion.contracts import MotionEventKind as K
-    from senior_control.motion.state_machine import MotionStateMachine
+    from senior_motion_control.contracts import MotionEvent
+    from senior_motion_control.contracts import MotionEventKind as K
+    from senior_motion_control.state_machine import MotionStateMachine
+
+    from vehicle_core.motion_state import MotionMode
 
     machine = MotionStateMachine()
     assert machine.restore_software_estop(3, now_steady=10.0)
@@ -400,11 +402,11 @@ def test_recovery_handoff_restores_original_estop_revision_without_reset(monkeyp
 
 def production_command_owner(clock):
     """Reuse the existing ROS-free production-method fixture, including real retirement."""
+    from senior_motion_control.arbiter import Arbiter
+    from senior_motion_control.manual_control import ManualIngress, MotionRuntimeReceiver
     from test_manual_command_generation import command_class
 
-    from senior_control.agent.manual_control import ManualIngress, MotionRuntimeReceiver
-    from senior_control.protocol import MotionRuntimeState
-    from senior_control.safety.arbiter import Arbiter
+    from vehicle_core.runtime_state import MotionRuntimeState
 
     base = command_class()
     scope = dict(base._publish_barrier.__globals__)
@@ -562,16 +564,16 @@ def native_recovery_codec(tmp_path):
 
 
 def _check_command_guard_core_recovery(monkeypatch, tmp_path):
+    import senior_perception.learning_client as learning_client
+    from senior_contracts.wire import SimpleEnvelope
+    from senior_motion_control.arbiter import FinalCommandFence
+    from senior_perception.learning_wire import Attach, Reserve, State
     from test_learning_client import until, wire_owner
     from test_startup_learning_chain import LearningRig
+    from vehicle_manager.settings.models import simulation_settings_profile
 
-    from senior_control.models import Velocity
-    from senior_control.motion.contracts import MotionMode
-    from senior_control.protocol import SimpleEnvelope
-    from senior_control.runtime import learning_client
-    from senior_control.runtime.learning_wire import Attach, Reserve, State
-    from senior_control.safety.arbiter import FinalCommandFence
-    from senior_control.settings.models import simulation_settings_profile
+    from vehicle_core.motion_state import MotionMode
+    from vehicle_core.values import Velocity
 
     rig = LearningRig(monkeypatch, tmp_path)
     try:
@@ -787,7 +789,7 @@ async def test_launch_endpoint_reclaims_only_same_owner_refused_stale_socket(
 
     from senior_robot.agent_adapter import _launch_endpoint
 
-    from senior_control.runtime.ipc import _record
+    from vehicle_core.ipc import _record
 
     path = endpoint_root / "agent.sock"
     owner = "a" * 32

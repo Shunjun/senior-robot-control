@@ -20,11 +20,11 @@ from senior_mapping.references import (
     SlamSnapshot,
 )
 from senior_mapping.store import MapReferenceStore
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.map_persistence import map_persistence
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, OperationStatus, Pose2D
-from senior_control.storage.database import Database
-from senior_control.storage.map_persistence import map_persistence
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, OperationStatus, Pose2D
 
 CELL = 0.5
 _HINT = Pose2D(1.0, 2.0, 0.25)
@@ -1569,7 +1569,7 @@ async def test_backup_without_consistent_capture_stays_unavailable(tmp_path: Pat
 async def test_failed_reconcile_guard_deletion_keeps_reference_in_review(tmp_path: Path) -> None:
     import sqlite3
 
-    from senior_control.waypoints import HomeService, LocalizedPose
+    from vehicle_manager.waypoints.home import HomeService, LocalizedPose
 
     class Nav:
         def __init__(self) -> None:
@@ -1580,7 +1580,7 @@ async def test_failed_reconcile_guard_deletion_keeps_reference_in_review(tmp_pat
             return "goal"
 
         async def cancel(self, execution_id: str):
-            from senior_control.models import OperationResult
+            from vehicle_core.values import OperationResult
 
             return OperationResult(execution_id, OperationStatus.SUCCEEDED)
 
@@ -1634,7 +1634,7 @@ async def test_failed_reconcile_guard_deletion_keeps_reference_in_review(tmp_pat
 
 
 async def test_same_reference_import_invalidates_old_home_localization(tmp_path: Path) -> None:
-    from senior_control.waypoints import HomeService, LocalizedPose, StartupReference
+    from vehicle_manager.waypoints.home import HomeService, LocalizedPose, StartupReference
 
     class Nav:
         def __init__(self) -> None:
@@ -1645,7 +1645,7 @@ async def test_same_reference_import_invalidates_old_home_localization(tmp_path:
             return "goal"
 
         async def cancel(self, execution_id: str):
-            from senior_control.models import OperationResult
+            from vehicle_core.values import OperationResult
 
             return OperationResult(execution_id, OperationStatus.SUCCEEDED)
 
@@ -1781,7 +1781,7 @@ async def test_startup_without_authoritative_snapshot_verifier_remains_guarded(
 async def test_same_ref_import_cannot_return_to_unverified_old_home(
     tmp_path: Path, foreign_home: bool
 ) -> None:
-    from senior_control.waypoints import HomeService, LocalizedPose
+    from vehicle_manager.waypoints.home import HomeService, LocalizedPose
 
     class Nav:
         def __init__(self) -> None:
@@ -1792,7 +1792,7 @@ async def test_same_ref_import_cannot_return_to_unverified_old_home(
             return "goal"
 
         async def cancel(self, execution_id: str):
-            from senior_control.models import OperationResult
+            from vehicle_core.values import OperationResult
 
             return OperationResult(execution_id, OperationStatus.SUCCEEDED)
 
@@ -1836,7 +1836,7 @@ async def test_same_ref_import_cannot_return_to_unverified_old_home(
         assert navigation.goals == []
         restarted = HomeService(database, local, robot_id="r", navigation=navigation)
         await restarted.prepare()
-        from senior_control.waypoints import StartupReference
+        from vehicle_manager.waypoints.home import StartupReference
 
         fresh = LocalizedPose(
             Pose2D(8, 8, 0),
@@ -1855,7 +1855,7 @@ async def test_same_ref_import_cannot_return_to_unverified_old_home(
 async def test_retained_home_remains_usable_when_current_binding_is_verified(
     tmp_path: Path,
 ) -> None:
-    from senior_control.waypoints import HomeService, LocalizedPose
+    from vehicle_manager.waypoints.home import HomeService, LocalizedPose
 
     class Nav:
         def __init__(self) -> None:
@@ -1866,7 +1866,7 @@ async def test_retained_home_remains_usable_when_current_binding_is_verified(
             return "goal"
 
         async def cancel(self, execution_id: str):
-            from senior_control.models import OperationResult
+            from vehicle_core.values import OperationResult
 
             return OperationResult(execution_id, OperationStatus.SUCCEEDED)
 

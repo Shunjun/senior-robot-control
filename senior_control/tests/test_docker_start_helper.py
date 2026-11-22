@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from senior_control.runtime.ipc import IpcClient
+from vehicle_core.ipc import IpcClient
 
 
 @pytest.fixture
@@ -32,7 +32,7 @@ async def wait_for_socket(root, task):
 
 
 async def test_control_stop_reaps_owned_child_and_preserves_data(service_root):
-    from senior_control.docker_start_helper import supervise
+    from senior_robot.service_runtime import supervise
 
     marker = service_root / "agent.db"
     marker.write_text("existing database")
@@ -59,7 +59,7 @@ async def test_control_stop_reaps_owned_child_and_preserves_data(service_root):
 
 
 async def test_child_failure_propagates_and_socket_is_removed(service_root):
-    from senior_control.docker_start_helper import supervise
+    from senior_robot.service_runtime import supervise
 
     result = await supervise(
         service_root, [sys.executable, "-c", "raise SystemExit(78)"], dict(os.environ)
@@ -69,7 +69,7 @@ async def test_child_failure_propagates_and_socket_is_removed(service_root):
 
 
 async def test_second_owner_cannot_replace_running_control_socket(service_root):
-    from senior_control.docker_start_helper import supervise
+    from senior_robot.service_runtime import supervise
 
     task = asyncio.create_task(
         supervise(
@@ -95,7 +95,7 @@ async def test_second_owner_cannot_replace_running_control_socket(service_root):
 
 
 def real_profile(root, *, domain=None):
-    from senior_control.cli import load_profile
+    from vehicle_manager.profile import load_profile
 
     setup = root / "setup.bash"
     setup.write_text("")
@@ -168,7 +168,7 @@ def test_motion_launch_uses_project_python_for_env_shebang(service_root):
 async def test_active_or_unrecognized_socket_is_never_replaced(service_root):
     import socket
 
-    from senior_control.docker_start_helper import _prepare_socket, _record
+    from vehicle_core.ipc import _prepare_socket, _record
 
     path = service_root / "agent.sock"
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as listener:
@@ -197,7 +197,7 @@ async def test_identity_or_domain_mismatch_prevents_agent_readiness(
 ):
     from types import SimpleNamespace
 
-    from senior_control import docker_start_helper as helper
+    import senior_robot.service_runtime as helper
 
     class Client:
         def __init__(self, *args, **kwargs):
@@ -221,7 +221,7 @@ async def test_identity_or_domain_mismatch_prevents_agent_readiness(
 
 
 def test_runtime_profile_maps_explicit_host_paths_without_host_ros(service_root):
-    from senior_control.docker_start_helper import _runtime_profile
+    from vehicle_manager.service import _runtime_profile
 
     (service_root / "config.json").write_text(
         json.dumps(
@@ -244,7 +244,7 @@ def test_runtime_profile_maps_explicit_host_paths_without_host_ros(service_root)
 async def test_matching_robot_id_does_not_establish_process_ownership(service_root):
     import socket
 
-    from senior_control.docker_start_helper import _verify_adapter_peer
+    from senior_robot.service_runtime import _verify_adapter_peer
 
     if not hasattr(socket, "SO_PEERCRED"):
         pytest.skip("Linux Unix peer credentials required")
@@ -260,7 +260,7 @@ async def test_matching_robot_id_does_not_establish_process_ownership(service_ro
 
 async def test_camera_leaf_recovers_without_restarting_helper_owners(service_root, monkeypatch):
     """Real helper/children; only ROS sourcing and readiness are substituted."""
-    from senior_control import docker_start_helper as helper
+    import senior_robot.service_runtime as helper
 
     profile = real_profile(service_root)
     monkeypatch.setenv("PYTHONPATH", str(Path("src").resolve()))

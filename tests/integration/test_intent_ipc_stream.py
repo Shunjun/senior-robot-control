@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from senior_control.runtime.ipc import IpcClient, IpcError, IpcServer
+from vehicle_core.ipc import IpcClient, IpcError, IpcServer
 
 
 async def wait_for(predicate):

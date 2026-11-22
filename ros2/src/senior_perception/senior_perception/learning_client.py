@@ -7,10 +7,7 @@ import threading
 import time
 from collections import deque
 from pathlib import Path
-from uuid import uuid4
 
-from senior_control.safety.learning_view import LearningFilterView
-from senior_control.vision.raw_capture import capture_from_message
 from senior_perception.learning_record import (
     MAX_RECORD_BYTES,
     LearningGeometry,
@@ -19,6 +16,7 @@ from senior_perception.learning_record import (
     attempt_identity,
 )
 from senior_perception.learning_service import address
+from senior_perception.learning_view import LearningFilterView
 from senior_perception.learning_wire import (
     AcceptAttempt,
     ActionReady,
@@ -37,6 +35,7 @@ from senior_perception.learning_wire import (
     SessionRequest,
     State,
 )
+from senior_perception.vision.raw_capture import capture_from_message
 
 
 def request_once(run_id: str, request: Request) -> Reply:
@@ -373,20 +372,18 @@ class LearningFrames:
         self.run_id = path.name.removeprefix(".startup-learning-")
         self.profile, self.body_frame = profile, body_frame
         self._attempt = attempt_identity(self.run_id)
-        self._stream = uuid4().hex
-        self._index = 0
-        self._frames: deque[RecordedFrame] = deque()
-        self._gap = False
+        self._frames: deque[RecordedFrame] = deque(maxlen=16)
+        self._recording = True
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, name="learning-raw-frames", daemon=True)
         self._thread.start()
 
-    def mark_gap(self) -> None:
-        with self._lock:
-            self._gap = True
-
     def offer(self, raw) -> None:
+        with self._lock:
+            if not self._recording:
+                return  # Do not decode/copy ranges after the capture has closed.
+            attempt = self._attempt
         m = raw.message
         capture = capture_from_message(m.raw_capture)
         x, y = self.profile.length / 2, self.profile.width / 2
@@ -406,15 +403,12 @@ class LearningFrames:
             for v in m.ranges
         )
         with self._lock:
-            self._index += 1
-            if len(self._frames) >= 16:
-                self._gap = True
-                return
+            if not self._recording or attempt != self._attempt:
+                return  # A reply may close or replace the attempt during decoding.
             self._frames.append(
                 RecordedFrame(
                     capture=capture,
                     recorded_steady_ns=time.monotonic_ns(),
-                    index=self._index,
                     geometry=geometry,
                     ranges=ranges,
                     transform_stamp=m.transform_stamp,
@@ -429,30 +423,22 @@ class LearningFrames:
                     self._frames[0].recorded_steady_ns - 1 if self._frames else time.monotonic_ns()
                 )
                 request = FrameBatch(
-                    after_index=frames[0].index - 1 if frames else self._index,
                     attempt_id=self._attempt,
-                    stream_id=self._stream,
                     frames=frames,
-                    gap=self._gap,
                     through_steady_ns=through,
                 )
             try:
                 reply = request_once(self.run_id, request)
                 if not reply.ok:
                     raise ValueError(reply.error)
-                if (
-                    frames
-                    and reply.attempt_id == request.attempt_id
-                    and reply.through_index < frames[-1].index
-                ):
-                    raise ValueError("learning_frame_ack_incomplete")
-                if reply.attempt_id is not None and reply.attempt_id != self._attempt:
-                    with self._lock:
+                with self._lock:
+                    if reply.attempt_id is not None and reply.attempt_id != self._attempt:
                         self._attempt = reply.attempt_id
-                        self._gap = False
+                    self._recording = reply.recording
+                    if not self._recording:
+                        self._frames.clear()
             except (OSError, ValueError, RuntimeError):
-                if frames:
-                    self.mark_gap()
+                pass  # Missing unselected input does not invalidate five good samples.
             self._stop.wait(0.01 if frames else 0.05)
 
     def close(self) -> None:

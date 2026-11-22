@@ -32,8 +32,9 @@ def test_native_imu_has_no_fabricated_interval_or_statistical_model():
 
 
 def test_truth_same_window_turning_and_no_gap_bridge():
-    from senior_control.models import Pose2D
-    from senior_control.motion.kinematics import exponential
+    from senior_motion_estimation.kinematics import exponential
+
+    from vehicle_core.values import Pose2D
 
     truth = TruthIndex(0.08, 100)
     for t in (0, 0.05, 0.1):

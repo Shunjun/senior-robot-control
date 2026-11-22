@@ -9,8 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 import pytest
-
-from senior_control.vision import (
+from senior_perception.vision import (
     AlignedRgbdFrame,
     CalibrationError,
     CameraCalibration,
@@ -189,7 +188,7 @@ def _missing_runtime(_path: Path) -> Callable[[ImageFrame], list[Detection]]:
 
 def test_vision_import_loads_no_detector_runtime() -> None:
     code = (
-        "import sys, senior_control.vision;"
+        "import sys, senior_perception.vision;"
         "bad = [n for n in ('torch', 'ultralytics', 'onnxruntime') if n in sys.modules];"
         "sys.exit(1 if bad else 0)"
     )
@@ -275,7 +274,7 @@ def test_person_shifted_past_the_old_box_center_is_not_confirmed_static() -> Non
 
 
 def test_moving_column_is_unknown_without_independent_motion() -> None:
-    from senior_control.vision.tracking import Tracker
+    from senior_perception.vision.tracking import Tracker
 
     tracker = Tracker()
     tracker.update([], project_depth(aligned(depth(1.0)), calibration(), CONFIG))
@@ -290,7 +289,7 @@ def test_moving_column_is_unknown_without_independent_motion() -> None:
 
 
 def test_whole_scene_change_is_not_read_as_object_motion() -> None:
-    from senior_control.vision.tracking import Tracker
+    from senior_perception.vision.tracking import Tracker
 
     tracker = Tracker()
     tracker.update([], project_depth(aligned(depth(1.0)), calibration(), CONFIG))
@@ -303,7 +302,7 @@ def test_whole_scene_change_is_not_read_as_object_motion() -> None:
 
 
 def test_motion_needs_a_baseline_that_is_old_enough_and_not_too_old() -> None:
-    from senior_control.vision.tracking import Tracker
+    from senior_perception.vision.tracking import Tracker
 
     tracker = Tracker()
     tracker.update([], project_depth(aligned(depth(1.0)), calibration(), CONFIG))
@@ -428,7 +427,7 @@ def test_node_module_imports_without_ros_and_publishes_no_velocity() -> None:
         "sys.exit(1 if bad else 0)"
     )
     done = subprocess.run(
-        [sys.executable, "-c", code, str(path), str(ROOT / "src")],
+        [sys.executable, "-c", code, str(path), str(ROOT)],
         capture_output=True,
         text=True,
         timeout=10,
@@ -452,9 +451,8 @@ def test_ultralytics_runtime_expands_padded_mono_to_three_equal_channels(monkeyp
     from types import SimpleNamespace
 
     import numpy as np
-
-    from senior_control.vision import detector
-    from senior_control.vision.image_codec import decode_rgb
+    import senior_perception.vision.detector as detector
+    from senior_perception.vision.image_codec import decode_rgb
 
     received = []
 
@@ -495,8 +493,8 @@ def test_ultralytics_runtime_expands_padded_mono_to_three_equal_channels(monkeyp
 def test_ultralytics_runtime_preserves_expected_bgr_channels(monkeypatch, encoding, expected):
     from types import SimpleNamespace
 
-    from senior_control.vision import detector
-    from senior_control.vision.image_codec import decode_rgb
+    import senior_perception.vision.detector as detector
+    from senior_perception.vision.image_codec import decode_rgb
 
     received = []
 

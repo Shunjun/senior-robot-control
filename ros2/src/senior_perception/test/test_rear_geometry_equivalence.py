@@ -5,14 +5,14 @@ import math
 import random
 from pathlib import Path
 
+import senior_perception.coverage as coverage
 from rear_legacy_oracle import legacy_exact_partial_fans, legacy_filter_self
 from senior_perception import self_filter
 from senior_perception.self_filter import ScanObservation
 from shapely.geometry import Polygon
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
-from senior_control.safety import coverage
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Pose2D
 
 
 def _profile(masks):

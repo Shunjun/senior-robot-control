@@ -1,4 +1,4 @@
-from senior_control.vision.static_tf_binding import Edge, Receipt, StaticBinding
+from senior_perception.vision.static_tf_binding import Edge, Receipt, StaticBinding
 
 
 def receipt(gid="01", generation=1, sequence=1, translation=(0.0, 0.0, 0.0)):
@@ -163,7 +163,7 @@ def test_retired_source_gid_cannot_return_under_new_boot():
 def test_chain_composes_rotated_translation():
     from math import sqrt
 
-    from senior_control.vision.static_tf_binding import body_from_camera
+    from senior_perception.vision.static_tf_binding import body_from_camera
 
     edges = (
         Edge("base_link", "mount", 0, (1.0, 0.0, 0.0), (0.0, 0.0, sqrt(0.5), sqrt(0.5))),

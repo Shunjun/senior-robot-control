@@ -14,13 +14,13 @@ from rclpy.time import Time
 from senior_motion_msgs.msg import BoundedFilteredScan, BoundedRawLaserScan
 from tf2_ros import Buffer, TransformException, TransformListener
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
-from senior_control.safety.external_motion_features import external_feature_ranges
-from senior_control.sensors.policy import default_policy
-from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
+from senior_perception.external_motion_features import external_feature_ranges
 from senior_perception.learning_client import LearningClient
 from senior_perception.self_filter import ScanObservation, filter_self
+from senior_perception.vision.raw_capture import RawCaptureAdmission, capture_from_message
+from vehicle_core.config import DeviceProfile
+from vehicle_core.sensor_policy import default_policy
+from vehicle_core.values import Pose2D
 
 
 class ScanAdapter(Node):

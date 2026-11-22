@@ -1,5 +1,6 @@
-from senior_control.models import Velocity
-from senior_control.safety.arbiter import Arbiter, FinalCommandFence
+from senior_motion_control.arbiter import Arbiter, FinalCommandFence
+
+from vehicle_core.values import Velocity
 
 
 def test_final_command_fence_rejects_old_generation_and_deadline():
@@ -67,7 +68,7 @@ def test_task_samples_keep_local_deadline_without_a_remote_lease():
 
 
 def test_estop_retires_task_and_rejects_wrong_robot_or_replayed_request():
-    from senior_control.protocol import EmptyPayload, SimpleEnvelope
+    from senior_contracts.wire import EmptyPayload, SimpleEnvelope
 
     owner = Arbiter("robot", 300)
     assert owner.begin_navigation("route", 10.0, task_epoch=1)

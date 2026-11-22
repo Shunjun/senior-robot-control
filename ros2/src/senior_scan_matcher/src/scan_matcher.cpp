@@ -1,4 +1,5 @@
 #include "senior_scan_matcher/scan_matcher.hpp"
+#include "point_index.hpp"
 
 #include <algorithm>
 #include <atomic>
@@ -194,7 +195,36 @@ public:
   void clear()
   {
     previous = LaserScan{}; base.clear(); drop_sensor();
+    reference_index.clear(); reference_ready = false;
     anchor_to_previous = {}; previous_covariance = {}; matched_previous = false;
+  }
+
+  void set_reference(std::vector<Point> points)
+  {
+    base = std::move(points);
+    reference_ready = false;
+  }
+
+  void prepare_reference()
+  {
+    if (reference_ready) return;
+    auto * grid = matcher->GetCorrelationGrid();
+    grid->Clear();
+    const auto roi = grid->GetROI();
+    grid->GetCoordinateConverter()->SetOffset(karto::Vector2<double>(
+        -0.5 * (roi.GetWidth() - 1) * resolution, -0.5 * (roi.GetHeight() - 1) * resolution));
+    // Keep rasterization order unchanged; the index reorders only its own copy.
+    for (const auto & p : base) {
+      auto cell = grid->WorldToGrid(karto::Vector2<double>(p.first, p.second));
+      if (cell.GetX() < 0 || cell.GetY() < 0 || cell.GetX() >= roi.GetWidth() || cell.GetY() >= roi.GetHeight())
+        continue;
+      const auto index = grid->GridIndex(cell);
+      grid->GetDataPointer()[index] = karto::GridStates_Occupied;
+      grid->SmearPoint(cell);
+    }
+    reference_index.reset(base);
+    // CorrelateScan reads this anchor grid; its query/search work is separate.
+    reference_ready = true;
   }
 
   MatcherLimits limits;
@@ -205,6 +235,8 @@ public:
   bool registered = false;
   LaserScan previous;
   std::vector<Point> base;
+  detail::PointIndex reference_index;
+  bool reference_ready = false;
   Pose anchor_to_previous;
   std::array<double, 9> previous_covariance{};
   bool matched_previous = false;
@@ -243,7 +275,7 @@ MatchResult LocalMatcher::update(const LaserScan & scan)
   }
   if (!m.sensor) m.configure(scan);
   if (m.previous.ranges.empty()) {
-    m.previous = scan; m.base = std::move(query_points);
+    m.previous = scan; m.set_reference(std::move(query_points));
     out.reason = "initializing"; return out;
   }
   out.start = m.previous.stamp;
@@ -253,19 +285,7 @@ MatchResult LocalMatcher::update(const LaserScan & scan)
   if (scan.stamp <= m.previous.stamp || scan.stamp - m.previous.stamp > m.limits.max_interval_ms / 1000) {
     m.clear(); out.reason = "geometry_or_time_discontinuity"; return out;
   }
-  auto * grid = m.matcher->GetCorrelationGrid();
-  grid->Clear();
-  const auto roi = grid->GetROI();
-  grid->GetCoordinateConverter()->SetOffset(karto::Vector2<double>(
-      -0.5 * (roi.GetWidth() - 1) * resolution, -0.5 * (roi.GetHeight() - 1) * resolution));
-  for (const auto & p : m.base) {
-    auto cell = grid->WorldToGrid(karto::Vector2<double>(p.first, p.second));
-    if (cell.GetX() < 0 || cell.GetY() < 0 || cell.GetX() >= roi.GetWidth() || cell.GetY() >= roi.GetHeight())
-      continue;
-    const auto index = grid->GridIndex(cell);
-    grid->GetDataPointer()[index] = karto::GridStates_Occupied;
-    grid->SmearPoint(cell);
-  }
+  m.prepare_reference();
   karto::RangeReadingsVector ranges;
   ranges.reserve(scan.ranges.size());
   for (double r : scan.ranges) {
@@ -294,8 +314,7 @@ MatchResult LocalMatcher::update(const LaserScan & scan)
   for (const auto & p : query_points) {
     const double x = anchor_to_current.x + c*p.first - s*p.second;
     const double y = anchor_to_current.y + s*p.first + c*p.second;
-    double best = std::numeric_limits<double>::infinity();
-    for (const auto & b : m.base) best = std::min(best, std::hypot(x-b.first, y-b.second));
+    const double best = m.reference_index.nearest(x, y);
     if (best <= m.limits.max_residual * 2) { squared += best*best; ++inliers; }
   }
   out.residual = inliers ? std::sqrt(squared / inliers) : std::numeric_limits<double>::infinity();
@@ -334,7 +353,7 @@ MatchResult LocalMatcher::update(const LaserScan & scan)
   m.previous = scan;
   if (std::hypot(anchor_to_current.x, anchor_to_current.y) >= m.limits.reanchor_distance ||
       std::abs(anchor_to_current.yaw) >= m.limits.reanchor_yaw) {
-    m.base = std::move(query_points);
+    m.set_reference(std::move(query_points));
     m.anchor_to_previous = {};
     m.previous_covariance = {};
     m.matched_previous = false;

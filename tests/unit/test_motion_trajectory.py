@@ -1,10 +1,10 @@
 """Synthetic SI bounds, independent finite-difference and end-state checks."""
 
 import pytest
+from senior_motion_control.contracts import ResponseBounds
+from senior_motion_control.trajectory import Trajectory, scale_wheels
 
-from senior_control.models import Velocity
-from senior_control.motion.contracts import ResponseBounds
-from senior_control.motion.trajectory import Trajectory, scale_wheels
+from vehicle_core.values import Velocity
 
 
 def response():

@@ -49,7 +49,7 @@ from vehicle_manager.agent.supervisor import AuthRejected, Supervisor
 from vehicle_manager.agent.workspace import WorkspaceReader
 from vehicle_manager.settings.service import RuntimeGate, SettingsService
 
-logger = logging.getLogger("senior_control.agent")
+logger = logging.getLogger("vehicle_manager.agent")
 HALT_TYPES = frozenset({"drive.stop", "safety.estop"})
 MAX_INFLIGHT = 64
 MAX_SAFETY_PENDING = 64
@@ -62,6 +62,7 @@ def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
         snapshot.localized,
         snapshot.map_ref,
         snapshot.map_generation,
+        snapshot.map_grid_id,
         None
         if route is None
         else (
@@ -1125,6 +1126,7 @@ class Agent(Generic[ResultT]):
             tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
             map_generation=live.map_generation,
+            map_grid_id=live.map_grid_id,
             route_progress=live.route_progress,
             navigation_ready=live.navigation_ready,
             robot_pose=live.robot_pose,

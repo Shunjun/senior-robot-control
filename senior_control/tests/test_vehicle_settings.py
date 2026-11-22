@@ -10,8 +10,7 @@ from vehicle_manager.settings.models import (
 )
 from vehicle_manager.settings.service import RuntimeGate, SettingsService
 from vehicle_manager.settings.store import SettingsStore
-
-from senior_control.storage.database import Database
+from vehicle_manager.storage.bindings import Database
 
 
 def profile():

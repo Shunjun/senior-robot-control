@@ -3,13 +3,13 @@
 from types import SimpleNamespace as N
 
 import pytest
+import vehicle_manager.tasks.lifecycle as task
 from test_motion_core_exit_deadline import rig as core_fixture
 from test_motion_core_exit_deadline import start
 from test_navigation_completion_handoff import barrier
 from test_startup_learning_chain import rig as learning_rig  # noqa: F401
 
-from senior_control.motion.contracts import MotionMode
-from senior_control.tasks import lifecycle as task
+from vehicle_core.motion_state import MotionMode
 
 CTX = task.Context(True, True, "pose", "map")
 
@@ -151,7 +151,7 @@ def test_terminal_identity_does_not_revoke_current_manual_or_touch_output_fronti
     [("execution_fault", MotionMode.EXECUTION_FAULT), ("software_estop", MotionMode.ESTOP)],
 )
 def test_terminal_identity_preserves_physical_latches(rig, event, mode):
-    from senior_control.motion.contracts import MotionEventKind
+    from senior_motion_control.contracts import MotionEventKind
 
     start(rig, 0.5)
     assert rig.core.command(barrier(rig, "task_revoke"))
@@ -192,8 +192,8 @@ async def test_real_cancel_route_reducer_core_allows_distinct_next_execution(rig
 
     from senior_robot.navigation_adapter import NavigationAdapter, RouteService
 
-    from senior_control.models import OperationResult, OperationStatus
-    from senior_control.navigation import RoutePlan
+    from vehicle_core.route_plan import RoutePlan
+    from vehicle_core.values import OperationResult, OperationStatus
 
     start(rig, 0.5)
     retired = []
@@ -268,7 +268,7 @@ def test_unknown_retained_task_epoch_cannot_mint_a_release_receipt(rig):
 
 
 def test_retirement_of_live_reopened_source_is_refused_even_at_same_epoch(rig):
-    from senior_control.motion.contracts import MotionTarget
+    from senior_motion_control.contracts import MotionTarget
 
     start(rig, 0.5)
     old_target = rig.core.target
@@ -376,7 +376,7 @@ def test_collection_refuses_live_or_unreleased_identity(rig):
 
 
 def test_higher_epoch_pause_resume_compacts_only_superseded_proofs_then_cancel(rig):
-    from senior_control.motion.state_machine import RecoveryObservation
+    from senior_motion_control.state_machine import RecoveryObservation
 
     start(rig, 0.5)
     old = None

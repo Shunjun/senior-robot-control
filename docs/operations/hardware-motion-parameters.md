@@ -3,7 +3,7 @@
 对应 `config/hardware-motion.json`，由用户要求先用假设值填写。
 “软件选定”不是硬件测量，“资料名义值”不是实车安装确认。
 当前没有任何一项猜填的物理响应/误差数值被确认为这台车的实测保证。
-证据接纳期限来自 `src/senior_control/sensors/defaults.json` 的 `hard_age_ms=1000`，秒制算法读取由它派生的 1 秒投影。
+证据接纳期限来自 `src/vehicle_core/sensor_defaults.json` 的 `hard_age_ms=1000`，秒制算法读取由它派生的 1 秒投影。
 
 | 变量 | 当前值 | 含义与单位 | 状态/依据 |
 | --- | --- | --- | --- |

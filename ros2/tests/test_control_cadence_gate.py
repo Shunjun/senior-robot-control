@@ -5,9 +5,9 @@ from pathlib import Path
 from types import SimpleNamespace as N
 
 import pytest
+from senior_motion_control.cadence import ControlCadence
 
-from senior_control.models import Velocity
-from senior_control.motion.cadence import ControlCadence
+from vehicle_core.values import Velocity
 
 
 @pytest.mark.parametrize("work", ["input", "prefetch", "tick"])

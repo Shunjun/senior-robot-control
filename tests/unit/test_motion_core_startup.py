@@ -16,22 +16,22 @@ from types import SimpleNamespace as N
 import pytest
 from control_process_test_support import generic_motion_profile, make_core, publish_inputs
 from motion_reference_test_support import ReadySubscription
-from senior_robot import motion_core_output as module
-from sensor_time_test_support import sample_time
-from test_navigation_command_clock import navigation  # noqa: F401
-
-from senior_control.agent.manual_control import MotionRuntimeReceiver
-from senior_control.models import Pose2D, Velocity
-from senior_control.motion.constraints import (
+from senior_motion_control.constraints import (
     FreePatch,
     NoReturnPolicy,
     PatchKind,
     prepare_perception,
 )
-from senior_control.motion.contracts import BrakeKind, MotionEventKind
-from senior_control.motion.state_machine import RecoveryObservation
-from senior_control.motion.trajectory import Trajectory
-from senior_control.protocol import MotionRuntimeState
+from senior_motion_control.contracts import BrakeKind, MotionEventKind
+from senior_motion_control.manual_control import MotionRuntimeReceiver
+from senior_motion_control.state_machine import RecoveryObservation
+from senior_motion_control.trajectory import Trajectory
+from senior_robot import motion_core_output as module
+from sensor_time_test_support import sample_time
+from test_navigation_command_clock import navigation  # noqa: F401
+
+from vehicle_core.runtime_state import MotionRuntimeState
+from vehicle_core.values import Pose2D, Velocity
 
 
 class Node:
@@ -121,7 +121,7 @@ class Replay:
         return MotionRuntimeState.model_validate_json(self.node.messages[-1].data)
 
     def synthetic_stationary_laser(self, packet):
-        from senior_control.motion.estimator import MotionObservation, Origin
+        from senior_motion_estimation.estimator import MotionObservation, Origin
 
         stamp = packet["sampled_ros"]
         steady = packet["sampled_steady"]
@@ -305,7 +305,7 @@ def test_source_intent_then_release_preserves_one_way_startup(
     replay.collision = True
     # Ingress used explicit analytic body evidence. Withdraw that source before
     # classifying startup's unknown stop, matching the original missing-body premise.
-    from senior_control.motion.observations import Source
+    from senior_motion_estimation.observations import Source
 
     core.node._reception_test.sensors.invalidate(Source.LASER)
     state = replay.step(ros=1.46)

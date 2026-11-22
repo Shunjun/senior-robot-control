@@ -40,9 +40,8 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
         DepthSample,
         FencedDepthEvidence,
     )
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
     from senior_robot.semantic_ingress import SemanticIngress
-
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
 
     rclpy.init()
     weights = tmp_path / "fixture.pt"
@@ -317,11 +316,10 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
         FencedDepthEvidence,
         FencedSemanticEvidence,
     )
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
     from senior_robot.depth_ingress import DepthIngress
     from senior_robot.semantic_ingress import SemanticIngress
     from sensor_msgs.msg import CameraInfo, Image
-
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
 
     rclpy.init()
     weights = tmp_path / "fixture.pt"
@@ -408,7 +406,7 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
         valid = [item for item in received if item.owner.valid]
         depth_error = ""
         if depth_seen:
-            from senior_control.vision.semantic_runtime import depth_snapshot
+            from senior_perception.vision.semantic_runtime import depth_snapshot
 
             try:
                 depth_snapshot(depth_seen[-1].body)

@@ -3,14 +3,13 @@
 import math
 
 import pytest
-from shapely.geometry import Point
-
-from senior_control.motion.constraints import (
+from senior_motion_control.constraints import (
     FreePatch,
     NoReturnPolicy,
     PatchKind,
     prepare_perception,
 )
+from shapely.geometry import Point
 
 
 def patch(left, right, kind=PatchKind.OBSERVED_FREE):

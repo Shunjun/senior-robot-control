@@ -12,10 +12,8 @@ from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any
 from uuid import uuid4
 
-from senior_control.models import Pose2D
-from senior_control.motion.source_modes import SourceMode
-from senior_control.sensors.sample_time import SampleTime
-from senior_control.vision.raw_capture import capture_from_message
+from senior_perception.vision.raw_capture import capture_from_message
+
 from senior_motion_estimation.fusion import FusionConfig, NumericalFusion
 from senior_motion_estimation.observations import (
     AdmissionConfig,
@@ -32,7 +30,10 @@ from senior_motion_estimation.sample_types import (
     physical_support,
 )
 from senior_motion_estimation.source_admission import AdmissionOwner
+from senior_motion_estimation.source_modes import SourceMode
 from senior_motion_estimation.temporal import TemporalConfig, TemporalResolver
+from vehicle_core.sample_time import SampleTime
+from vehicle_core.values import Pose2D
 
 
 def publisher_gid(info: Any) -> bytes:
@@ -512,9 +513,9 @@ class NativeObservationRosBridge:
 
     def _record_rejected_receipt(self, message: Any, info: Any, source: Source) -> None:
         """Observe withdrawn transport input without parsing it into live state."""
-        from senior_control.runtime.diagnostics import process_diagnostics
-        from senior_control.sensors.policy import default_policy
         from senior_motion_estimation.estimator import Origin, origin_key, validate_origins
+        from vehicle_core.diagnostics import process_diagnostics
+        from vehicle_core.sensor_policy import default_policy
 
         d = process_diagnostics()
         key = ("rejected_receipt", info.get("receipt_generation"), info.get("receipt_sequence"))
@@ -588,7 +589,7 @@ class NativeObservationRosBridge:
                 else "/",
             )
             if origin is None:
-                from senior_control.runtime.diagnostics import process_diagnostics
+                from vehicle_core.diagnostics import process_diagnostics
 
                 role = {"/wheel/odom": "wheel", "/imu/data": "imu", "/motion/scan": "laser"}[topic]
                 process_diagnostics().sensor_attempt(role, "raw", None, ("source_rejected",))
@@ -625,8 +626,8 @@ class NativeObservationRosBridge:
                 OverflowError,
                 TransformException,
             ) as exc:
-                from senior_control.runtime.diagnostics import process_diagnostics
-                from senior_control.sensors.policy import SensorClockError
+                from vehicle_core.diagnostics import process_diagnostics
+                from vehicle_core.sensor_policy import SensorClockError
 
                 # Runtime already recorded clocks that reached its age classifier.
                 # Earlier malformed payload/TF failures have counters, never age=0.
@@ -677,7 +678,7 @@ class NativeObservationRosBridge:
 
         from rclpy.time import Time
 
-        from senior_control.motion.kinematics import compose, inverse
+        from senior_motion_estimation.kinematics import compose, inverse
 
         transform = self.node._tf.lookup_transform(
             "base_link", msg.child_frame_id, Time.from_msg(msg.header.stamp)

@@ -8,7 +8,7 @@ import stat
 from pathlib import Path
 from typing import Literal
 
-_LOG = logging.getLogger("senior_control.runtime.learning_cleanup")  # //Compatible: log filters.
+_LOG = logging.getLogger("senior_perception.learning_cleanup")  # //Compatible: log filters.
 _CLAIM = r"\.startup-learning-[0-9a-f]{32}"
 _GENERATED_FILE = re.compile(
     rf"(?P<claim>{_CLAIM})"

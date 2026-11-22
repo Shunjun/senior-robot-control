@@ -178,6 +178,7 @@ class SnapshotState:
             summaries,
             deleted_task_ids,
             map_generation=state.map_generation,
+            map_grid_id=state.map_grid_id,
             route_progress=state.route_progress,
             navigation_ready=localized and state.map_ref is not None and state.navigation_ready,
             robot_pose=state.robot_pose,

@@ -19,6 +19,7 @@ from vehicle_manager.agent.bootstrap_ports import (
 from vehicle_manager.agent.logs_wire import AgentLogHandler, CloudLogGrants
 from vehicle_manager.agent.main import Agent
 from vehicle_manager.agent.settings_wire import SettingsRuntime
+from vehicle_manager.observability import APPLICATION_LOG_NAMES
 from vehicle_manager.settings.models import vehicle_settings_profile
 from vehicle_manager.settings.service import RuntimeGate, SettingsService
 from vehicle_manager.settings.store import SettingsStore
@@ -33,7 +34,7 @@ from vehicle_manager.tasks.runtime import TaskRuntime
 from vehicle_manager.tasks.store import TaskStore
 from vehicle_manager.vehicle_logs.store import VehicleLogStore
 
-logger = logging.getLogger("senior_control.agent")
+logger = logging.getLogger("vehicle_manager.agent")
 ExecutorT = TypeVar("ExecutorT", bound=TaskExecutor)
 
 
@@ -211,7 +212,8 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             await logs.start()
             log_connection = ports.log_connection(logs, grants)
             log_handler = AgentLogHandler(logs)
-            logging.getLogger("senior_control").addHandler(log_handler)
+            for name in APPLICATION_LOG_NAMES:
+                logging.getLogger(name).addHandler(log_handler)
             logger.setLevel(logging.DEBUG)
             logger.info("agent_log_source_started", extra={"event": "agent_log_source_started"})
         motion.settings = settings
@@ -241,7 +243,8 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
                 display_client.close(),
             )
             if log_handler is not None:
-                logging.getLogger("senior_control").removeHandler(log_handler)
+                for name in APPLICATION_LOG_NAMES:
+                    logging.getLogger(name).removeHandler(log_handler)
                 logger.setLevel(previous_log_level)
             try:
                 if logs is not None:

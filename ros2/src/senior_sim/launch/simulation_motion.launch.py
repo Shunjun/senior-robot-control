@@ -26,13 +26,13 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
-from senior_control.runtime.launch_recovery import (
+from vehicle_core.launch_recovery import (
     lifecycle_group_command,
     lifecycle_owner_prefix,
     restart_prefix,
 )
-from senior_control.runtime.lifecycle_events import report_ros_exit
-from senior_control.sensors.policy import ros_sensor_parameters
+from vehicle_core.lifecycle_events import report_ros_exit
+from vehicle_core.sensor_parameters import ros_sensor_parameters
 
 
 def environment_assets(context):

@@ -20,14 +20,11 @@ from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from senior_contracts.wire import SimpleEnvelope, validate_envelope
 from senior_mapping.workspace import WorkspaceMap
-from senior_navigation.route import RoutePlan
+from senior_motion_control.arbiter import CommandResult
 
-from senior_control.protocol import (
-    SimpleEnvelope,
-    validate_envelope,
-)
-from senior_control.safety.arbiter import CommandResult
+from vehicle_core.route_plan import RoutePlan
 
 if TYPE_CHECKING:
     from senior_navigation.navigation_adapter import RouteService
@@ -119,9 +116,9 @@ class AdapterCore:
             import os
             from pathlib import Path
 
-            from senior_control.protocol import LearningStartEnvelope, LearningStatusEnvelope
-            from senior_control.runtime.learning_client import request_once
-            from senior_control.runtime.learning_wire import BeginAttempt, QueryAttempt
+            from senior_contracts.wire import LearningStartEnvelope, LearningStatusEnvelope
+            from senior_perception.learning_client import request_once
+            from senior_perception.learning_wire import BeginAttempt, QueryAttempt
 
             if self._manual is None or self._exiting:
                 return {"ok": False, "error": "unavailable"}
@@ -537,7 +534,7 @@ async def _launch_endpoint(path: Path) -> AsyncIterator[str | None]:
         return
     if re.fullmatch(r"[0-9a-f]{32}", owner) is None:
         raise ValueError("invalid launch endpoint ownership context")
-    from senior_control.runtime.ipc import _prepare_socket
+    from vehicle_core.ipc import _prepare_socket
 
     descriptor = os.open(
         path.with_suffix(".launch.lock"),
@@ -559,9 +556,9 @@ async def _launch_endpoint(path: Path) -> AsyncIterator[str | None]:
 def main() -> None:
     import rclpy
 
-    from senior_control.runtime.ipc import IpcServer
     from senior_robot.command_node import CommandNode
     from senior_robot.motion_lifecycle import MotionExecutor, run
+    from vehicle_core.ipc import IpcServer
 
     def spin(node, executor, should_stop: Callable[[], bool]) -> None:
         robot_id = str(node.get_parameter("robot_id").value)
@@ -744,7 +741,7 @@ def main() -> None:
                 await server.start()
                 started = True
                 if owner is not None:
-                    from senior_control.runtime.ipc import _record
+                    from vehicle_core.ipc import _record
 
                     _record(path, run_id=owner)
                 executor.add_node(node)

@@ -3,6 +3,7 @@
 from math import atan2, cos, fsum, isfinite, pi, sin
 from typing import cast
 
+from senior_perception.coverage import SweptRegion
 from senior_perception.self_filter import (
     FilteredObservation,
     Point2D,
@@ -13,8 +14,7 @@ from shapely.geometry import LineString, Point, Polygon
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
-from senior_control.config import DeviceProfile
-from senior_control.safety.coverage import SweptRegion
+from vehicle_core.config import DeviceProfile
 
 
 def legacy_filter_self(scan: ScanObservation, profile: DeviceProfile) -> FilteredObservation:

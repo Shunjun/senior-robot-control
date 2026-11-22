@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 
-from senior_control.config import DeviceProfile
+from vehicle_core.config import DeviceProfile
 
 ROOT = Path(__file__).resolve().parents[2]
 

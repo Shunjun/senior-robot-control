@@ -272,7 +272,7 @@ async def test_qualified_route_runs_in_order(end):
 
     from senior_navigation.route import QualifiedRoute
 
-    from senior_control.models import MapRef, Pose2D
+    from vehicle_core.values import MapRef, Pose2D
 
     goals = []
     generation = "map-a"
@@ -326,7 +326,7 @@ async def test_route_service_reports_actual_index_and_blocks_next_on_lost_refere
     from senior_navigation.navigation_adapter import NavigationAdapter, RouteService
     from senior_navigation.route import RoutePlan
 
-    from senior_control.models import MapRef, OperationResult, OperationStatus
+    from vehicle_core.values import MapRef, OperationResult, OperationStatus
 
     class GoalExecutor:
         def __init__(self):

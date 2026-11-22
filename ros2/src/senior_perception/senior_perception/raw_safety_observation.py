@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any
 
-from senior_control.vision.raw_capture import RawCaptureHeader
+from senior_perception.vision.raw_capture import RawCaptureHeader
 
 
 @dataclass(frozen=True)

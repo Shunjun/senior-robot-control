@@ -3,11 +3,10 @@ import json
 from dataclasses import replace
 
 import pytest
+from vehicle_manager.agent.production_bindings import VehicleLogService
+from vehicle_manager.settings.models import DrivingSettings, LoggingSettings, SettingsSnapshot
 from vehicle_manager.vehicle_logs.models import LogInput, LogQuery
 from vehicle_manager.vehicle_logs.store import VehicleLogStore
-
-from senior_control.settings.models import DrivingSettings, LoggingSettings, SettingsSnapshot
-from senior_control.vehicle_logs.service import VehicleLogService
 
 
 class Authorizer:
@@ -484,10 +483,10 @@ async def test_download_scan_budget_is_explicit_for_empty_filtered_result(tmp_pa
 
 
 async def test_uses_settings_published_policy_and_no_second_debug_owner(tmp_path):
-    from senior_control.settings.models import SettingsProfile, SettingsRequest
-    from senior_control.settings.service import RuntimeGate, SettingsService
-    from senior_control.settings.store import SettingsStore
-    from senior_control.storage.database import Database
+    from vehicle_manager.settings.models import SettingsProfile, SettingsRequest
+    from vehicle_manager.settings.service import RuntimeGate, SettingsService
+    from vehicle_manager.settings.store import SettingsStore
+    from vehicle_manager.storage.bindings import Database
 
     now = [1000.0]
     async with (

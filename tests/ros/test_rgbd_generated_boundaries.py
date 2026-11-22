@@ -13,11 +13,10 @@ from senior_motion_msgs.msg import (  # noqa: E402
 from senior_motion_msgs.msg import (
     RawCaptureHeader as RosHeader,
 )
-
-from senior_control.vision.raw_capture import capture_from_message  # noqa: E402
-from senior_control.vision.rgbd_frame_builder import build_frame  # noqa: E402
-from senior_control.vision.static_tf_binding import StaticBinding  # noqa: E402
-from senior_control.vision.static_tf_wire import observe_verified_tf  # noqa: E402
+from senior_perception.vision.raw_capture import capture_from_message  # noqa: E402
+from senior_perception.vision.rgbd_frame_builder import build_frame  # noqa: E402
+from senior_perception.vision.static_tf_binding import StaticBinding  # noqa: E402
+from senior_perception.vision.static_tf_wire import observe_verified_tf  # noqa: E402
 
 
 def test_generated_static_tf_float_arrays_are_admitted():

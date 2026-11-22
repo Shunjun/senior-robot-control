@@ -145,7 +145,7 @@ def render_service(
             profile.container,
             str(python),
             "-m",
-            "senior_control.docker_start_helper",
+            "senior_robot.service_runtime",
             "run",
             "--control-dir",
             str(container_root),
@@ -156,7 +156,7 @@ def render_service(
             profile.container,
             str(python),
             "-m",
-            "senior_control.docker_start_helper",
+            "senior_robot.service_runtime",
             "stop",
             "--control-dir",
             str(container_root),
@@ -175,7 +175,7 @@ def render_service(
                 [
                     str(python),
                     "-m",
-                    "senior_control.docker_start_helper",
+                    "senior_robot.service_runtime",
                     "run",
                     "--control-dir",
                     str(root),
@@ -251,7 +251,7 @@ def deploy(profile: VehicleProfile, unit: str, *, dry_run: bool, ports: Deployme
                 profile.container,
                 str(_project(profile) / ".venv/bin/python"),
                 "-c",
-                "import senior_control.docker_start_helper",
+                "import senior_robot.service_runtime",
             ],
             check=False,
             capture_output=True,
@@ -300,7 +300,7 @@ def doctor(profile: VehicleProfile, *, ports: DeploymentPorts) -> int:
             "-c",
             (
                 "from pathlib import Path; "
-                "from senior_control.docker_start_helper import "
+                "from senior_robot.service_runtime import "
                 "_runtime_profile, _adapter_command; "
                 f"p = _runtime_profile(Path({str(root)!r})); _adapter_command(p, 'doctor')"
             ),

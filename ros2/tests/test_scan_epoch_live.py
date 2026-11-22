@@ -16,11 +16,10 @@ rclpy = pytest.importorskip("rclpy")
 from geometry_msgs.msg import TransformStamped  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.qos import qos_profile_sensor_data  # noqa: E402
+from senior_motion_control.source_fences import SourceEpochFence  # noqa: E402
 from senior_motion_msgs.msg import BoundedRawLaserScan, FencedFilteredScan, ScanMotion  # noqa: E402
 from sensor_msgs.msg import LaserScan  # noqa: E402
 from tf2_ros import StaticTransformBroadcaster  # noqa: E402
-
-from senior_control.motion.source_fences import SourceEpochFence  # noqa: E402
 
 
 def _room_scan():

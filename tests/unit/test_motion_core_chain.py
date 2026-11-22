@@ -6,13 +6,13 @@ from concurrent.futures import Future
 from types import SimpleNamespace as N
 
 from control_process_test_support import capture_inputs, publish_inputs
+from senior_motion_control.constraint_worker import ConstraintScheduler
 from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
 from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier, core  # noqa: F401 -- shared fake ROS fixture
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Velocity
-from senior_control.motion.constraint_worker import ConstraintScheduler
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Velocity
 
 
 class InlineWorker:

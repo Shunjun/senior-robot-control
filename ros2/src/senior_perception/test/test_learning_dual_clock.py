@@ -4,12 +4,6 @@ from dataclasses import replace
 
 import pytest
 from learning_test_support import begin_action, learning_runs, startup_for  # noqa: F401
-from sensor_time_test_support import sample_time
-from test_startup_learning import side_observation
-from test_startup_learning_feasibility import BOUNDARY
-
-from senior_control.safety.self_learning import SelfReturnModel
-from senior_control.vision.raw_capture import RawCaptureHeader
 
 
 def test_pause_tick_zero_has_no_motion_and_does_not_extend_three_host_seconds(tmp_path):
@@ -29,177 +23,30 @@ def test_pause_tick_zero_has_no_motion_and_does_not_extend_three_host_seconds(tm
 @pytest.mark.parametrize("rate", [0.5, 1, 2])
 @pytest.mark.parametrize("body_echo", [True, False])
 def test_geometry_classification_uses_original_stamps_at_test_receipt_rates(rate, body_echo):
-    model = SelfReturnModel(BOUNDARY)
-    for i in range(12):
-        tick = i / 10
-        host = 10 + tick / rate
-        raw = side_observation(0.15 if body_echo else 1.0)
-        observation = replace(raw, scan=replace(raw.scan, stamp=tick))
-        model.observe(
-            observation,
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round((tick) * 1e9),
-                    received_ros_ns=round((tick) * 1e9),
-                    received_steady_ns=round((host) * 1e9),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=i + 1,
-                valid=True,
-                reason="",
-            ),
-            segment_id="segment",
-        )
-    assert [m / 1e9 for m in model.frame_measurements] == [i / 10 for i in range(12)]
-    assert model.validate() == int(body_echo)
-    if body_echo:
-        assert model.filter(side_observation(0.15), provisional=False).rays[180].kind == "self"
-        assert model.filter(side_observation(1.0), provisional=False).rays[180].kind == "hit"
-        assert model.learned
+    from senior_perception.learning_compute import ComputeRequest, compute_samples
+    from test_learning_compute import recorded
+
+    frames = []
+    for i in range(5):
+        source = 10 + i / 10
+        frame = recorded(i + 1, source, received=10 + i / (10 * rate))
+        ranges = list(frame.ranges)
+        ranges[18] = 0.15 if body_echo else 1.0
+        frames.append(frame.model_copy(update={"ranges": tuple(ranges)}))
+    result = compute_samples(ComputeRequest("a" * 32, frames[0].geometry, tuple(frames)))
+    assert len(result.points) == int(body_echo)
+    assert [f.capture.stamp_ns / 1e9 for f in frames] == [10 + i / 10 for i in range(5)]
 
 
-def test_model_late_capture_replay_and_clock_generation_preserve_source_identity():
-    model = SelfReturnModel(BOUNDARY)
-    for i in (3, 1, 2):
-        assert model.observe(
-            side_observation(0.15),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round((i / 10) * 1e9),
-                    received_ros_ns=round((i / 10) * 1e9),
-                    received_steady_ns=round((10 + i) * 1e9),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=i,
-                valid=True,
-                reason="",
-            ),
-            segment_id="segment",
-        )
-    assert [m / 1e9 for m in model.frame_measurements] == [0.1, 0.2, 0.3]
-    assert not model.observe(
-        side_observation(0.15),
-        capture=RawCaptureHeader(
-            time=sample_time(
-                stamp_ns=round((0.1) * 1e9),
-                received_ros_ns=round((0.1) * 1e9),
-                received_steady_ns=round((11) * 1e9),
-                clock_generation=1,
-            ),
-            frame_id="laser",
-            raw_gid="01",
-            bridge_gid="02",
-            source_epoch="producer",
-            bridge_boot_id="boot",
-            capture_generation=1,
-            sequence=1,
-            valid=True,
-            reason="",
-        ),
-        segment_id="segment",
-    )
-    assert not model.observe(
-        side_observation(0.15),
-        capture=RawCaptureHeader(
-            time=sample_time(
-                stamp_ns=round((0) * 1e9),
-                received_ros_ns=round((0) * 1e9),
-                received_steady_ns=round((14) * 1e9),
-                clock_generation=2,
-            ),
-            frame_id="laser",
-            raw_gid="01",
-            bridge_gid="02",
-            source_epoch="producer",
-            bridge_boot_id="boot",
-            capture_generation=2,
-            sequence=4,
-            valid=True,
-            reason="",
-        ),
-        segment_id="segment",
-    )
-    model.begin_segment("reset")
-    assert model.observe(
-        side_observation(0.15),
-        capture=RawCaptureHeader(
-            time=sample_time(
-                stamp_ns=round((0) * 1e9),
-                received_ros_ns=round((0) * 1e9),
-                received_steady_ns=round((14) * 1e9),
-                clock_generation=2,
-            ),
-            frame_id="laser",
-            raw_gid="01",
-            bridge_gid="02",
-            source_epoch="producer-new",
-            bridge_boot_id="boot",
-            capture_generation=2,
-            sequence=1,
-            valid=True,
-            reason="",
-        ),
-        segment_id="reset",
-    )
+def test_selected_samples_reject_duplicate_identity_and_clock_generation_changes():
+    from senior_perception.learning_compute import ComputeRequest, compute_samples
+    from test_learning_compute import recorded
 
-
-def test_retention_frontier_does_not_reaccept_trimmed_original_stamp():
-    model = SelfReturnModel(BOUNDARY)
-    for i in range(1, 9):
-        assert model.observe(
-            side_observation(0.15),
-            capture=RawCaptureHeader(
-                time=sample_time(
-                    stamp_ns=round((i / 10) * 1e9),
-                    received_ros_ns=round((i / 10) * 1e9),
-                    received_steady_ns=round((10 + i / 10) * 1e9),
-                    clock_generation=1,
-                ),
-                frame_id="laser",
-                raw_gid="01",
-                bridge_gid="02",
-                source_epoch="producer",
-                bridge_boot_id="boot",
-                capture_generation=1,
-                sequence=i,
-                valid=True,
-                reason="",
-            ),
-            segment_id="paused",
-        )
-    model.retain_recent(5)
-    assert len(model.frames) == 5
-    assert not model.observe(
-        side_observation(0.15),
-        capture=RawCaptureHeader(
-            time=sample_time(
-                stamp_ns=100_000_000,
-                received_ros_ns=100_000_000,
-                received_steady_ns=round((10.1) * 1e9),
-                clock_generation=1,
-            ),
-            frame_id="laser",
-            raw_gid="01",
-            bridge_gid="02",
-            source_epoch="producer",
-            bridge_boot_id="boot",
-            capture_generation=1,
-            sequence=99,
-            valid=True,
-            reason="",
-        ),
-        segment_id="paused",
-    )
-    assert len(model.frames) == 5
+    frames = tuple(recorded(i + 1, 10 + i / 10) for i in range(5))
+    with pytest.raises(ValueError, match="learning_sample_identity"):
+        compute_samples(ComputeRequest("a" * 32, frames[0].geometry, (frames[0],) * 5))
+    last = frames[-1]
+    changed_time = replace(last.capture.time, clock_generation=2)
+    changed = last.model_copy(update={"capture": replace(last.capture, time=changed_time)})
+    with pytest.raises(ValueError, match="learning_sample_identity"):
+        compute_samples(ComputeRequest("a" * 32, frames[0].geometry, (*frames[:-1], changed)))

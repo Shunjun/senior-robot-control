@@ -1,8 +1,7 @@
 from pathlib import Path
 
 import pytest
-
-from senior_control.storage.database import Database
+from vehicle_manager.storage.bindings import Database
 
 
 async def test_database_rejects_reentry_without_losing_original_connection(tmp_path: Path) -> None:

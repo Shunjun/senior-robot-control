@@ -6,16 +6,16 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from senior_mapping.archive import BundleWaypoint
+from senior_mapping.references import AnchorPose, AnchorSnapshot, GridExtent
+from senior_mapping.store import MapReferenceStore
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import DOMAIN_MIGRATIONS
+from vehicle_manager.storage.migrations import migrate
+from vehicle_manager.waypoints.home import HomeService, LocalizedPose, StartupReference
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.archive import BundleWaypoint
-from senior_control.mapping.references import AnchorPose, AnchorSnapshot, GridExtent
-from senior_control.mapping.store import MapReferenceStore
-from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
-from senior_control.storage.database import Database
-from senior_control.storage.migrations import migrate
-from senior_control.storage.schema import DOMAIN_MIGRATIONS
-from senior_control.waypoints import HomeService, LocalizedPose, StartupReference
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, OperationResult, OperationStatus, Pose2D
 
 
 class SyntheticHomeService(HomeService):

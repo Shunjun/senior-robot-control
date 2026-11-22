@@ -15,11 +15,7 @@ from senior_motion_msgs.msg import (
     BoundedRawImage,
     DepthSample,
 )
-from tf2_ros import Buffer, TransformException, TransformListener
-
-from senior_control.runtime.diagnostics import process_diagnostics
-from senior_control.sensors.policy import default_policy
-from senior_control.vision.depth_runtime import (
+from senior_perception.vision.depth_runtime import (
     CameraInfoFrame,
     DepthGeometrySettings,
     DepthPacket,
@@ -28,13 +24,17 @@ from senior_control.vision.depth_runtime import (
     ProjectedDepthEvidence,
     produce_depth_evidence,
 )
-from senior_control.vision.image_codec import _validate_layout
-from senior_control.vision.raw_capture import (
+from senior_perception.vision.image_codec import _validate_layout
+from senior_perception.vision.raw_capture import (
     RawCaptureGroup,
     capture_from_message,
     compatible_captures,
 )
+from tf2_ros import Buffer, TransformException, TransformListener
+
 from senior_robot.motion_lifecycle import run
+from vehicle_core.diagnostics import process_diagnostics
+from vehicle_core.sensor_policy import default_policy
 
 
 def _ns(stamp):

@@ -59,7 +59,7 @@ def _adapter_command(profile: RuntimeProfile, robot_id: str) -> list[str]:
         "/bin/bash",
         "-c",
         'source "$1" || exit; source "$2" || exit; shift 2; '
-        # Installed Python nodes with an env shebang must use the launch virtualenv.
+        # //Compatible: env-shebang ROS nodes must use the launch virtualenv after setup.
         'export PATH="${1%/*}${PATH:+:$PATH}"; '
         'if [ -n "${SENIOR_EXPECTED_ROS_DOMAIN:-}" ]; then '
         'export ROS_DOMAIN_ID="$SENIOR_EXPECTED_ROS_DOMAIN"; fi; exec "$@"',
@@ -149,7 +149,7 @@ async def _video_environment(
             raise ValueError("invalid ROS environment")
         return {**original, **values, "SENIOR_ROS_VIDEO_TOPIC": "/camera/color/image_raw"}
     except (OSError, ValueError, IndexError, asyncio.TimeoutError) as exc:
-        logging.getLogger("senior_control.docker_start_helper").warning(
+        logging.getLogger("senior_robot.service_runtime").warning(
             "ROS video unavailable; starting Agent with original control environment: %s", exc
         )
         return original

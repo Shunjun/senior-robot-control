@@ -1,6 +1,6 @@
 """Physical frame identity and independently cached raw/avoidance views."""
 
-from senior_control.vision.raw_capture import capture_from_message
+from senior_perception.vision.raw_capture import capture_from_message
 
 
 class SensorAccess:

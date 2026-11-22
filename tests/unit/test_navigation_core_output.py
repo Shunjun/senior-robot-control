@@ -4,7 +4,7 @@ import pytest
 from test_motion_core_exit_deadline import rig as core_fixture
 from test_task_terminal_release import intent
 
-from senior_control.models import Velocity
+from vehicle_core.values import Velocity
 
 
 @pytest.fixture

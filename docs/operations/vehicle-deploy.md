@@ -151,7 +151,7 @@ docker exec -it ros2 bash
 source /opt/ros/humble/setup.bash
 cd /home/wheeltec/ros2_shared_dir/senior-robot-control
 python3 -m venv --system-site-packages .venv
-.venv/bin/python -m pip install -e '.[agent,safety,ros,video]'
+uv sync --frozen --no-dev --inexact --extra agent --extra safety --extra ros --extra video
 
 # 通过 rosdep 补齐这些实车 ROS 包缺少的依赖；不安装 Gazebo 仿真包：
 rosdep install --from-paths \
@@ -165,7 +165,14 @@ cd ros2
 source install/setup.bash
 ```
 
-容器应预先具备对应 ROS 发行版、Python venv、pip、rosdep、colcon 和本机构建工具。`--system-site-packages` 用于访问 ROS 安装提供的 `rclpy` 等模块；不能只在宿主机安装一次 Python 依赖就认为容器也已安装。ROS 包重新构建后，其他运行 ROS 节点的会话仍需加载安装工作空间。
+根项目默认启用dev与vehicle依赖组；`--no-dev`排除开发工具但保留vehicle整车项目组，
+上述冻结命令复用根目录同一套`.venv`。现场需使用锁文件对应的uv（当前0.12.23），
+不要用仅安装根wheel代替整车同步。根`senior-control` wheel现只声明共享core基础依赖；
+manager通过它获得`vehicle_core`，不再由根wheel默认聚合manager/cloud/ROS项目。
+//Compatible 旧`senior_control`源码命名空间仍随根wheel分发，供原SDK入口使用；
+manager独立逻辑不得导入旧业务模块，完整旧SDK由vehicle组装配。
+
+容器应预先具备对应 ROS 发行版、Python venv、uv、pip、rosdep、colcon 和本机构建工具。`--system-site-packages` 用于访问 ROS 安装提供的 `rclpy` 等模块；不能只在宿主机安装一次 Python 依赖就认为容器也已安装。ROS 包重新构建后，其他运行 ROS 节点的会话仍需加载安装工作空间。
 
 启动服务前执行 [ROS 类型支持加载检查](ros-interface-rebuild.md#启动前检查不创建-ros-节点)。升级包含消息删除或重命名时，先按该页定向备份并重建接口包；普通增量构建成功不足以排除旧生成物和安装残留，无需重复创建 venv 或 pip 安装。
 
@@ -223,7 +230,7 @@ sudo senior-robot start --control-dir /home/wheeltec/ros2_shared_dir/senior-cont
 sudo senior-robot status --control-dir /home/wheeltec/ros2_shared_dir/senior-control
 ```
 
-服务按目录属主身份，以本机 `<project_dir>/.venv/bin/python` 执行历史命名的 `senior_control.docker_start_helper run` 联合入口，并使用 `KillMode=mixed`，以便按顺序关闭子进程。这个模块名不表示 native 模式需要 Docker。
+服务按目录属主身份，以本机 `<project_dir>/.venv/bin/python` 执行历史命名的 `senior_robot.service_runtime run` 联合入口，并使用 `KillMode=mixed`，以便按顺序关闭子进程。这个模块名不表示 native 模式需要 Docker。
 
 ### 两种模式共有的行为
 
@@ -289,7 +296,7 @@ Agent 会校验完整小写 SHA-256、地图包内容与来源车辆。只读包
 
 ## 源码依据与验收边界
 
-入口与统一目录解析见 [cli.py](../../src/senior_control/cli.py)，生成 unit / 挂载推导见 [vehicle_deploy.py](../../src/senior_control/vehicle_deploy.py)，联合生命周期、身份和 socket 回收见 [docker_start_helper.py](../../src/senior_control/docker_start_helper.py)。本文是部署操作说明；目标 Linux、厂商 underlay、权限映射、systemd 启停、云连接和整车安全/运动链仍须现场分项验收，不能从静态源码或成功配对推导通过。
+入口与统一目录解析见 [cli.py](../../senior_control/src/vehicle_manager/operator_cli.py)，生成 unit / 挂载推导见 [vehicle_deploy.py](../../senior_control/src/vehicle_manager/platform_deployment.py)，联合生命周期、身份和 socket 回收见 [docker_start_helper.py](../../ros2/src/senior_robot/senior_robot/service_runtime.py)。本文是部署操作说明；目标 Linux、厂商 underlay、权限映射、systemd 启停、云连接和整车安全/运动链仍须现场分项验收，不能从静态源码或成功配对推导通过。
 
 升级时从自定义配置中移除已退役的 `estop_state` / `safety_state_path` 参数，并从自定义 motion profile 移除 `hardware_estop` 配置块；新版本不保留这些配置的兼容读取。现场旧 `estop-state.json` 保留原样，不作为启动输入。
 

@@ -8,9 +8,9 @@ from functools import partial
 
 import pytest
 from control_process_test_support import generic_motion_profile
+from senior_motion_control.cadence import ControlCadence
 
-from senior_control.motion.cadence import ControlCadence
-from senior_control.motion.process_resources import LatestSnapshot, ProcessWorker
+from vehicle_core.process_resources import LatestSnapshot, ProcessWorker
 
 
 @pytest.fixture(autouse=True)
@@ -145,7 +145,7 @@ def test_real_spawn_carries_geometry_and_complete_sensor_snapshot():
     from senior_motion_estimation.observations import Source
     from test_directional_constraints import engine, snapshot
 
-    from senior_control.runtime.diagnostics import RuntimeDiagnostics
+    from vehicle_core.diagnostics import RuntimeDiagnostics
 
     sensors = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     sample = learning_point(

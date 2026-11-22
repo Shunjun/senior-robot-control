@@ -1,6 +1,5 @@
 import numpy as np
-
-from senior_control.vision.rgbd_body_motion import body_pose_increment
+from senior_perception.vision.rgbd_body_motion import body_pose_increment
 
 
 def test_body_increment_inverts_rotation_and_translation_together():
@@ -16,8 +15,7 @@ def test_body_increment_inverts_rotation_and_translation_together():
 
 def test_planar_twist_uses_se2_log_and_rejects_unvalidated_tilt():
     import pytest
-
-    from senior_control.vision.rgbd_body_motion import planar_body_twist
+    from senior_perception.vision.rgbd_body_motion import planar_body_twist
 
     delta = np.array(
         [[0.0, -1.0, 0.0, 1.0], [1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.0], [0.0, 0.0, 0.0, 1.0]]

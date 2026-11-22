@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeGuard
 
-from senior_control.sensors.sample_time import SampleTime, interval_ns
+from vehicle_core.sample_time import SampleTime, interval_ns
 
 # Diagnostic discriminators only; these are NOT frozen controller/safety limits.
 WINDOW_S = 0.5

@@ -4,13 +4,13 @@ import math
 from dataclasses import replace
 
 import pytest
+from senior_perception.self_filter import ScanObservation, filter_self
+from senior_perception.startup_visibility import startup_visibility
 from shapely.geometry import Point, box
 from test_startup_learning_feasibility import BOUNDARY
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
-from senior_control.safety.self_filter import ScanObservation, filter_self
-from senior_control.safety.startup_visibility import startup_visibility
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Pose2D
 
 
 def observation(front=0, rear=0, *, yaw=0.0, angle_min=-math.pi, count=360):
@@ -120,7 +120,7 @@ def test_policy_does_not_change_measured_free_space_or_hide_obstacles():
     from shapely.geometry import box
     from test_directional_constraints import engine, snapshot
 
-    from senior_control.models import Velocity
+    from vehicle_core.values import Velocity
 
     ctx = snapshot(target=Velocity(0.05, 0), current=0)
     ctx = dc_replace(
@@ -161,9 +161,8 @@ def test_file_and_real_node_override_loading_preserve_boolean_settings(
     from types import SimpleNamespace as N
 
     from control_process_test_support import generic_motion_profile
+    from senior_motion_control.hardware_profile import HardwareMotionProfile
     from senior_robot.motion_profile import select_motion_profile
-
-    from senior_control.motion.hardware_profile import HardwareMotionProfile
 
     raw = generic_motion_profile().model_dump(mode="json")
     raw.update(

@@ -7,7 +7,7 @@ from typing import Any, Protocol
 
 import aiosqlite
 
-from senior_control.models import MapRef, Pose2D
+from vehicle_core.values import MapRef, Pose2D
 
 
 class MapDatabase(Protocol):

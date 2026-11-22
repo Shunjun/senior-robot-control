@@ -162,11 +162,295 @@ B0 骨架阶段这些新目录只有职责 README；B1 已随接收实现迁入�
 | B 自车运动融合与 GPS 契约 | 用轮速、雷达运动、可用 IMU 和 GPS 观测综合估计。处理观测时刻、质量和一致性，输出连续本地运动历史。GPS 位置采用 `NavSatFix` 与关联的解状态，区分无解、单点、RTK 浮点、RTK 固定，携带测量时间、天线坐标系和协方差。速度为可选带时间与协方差的向量。定位持有地理原点、地图对齐和天线外参。单点与 RTK 按质量进入融合，GPS 缺席时继续使用现有观测。交付契约和回放接入，硬件驱动留待设备安装。 | 回放轮速与雷达不一致、GPS 缺席及单点／RTK 降级，检查融合结果、连续性和质量。核对未来生产者可替换模拟输入。 |
 | C 碰撞预测与速度计算 | 使用带测量时间的观测和连续自车运动历史，把障碍变换到当前车体坐标系，再计算净距与风险。处理转向、动态障碍与历史不足。速度算法消费融合车速与风险。合法传感器观测保留为历史证据，其信任程度由使用算法决定；传感器时间不随候选速度向后传播。 | 独立回放 150 ms 前的真实时间语义。直行夹具以 1.00 m 初始净距、0.12 m 自车位移得到 0.88 m；用有转动的夹具验证坐标变换。报告观测年龄与算法耗时。 |
 | D 输出守卫与控制节拍 | Python 与 C++ 一起迁移协议，移除合并绝对截止及停止时间屏障。守卫按序号发布最新合格包，用自己的单调时钟从新指令被接受时计断流。默认控制 20 Hz，阈值为五个配置周期，即 250 ms。断流发零，下一条更新的合格包可恢复。计算起点只用于延迟诊断。上游仲裁落实取消、急停和学习结束，必要时主动送零。真实连接断开与协议错误的保护独立保留。 | 用现有 C++ 确定时钟 harness 验证默认 250 ms、队列取新、重复或乱序不续计时、慢计算包仍可发布、断流发零和新包恢复。Python 协议测试核对两端字段与节拍配置，记录计算、发送、接收、发布各段延迟。 |
-| E 地图管理与定位 | 支持实时建图、新建、保存历史、切换和删除；保存继续建图和重定位所需数据及每图 Home 位姿。Home 默认建图开始车位，可拖动修改位置和朝向。切图尝试自动匹配；失败仅在界面将标记放到目标地图 Home，提示待校准，暂停导航和持久写图。用户给出车位和朝向后局部扫描匹配微调；匹配可信才提交真实位姿。将实时障碍、持久地图分开，用稳定结构和独立运动证据纠偏，环境变化由多帧与可见性证据确认后更新地图。 | 回放切图自动定位、失败转 Home 待校准与手动微调。用车被挪动和车辆障碍驶离的录制场景核对纠偏与地图更新由不同模块处理。覆盖地图操作持久化与 Home 独立性。 |
+| E 地图管理与定位 | 支持实时建图、新建、切换和删除。激活地图在运行中持续更新，由地图模块自动、一致地落盘续建和重定位所需的位姿图、栅格、参考版本及每图 Home。重启或切图加载最近一次完整落盘的状态，重新定位后继续更新。Home 默认建图开始车位，可拖动修改位置和朝向。切图尝试自动匹配；失败仅在界面将标记放到目标地图 Home，提示待校准，暂停导航和持久写图。用户给出车位和朝向后局部扫描匹配微调；匹配可信才提交真实位姿。将实时障碍、持久地图分开，用稳定结构和独立运动证据纠偏，环境变化由多帧与可见性证据确认后更新地图。 | 回放切图自动定位、失败转 Home 待校准与手动微调。用车被挪动和车辆障碍驶离的录制场景核对纠偏与地图更新由不同模块处理。覆盖地图操作持久化与 Home 独立性。 |
 | F 导航与前沿探索 | 保留原始任务目标。已知路径可达时直接规划；目标在未知区或暂不可达时，从已知可通行区域选可达前沿，实时建图并重规划，目标可达后回到原始目标。探索评分考虑进展、重复与绕路成本，预算和评分作为导航策略参数。导航依据定位质量、地图版本和当前障碍结果，输出意图。 | 用地图夹具验证目标外、到前沿、地图扩展及切回原目标。覆盖没有可达前沿的停机理由与切图后旧路线失效。 |
-| G 统一诊断与地图交互 | 实现启动选择模块、事件和传感器帧，集中落盘与关联。地图界面实现新建／保存／切换／删除、Home 编辑、手动位姿和待校准流程。界面先在功能原位置提供交互预览，确认后接入真实接口并移除临时代码。 | 验证按启动配置采集、帧与输出关联及拥塞丢失计数。界面回归验证待校准标记、Home 编辑和车位编辑独立。 |
+| G 统一诊断与地图交互 | 实现启动选择模块、事件和传感器帧，集中落盘与关联。地图界面实现新建／切换／删除、活动地图的实时显示、Home 编辑、手动位姿和待校准流程。落盘由车端地图模块自动执行。界面先在功能原位置提供交互预览，确认后接入真实接口并移除临时代码。 | 验证按启动配置采集、帧与输出关联及拥塞丢失计数。界面回归验证待校准标记、Home 编辑和车位编辑独立。 |
 
 每项先只读盘点候选测试，由负责人审核后落实。按仓库约定控制新增／改写场景，优先复用旧用例。每项只执行模块定向检查，报告命令、版本、通过结果和未验证项。负责人亲审 diff 和证据，按依赖顺序正常 merge 回固定功能主分支。当前任务直接在固定功能主分支交付；后续分支/并行安排另行派发，整车可用性由第三阶段验收。
+
+### E / G 活动地图交付状态（2026-11-21）
+
+- [x] **既有组件迁移。** B5.1–B5.3 已迁移原定位接入、SLAM Python/原生后端和地图持久事务。工作区读取与地图引用、栅格分块请求的既有接口已保留，详见下方 B5 与 R5 记录。
+- [x] **实车 SLAM 栅格验证。** 实车 `9b029b7`、Humble SLAM Toolbox 2.6.8。在临时探针中改用实车 EKF 的 `odom_combined`，收到 115 × 188、分辨率 0.05 m 的栅格和 `map → odom_combined`。临时节点已停止，未改部署配置和已存地图。默认配置仍使用 `odom`。
+- [ ] **活动地图生产接通。** 由地图模块持有唯一活动地图，持续接受可信更新。用稳定地图身份和独立栅格数据版本把最新内容提供给车端和网页，不因普通栅格更新使航点失效。实车检查时 `map.active` 返回 `unavailable`，网页未收到当前地图引用。
+- [ ] **自动持久化与恢复。** 在运行中自动、一致地落盘。重启或切图后加载目标地图，先按原流程自动匹配。失败时在该图 Home 显示待校准标记，可信重定位前暂停导航和持久写图。网页没有手动保存步骤。
+- [ ] **地图管理与每图 Home。** 接通新建、切换、删除和独立 Home 编辑，核对线上入口和界面操作。地图包导入导出用于迁移或备份，日常建图按活动地图持续更新。现有地图包面板和单次出图均不算此项完成。
+
+### E 首片：活动会话只读稳定占据组件（组件完成，待亲审，2026-11-21）
+
+基线 `feat/vehicle-architecture-refactor@258eafb6`。本片严格五个逻辑文件：新增
+`ros2/src/senior_mapping/senior_mapping/active.py`、`ros2/src/senior_mapping/test/test_active_map.py`，
+修改同包 `workspace.py`、`workspace_export.py` 与本计划；配置、删除均为零。
+原 E/G 未提交修订保留并随本片提交，不触及实车、ROS、仿真、服务、部署或推送。
+
+1. 先写并运行下列三个获批测试场景，再实现单进程活动会话与共享保守渲染。
+2. 会话自己持有 fresh `MapReferenceStore`，只接受上游已验证的同对象来源令牌；
+   boot/source 字符串仅作元数据，绑定入口本身不认证任何 ROS 来源。
+   复用原 bind/commit/revoke 和完整 anchor/evidence 校验；重复保留当前 cut，
+   GAP/撤销/失败 fence 后不恢复，旧会话令牌不能写入新会话。
+3. 共享导出副本现有渲染：仅 authoritative stable occupied 为 100，其余 unknown，
+   `display_only=True`，不开放航点写入或导航；先限制 extent 再分配。
+   同一份 geometry/cells 重用 grid ID，数据变化换 ID，同 ref 新会话也换 ID；
+   普通栅格增长不变 MapRef/reference nonce，WorkspaceMap 拒绝旧 ID tiles。
+4. 生产 transport 来源令牌、观测转换、旧图加载与可信重新匹配、自动一致 checkpoint、
+   重启恢复、目录/独立 Home、WS 和网页刷新均留后续，既有静态链保持。
+   本片不勾选上述 E/G 生产交付项，也不引入手动保存步骤。
+
+批准新增仅三个测试节点：连续合法提交与稳定引用/独立数据版本及 tile 读取；
+重复/GAP/错令牌与终止隔离；撤销旧 view 和同 ref 重建隔离。
+复用包内九个 ingest/growth/nonce/捕获冻结节点、`tests/unit/test_occupancy.py` 的纯输入场景、
+`senior_control/tests/test_workspace_data.py` 的非仿真读取节点及
+`ros2/tests/test_map_operations.py::test_workspace_bundle_is_pinned_and_displays_only_stable_occupancy`，
+原断言不改；不运行仿真 fixture 或全仓测试。定向 Ruff、适用 CRLF diff check、
+mapping wheel 构建与仓库外模块入包检查，实际命令、环境、结果和局限在完成时补记。
+
+#### 实际接口、验证与局限
+
+`ActiveMap(map_ref, odom_owner, cell_size_m)` 创建私有 fresh store 和随机会话 ID；
+`bind_verified_source(token, backend_boot=..., source_epoch=...)` 只在未绑定会话接收
+上游验证者持有的不透明对象，拒绝字符串/数值令牌；`commit(token, sequence, keyframe_id,
+anchors, changes)` 用 `is` 核对同一对象，再调用原 store 事务。
+`grid` 是提供给 `WorkspaceMap` 的窄只读 callback，`revoke(token)` 终止旧 provider。
+grid ID 为会话 ID 加产生该栅格的提交序号；比较完整渲染 geometry/cells，内容不变保留
+原不可变 WorkspaceGrid。未提交、撤销、GAP、坏批次或渲染失败时不提供 view，
+重复和错误来源不能替换当前 view。超界 extent 在 dense raster 分配前拒绝并终止会话。
+`workspace_export.py` 只提取原渲染到 `workspace.py::render_stable_grid` 复用，
+原 bundle 读取/manifest 检查、digest 作为 grid ID、同车校验和 DomainError 分类保持。
+
+新增测试恰为三个节点，均使用真实 store 和手工可核算的纯 Python 输入，无 ROS/仿真 fixture：
+
+- `test_continuous_cuts_keep_reference_and_version_only_changed_raster`：两个连续提交改变真实
+  occupied/extent，ref 和 nonce 不变、ID 改变，100/unknown 投影及旧 tile conflict；
+  第三个连续提交只有新锚点、无显示数据变化，保留同一 WorkspaceGrid。
+- `test_duplicate_preserves_cut_but_gap_and_invalid_extent_end_session`：拒绝字符串令牌，
+  重复/错对象不替换当前 cut，断号后不恢复；超界 extent 不发布且不能后续续接。
+- `test_revoked_view_cannot_read_or_write_recreated_same_reference`：旧 provider 撤销不可读，
+  旧 token 不可跨会话提交，同 ref 同内容的新会话 ID 不同，旧 tile 不可混入。
+
+TDD 记录：工作区 `.venv/bin/python -m pytest .../test_active_map.py -q` 最初因
+`No module named pytest` 无法执行；改用下列已有解释器，RED 为缺失
+`senior_mapping.active` 的收集错误，组件实现后新增三项通过；同一第二场景补字符串令牌
+断言后观察到 `DID NOT RAISE`（1 failed/2 passed），拒绝标量令牌后转绿。
+
+环境：macOS 26.4 arm64、CPython 3.12.15、pytest 8.4.2、SQLite 3.53.1、
+aiosqlite 0.22.1、Pydantic 2.14.1、Ruff 0.17.3、uv 0.12.23。
+实际定向命令（其中捕获冻结节点原有七项参数化，九个原节点实际为十五项）：
+
+```sh
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m pytest \
+  ros2/src/senior_mapping/test/test_active_map.py \
+  ros2/src/senior_mapping/test/test_map_references.py::test_grid_growth_keeps_reference \
+  ros2/src/senior_mapping/test/test_map_references.py::test_nonce_ignores_obstacle_and_new_anchor_but_tracks_old_anchor \
+  ros2/src/senior_mapping/test/test_map_references.py::test_reference_capture_freeze_fences_mutations \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_progress_commits_real_layers_and_fences_on_gap \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_commit_failure_leaves_corrected_anchors_and_cells_unchanged \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_progress_requires_current_binding_after_clear_and_bypass \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_progress_commits_corrected_removal_and_revokes_during_freeze \
+  ros2/src/senior_mapping/test/test_map_references.py::test_occupancy_commit_rejects_oversized_batch_before_touching_store \
+  ros2/src/senior_mapping/test/test_map_references.py::test_first_occupancy_commit_cannot_adopt_a_preexisting_graph \
+  tests/unit/test_occupancy.py \
+  senior_control/tests/test_workspace_data.py::test_workspace_read_is_reference_fenced \
+  senior_control/tests/test_workspace_data.py::test_tile_fits_ipc_frame \
+  senior_control/tests/test_workspace_data.py::test_relay_prioritizes_control_and_correlates_workspace_replies \
+  ros2/tests/test_map_operations.py::test_workspace_bundle_is_pinned_and_displays_only_stable_occupancy -q
+```
+
+结果 **29 passed**：新增 3，原参考层 15，原 occupancy 7，非仿真 workspace 3，pinned bundle 1；
+既有断言未改。workspace 的 simulation waypoint 节点及其它仿真/ROS 测试未选中。
+四个本片 Python 文件的 `python -m ruff check`、`python -m ruff format --check` 通过，
+`git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check` 通过；
+未改原 CRLF 测试。作者按范围、来源隔离、失败路径、完整渲染发布和包边界单独自审，
+未派 helper，仍待负责人独立审查。
+
+`UV_CACHE_DIR=/tmp/vehicle-uv-cache uv build ros2/src/senior_mapping --offline --wheel
+--out-dir /tmp/active-map-480c48d6-wheel` 成功，产物
+`/tmp/active-map-480c48d6-wheel/senior_mapping-0.1.0-py3-none-any.whl`。
+在 `/private/tmp` 用同解释器 `-I -c`、将该 wheel 加入 sys.path 后首次因缺
+`vehicle_core` 失败，补当前 `src` 后因缺 `senior_contracts` 失败；再显式补当前
+`src` 与 `contracts/src` 依赖成功，断言 `active.__file__` 来自 wheel、三个产品模块均入包，
+且 fresh provider 返回 unavailable。此为 mapping wheel 入包/导入检查，依赖使用当前源码，
+不是完整独立发行环境安装验证，也不是 Linux/ament/ROS/实车验证。
+
+实际仍为五文件：产品新增 1/修改 2、测试新增 1/修改 0、工具文档修改 1、配置 0、删除 0。
+后续先由生产 transport 认证 publisher/boot/receipt/current source 并颁发只在本会话有效的令牌，
+补可信 scan/anchor/evidence 转换和 fresh 首图坐标定义；旧图必须另走可靠重新匹配再续建，
+不能调用本片入口直接激活。随后自动 checkpoint 须将 graph、stable/removed/free 与候选维护状态、
+参考/数据版本及独立 Home 同 cut 落盘，沿既有原子恢复/fence 保留前完整代。
+最后接 snapshot 独立数据版本、WS、网页刷新/目录及 Home/车位分开的操作。
+本组件没有持久化、全局活动图选择或生产定位授权，E/G 的生产、自动落盘/重启、UI 项仍未勾选。
+
+
+### E 启动片：显式选择单图里程计帧（实现完成，待亲审，2026-11-21）
+
+基线 `feat/vehicle-architecture-refactor@29680d9`；前一片五文件活动会话组件已完成并提交，
+仍是保守只读组件，生产 transport、自动一致落盘/重启和网页未接通。
+本片严格修改四文件：`ros2/src/senior_robot/launch/mapping.launch.py`、
+`ros2/tests/test_mapping.py`、`docs/operations/slam-backend.md` 与本计划；
+新增、删除、配置文件修改均为零。
+
+为正式 mapping launch 增加 `odom_frame` 参数，默认保持 `odom`；stock graph 与 Python
+adapter、native capture 与 verified 分支显式共用同一选定值，保留参数文件和原安全/来源断言。
+仓库无可复用的共享 frame 校验函数，沿本 launch 已有 frame 命名校验（非空、最多128个可打印
+非空白 ASCII 字符）并拒绝与固定 map frame `map` 重合，不增加正则或自动猜测来源。
+先写三个参数化的显式 `odom_combined` 传递场景（stock/capture/verified），运行观察失败，
+再实现并复用默认/分支/输入拒绝的既有测试；无 ROS 节点构建或运行。
+不更改 `slam.yaml`、其他部署默认或解释器，不把 TF 连通/临时出图当作已认证活动图。
+实际命令、环境、结果和剩余生产前置在完成时补记。
+
+负责人已检查前片 `29680d9`，其活动会话组件完成状态不等于生产接通；本片仅补正式启动参数。
+实际产品改动为一份 launch：先解析并校验所选 frame，将其放在参数文件之后的覆盖字典中，
+所有 graph 分支及 stock adapter 一致使用；不改静态 TF/receipt 来源、capture 目录约束、
+唯一原生 graph owner 或任何原配置默认。
+
+实际新增一个参数化测试函数
+`test_mapping_passes_explicit_odom_frame_to_selected_graph_and_adapter[stock/capture/verified]`，
+恰为三个显式 `odom_combined` 场景；原默认/capture/verified 测试只加强默认 `odom` 断言，
+原 `test_verified_static_lidar_rejects_unqualified_inputs` 保留既有两个坏输入并补
+odom 为空、误设 `map`、纯空白三项。原有保护和断言均保留，未新增其它测试文件或 fixture。
+
+执行环境与前片相同：macOS 26.4 arm64、CPython 3.12.15、pytest 8.4.2、Ruff 0.17.3，
+使用主仓库已有虚拟环境解释器（本工作区虚拟环境仍无 pytest）。先改测试运行，因缺少
+`odom_frame` launch 声明在 fixture 产生13项 `KeyError`；实现参数与传递后，同命令转绿：
+
+```sh
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m pytest \
+  ros2/tests/test_mapping.py -q -k 'not mapping_node_does_not_publish_cmd_vel'
+```
+
+实际 **13 passed, 1 deselected**：默认stock1、capture1、capture路径约束1、
+原verified分支2、坏输入5、显式帧传递3；真实 ROS 节点测试明确 deselect，不尝试导入/运行
+rclpy，所有通过项仅用原 Action/Node 替身检查真正 launch 函数生成的节点及参数结构。
+不能把替身结构测试算作实际 ROS 参数传递、SLAM 出图或实车验证。
+
+```sh
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m ruff check \
+  ros2/src/senior_robot/launch/mapping.launch.py ros2/tests/test_mapping.py
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m ruff format --check \
+  ros2/src/senior_robot/launch/mapping.launch.py ros2/tests/test_mapping.py
+git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check
+```
+
+Ruff 检查及格式检查通过，适用 CRLF diff check 通过；launch、测试和操作文档均保留原 CRLF。
+实际四文件皆修改：产品/启动1、测试1、工具文档2，配置文件/新增/删除0；作者已核对diff范围。
+未构建任何包、未运行 ROS/实车/仿真/服务、未修改 `slam.yaml` 或解释器、未部署或推送。
+现场 2.6.8 的临时 `odom_combined` 出图证据保留在上方 E/G 和操作文档，默认仍 `odom`。
+后续仍需生产来源认证与会话令牌、可信观测转换、旧图可靠重新匹配、自动一致持久与恢复、
+独立 Home 和网页刷新；更改 launch 参数不授予现有地图、TF 或位姿任何可信身份，
+活动地图生产/自动落盘重启/UI 完成项继续保持未勾选。
+
+
+
+### E/G 数据版本片：独立 map_grid_id 快照传递（实现完成，待亲审，2026-11-21）
+
+基线 `feat/vehicle-architecture-refactor@6da877e`。严格十三文件皆修改，无新增/删除/配置：
+产品九份为 `senior_control/src/vehicle_manager/agent/{local_state,ipc_state,snapshots,
+ snapshot_state,main}.py`、`contracts/src/senior_contracts/wire.py`、
+`web/src/api/protocol.ts`、`web/src/features/map/useWorkspaceMap.ts`、
+`web/src/features/devices/ControlSurface.tsx`；测试三份精确路径为
+`senior_control/tests/test_agent.py`、`senior_control/tests/test_agent_ports.py`（IPC适配验证）、
+`web/src/features/devices/devices.test.tsx`；文档仅本计划。
+
+1. 状态及快照增加可选 `map_grid_id`，遵守现有 ShortText 长度；未提供时不改变旧发送的
+   序列化字节形状，显式 Compatible，旧网页继续用 map_generation 作为 grid ID。
+2. IPC解析→SnapshotState→Agent collect/change_key→快照序列化/反序列化保留独立栅格版本；
+   clone/compaction 沿原模型，不以栅格变化授予可信位姿或导航。
+   已只读核对 cloud/snapshots.py 的 model_copy(deep=True)、relay.py 的共享 snapshot_envelope
+   和 model_copy，字段可随共享模型透传，无需扩大 cloud 修改。
+3. 网页新路径以 map_grid_id 绑定 manifest/tile 和刷新；ref/nonce 管理草稿/pending，
+   迟到旧栅格响应丢弃。旧路径保留原 grid scope 与 display_only 例外；pose/route 仍按参考
+   map_generation 比较。未就绪禁止编辑/导航，保留 stale/freshness/retired epoch 保护及目标校验。
+4. 只新增/实质改写三个场景：IPC字段有无解析；Agent roundtrip/de-dupe/push与旧省略；
+   同ref/nonce的grid1→grid2及迟到tile隔离、刷新不丢导航草稿，其余原测试断言保留。
+   先观察新断言失败再实现，仅运行非仿真Python/web定向测试和受影响格式/类型检查。
+
+尚不修改生产 ROS provider、活动图owner、任务执行、cloud、UI交互或视觉元素；
+不启动开发服务、ROS/实车/仿真，不部署/推送，E/G生产交付仍不勾选。
+生产端必须先发布可按版本读取的完整栅格，再报告对应 map_grid_id；混合版本车辆未提供该字段
+仍走旧规则，不把旧 map_generation 当成新参考nonce后又省略独立栅格ID。
+实际命令、验证及生产缺口在完成时补记。
+
+#### 实际实现与验证
+
+本片仍严格十三个修改文件，产品9/测试3/工具文档1，新增/删除/配置0。
+RuntimeState、StateReply、LiveState 和 RobotSnapshot 的新增可选字段不移动旧位置参数；
+StateReply 与共享 SnapshotPayload 在字段为 None 时显式 Compatible 省略它。
+IPC 仍使用原0.5秒新鲜度和 map/localization generation 几何资格，SnapshotState 只传递数据版本，
+不通过 grid ID 设置 localized/navigation_ready。Agent change_key 包含 grid ID，
+相同数据不重复push，栅格变化独立push；snapshot envelope、反解和共享紧凑JSON序列化保留字段。
+cloud 的 cache/get/relay 继续对共享模型 deep copy，未改云端代码；新增Agent场景实际走
+SnapshotCache 和 cloud snapshot_envelope，确认克隆/透传保留新字段。
+
+网页解码拒绝空/超128字符/非字符串 grid ID；省略时对象也省略该字段。
+useWorkspaceMap 的新读取scope包含 robot/ref/nonce/grid ID，manifest必须精确匹配新grid ID，
+每个tile沿既有校验；旧scope的异步响应在完成后因 abort 丢弃，不拼接到新图。
+新路径草稿、pending 与canvas key按 ref/nonce管理，普通数据刷新不退休导航请求或清草稿；
+当前图未完整读完时不提供可操作图，仍保留后端目标检查和display_only禁写/禁导航。
+旧路径保留每grid交互scope、原display_only例外，未改 RobotClient freshness/retired epoch 保护。
+新增场景实际显示有效参考的robot marker，并确认同nonce数据更新后仍可用新grid ID发送目标。
+
+批准新增仅三个节点，既有场景断言不弱化：
+
+- `senior_control/tests/test_agent_ports.py::test_ipc_grid_id_is_optional_and_does_not_grant_localization`：
+  字段省略/合法/长度边界解析、未定位但有ref与grid、非法字段和过期拒绝、旧模型JSON省略。
+- `senior_control/tests/test_agent.py::test_grid_id_round_trips_and_pushes_only_when_changed`：
+  原确定时钟snapshot_polls夹具，旧字节无新字段、grid1/2变化push、不变去重、序列化/反解、
+  cloud缓存及深拷贝投影保留、重新省略时push；map_generation保持原参考值。
+- `web/src/features/devices/devices.test.tsx` 的
+  `refreshes grid data within one reference without losing drafts or accepting late tiles`：
+  新旧字段解码、同ref/nonce的grid1→grid2、延迟grid1 tile、草稿/导航pending跨刷新保持，
+  结束后目标请求携带grid2。原workspace API按link串行读，不改其队列：新snapshot到达后
+  旧tile退场才开始新manifest/tile，测试依真实调度验证旧响应不发布，而不伪造并行transport。
+
+TDD：Python两新场景先因RuntimeState/LiveState缺字段失败，网页新场景先因解码丢字段失败；
+实现后两项Python与一项web转绿。首次网页测试临时目录直接链接整份node_modules导致
+Vite写.vite-temp被沙箱拒绝，改为临时目录中链接依赖包而将Vite缓存留在临时目录解决，
+未在工作区增加node_modules或改变安装配置。
+
+Python使用前片已有解释器和版本（CPython3.12.15/pytest8.4.2/Pydantic2.14.1、macOS26.4 arm64）：
+
+```sh
+'/Users/zhangshunjun/Wheel 机器人/senior-robot-control/.venv/bin/python' -m pytest \
+  senior_control/tests/test_agent_ports.py senior_control/tests/test_agent.py \
+  tests/unit/test_live_map_geometry.py -q --tb=short
+```
+
+结果 **72 passed**，均为非仿真定向场景。另用内存模块加载 `git show 6da877e:<path>` 的原
+SnapshotEnvelope/serialize_envelope 与原StateReply，同一省略字段输入逐字节比较，
+共享快照wire bytes及StateReply JSON与基线完全相同；没有新测试文件或第四场景节点。
+
+工作区没有web/node_modules；将当前web源码/config复制到
+`/tmp/map-grid-2de9d8a5-check/web`，仅复用主仓库已有依赖包，缓存位于临时目录，
+其根src/contracts为当前仓库只读链接。Node24.14.1/Vitest5.0.5/TypeScript5.9.3使用已有安装，无联网安装或服务。
+在该目录执行：
+
+```sh
+./node_modules/.bin/vitest run src/features/devices/devices.test.tsx \
+  src/features/map/map.test.tsx src/features/mapping/mapping.test.tsx src/api/client.test.ts
+./node_modules/.bin/tsc --noEmit
+```
+
+首次为119 passed/3 failed，三项皆为既有protocol parity读取旧重导出壳找不到
+SimpleEnvelope/ResponsePayload/EnvelopeBase。用 `git show HEAD:web/src/features/devices/devices.test.tsx`
+原版替换临时副本，仅运行 `-t 'protocol parity'`，原基线也同样3失败；未改仓库原版以复现。
+经负责人答复批准（msg_dd831bebe14d）只将同一文件夹具的两处读取路径换为
+`contracts/src/senior_contracts/wire.py` 与 `contracts/src/senior_contracts/errors.py`，
+三项原parity断言和场景不变，不增加测试节点；完整四文件定向最终 **122 passed**，
+`tsc --noEmit`通过。未运行开发服务器、ROS/车辆/仿真、部署或推送。
+
+八个受影响Python文件执行 `python -m ruff check` 和 `python -m ruff format --check`，
+并执行适用的 `git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check`；
+最终均通过（Ruff八文件检查及格式检查通过、diff check无输出）；作者另行核对十三文件diff和
+新旧scope/定位资格边界，待负责人独立亲审。前述静态owner/launch代码及自动落盘流程均未修改。
+
+生产前置：先让已认证owner安装可按版本读取的完整immutable栅格，再通过state报告对应
+map_grid_id，参考nonce仍用于定位/路线；不应先报告新ID再让manifest回旧ID。
+在混合版本更新中，仍把grid ID放map_generation的旧发送者继续省略新字段，
+新发送者必须同时提供正确的独立grid ID；旧接收者尚不认识新StateReply字段时需先升级接收端，
+本片不放宽 strict extra/freshness 来掩盖版本不匹配。实际ROS provider尚未发送新字段，
+因此本片是协议/管理/网页消费链就绪，不是活动地图生产接通、自动一致checkpoint/重启或UI交付。
+任务执行与任务编辑仍保持原资格检查，未借本片扩大准入或修改执行身份。
+E/G生产、自动持久恢复和地图管理/独立Home项继续未勾选，后续另接可信生产数据来源。
+
 
 ## 第三阶段　联调和验收
 
@@ -786,3 +1070,510 @@ B8实际ROS/Humble/Linux与真实仿真/设备验收仍待环境，缺失新算�
 用户随后明确停止容器的预览直接失败，冻结已解除：新 Shell 只 inspect 判定停止后非零退出，既不 exec/start/run也不写配置/unit/systemctl；已运行容器使用其 `.venv` 中固定动作完整预览。Docker start 同样要求共享容器已运行，新 unit 无自动 docker start。原 Python Compatible 入口仍可执行原停机预览与旧启动流程，不删除原断言。
 
 Shell 直接管理宿主 systemd/journal，Python 逐次提供原 profile、渲染、原子写入、凭据、IPC探针与实际运行 owner；固定请求不是旧 argparse 的二次解析。新 Docker deploy 使用挂载目录同一原子写入器，宿主 link/reload失败以原文件身份收据回滚；unit/config不一致拒绝启动，native不操作Docker unit。独立 Shell 安装与 wheel 解绑，CI 安装单脚本后验旧 module兼容和新动作，不宣称 manager 独立部署。实际文件及命令/基线/缺口见管理 README 的 Shell CLI 记录；B8真实Linux/Humble/车辆验收与共享发行边界仍未完成。
+
+
+### R0/R1 首片：共享 Clock 与 ImageFrame 叶子（2026-11-20）
+
+本批已确认使用现有根发行内 `src/vehicle_core` 命名空间承接共享叶子，不新增独立项目。
+先核对工作区干净、实车修复分支基线 `9b029b7`，切回既有固定功能主分支
+`feat/vehicle-architecture-refactor`；原分支 `9cafe01` 可快进到 `origin/main@492f14d`，
+二者文件树均为 `0491c797120f577cf5afb42fe900209bedb59619`，因此只执行该快进。
+不合入、重写或推送实车修复分支。
+
+顺序：先登记本范围；再将原 `src/senior_control/{clock,image_frame}.py` 唯一实现迁入
+`src/vehicle_core/{clock,image_frame}.py`，新增无副作用 `__init__.py`；旧两模块显式
+`//Compatible` 同对象转发；更新实际产品导入及 vision 按需公开 owner；最后定向验证与审阅。
+仿真静态引用只迁移，完全不运行仿真或任何仿真验证。原测试导入保留为兼容覆盖。
+
+范围固定21文件：产品增3改13，测试不编辑，配置改2，工具文档改3，无删除。
+配置仅根 hatch 显式打包 `senior_control` 与 `vehicle_core`，以及现有CI类型检查纳入新路径；
+工具只更新安装验证的实际 owner、旧新对象身份和惰性加载边界；文档仅本计划与manager README。
+不改 Requires-Dist、uv.lock、安装方式或一套项目 `.venv`，不迁IPC/诊断/业务值，
+不改时钟算法、帧校验、CLI、进程拓扑或服务绑定，不新增全局状态或跨项目依赖环。
+
+候选验证复用非仿真的控制时钟、原手动会话时效与帧同步/类型用例；仓库外新wheel实际导入
+与旧路径兼容身份分别验证，补惰性导入隔离检查；Ruff及diff检查后自审真实diff，仅提交固定
+功能分支，禁止推送。完整命令、结果和平台限制在实施后追加；不以静态检查替代ROS/实车证据。
+
+
+本批实际21文件（增3改18删0），与预报一致，测试文件未编辑。
+新两个实现与 `492f14d` 逐字节相同，旧新类型同一对象；产品消费者和vision按需owner接
+vehicle_core。根Requires-Dist输入、uv.lock及项目 `.venv` 未改。自审未见业务分支或状态变化。
+
+定向非仿真回归115通过、1原手动authority测试缺gesture失败；`492f14d` 归档同场景
+2通过、1相同失败、31未选。Ruff check/format、三文件mypy与diff检查通过；
+Root/localization/control的离线sdist/wheel构建通过；仓库外临时26包安装及pip check、
+新owner/旧兼容身份/惰性边界、实际安装定位消费者导入均通过。完整命令、真实artifact来源、
+失败对照和限制见 [manager记录](../../../senior_control/README.md#r0r1-首片共享-clock-与-imageframe-叶子)。
+不运行仿真及其验证、不启动ROS/车辆/服务、不部署或推送；Linux/Humble/ABI及
+独立manager生产安装仍未验证。提交固定功能主分支后等待负责人审阅，再推进后批。
+
+
+### R1 第二片：生命周期事件与进程资源叶子（2026-11-21）
+
+固定功能分支基线 `7ea8183`，实施前工作区干净。本片仅迁两个标准库公共技术叶子：
+`src/senior_control/runtime/lifecycle_events.py` → `src/vehicle_core/lifecycle_events.py`，
+`src/senior_control/motion/process_resources.py` → `src/vehicle_core/process_resources.py`。
+旧模块保留显式 `//Compatible` 同对象出口；事件logger仍用原
+`senior_control.runtime.lifecycle_events` 名称，环境变量字节、帧上界、单向管道、EOF、
+失联、FD关闭与spawn/父亡/异常/reap语义保持，不改变控制或手动权限。
+
+先记录本范围，再更新安装检查以核对新owner与兼容身份，迁唯一实现与9个真实产品消费者：
+control_inputs/runtime_reports、learning_compute/learning_owner、实车safety_motion launch、
+senior_sim simulation_motion launch、旧agent/composition、docker_start_helper、launch_recovery。
+不迁 `launch_recovery` 本体，其入口与命令字符串保持；仿真launch只静态改引用，不验证。
+
+预报16文件：产品增2改11、工具文档改3，测试/配置无修改，无删除；不新增依赖、工厂、
+发行或功能。已有工作区和本节作为实施记录，不新增skill工作区、测试或辅助worker。
+仅复用指定非仿真用例，不能以额外测试扩大范围：
+
+- `ros2/tests/test_control_process_resources.py::test_real_spawn_serializes_tasks_and_results_and_cleans_up`
+- 同文件 `test_process_death_fails_pending_future_and_close_reaps_it`
+- `tests/integration/test_runtime_fault_isolation.py::test_observer_eof_is_reported_by_actual_agent_without_exiting`
+
+不运行会扫描仿真launch的 `test_launch_exit_only_reports_lifecycle`，不跑整份测试文件。
+另做仓库外wheel canonical/旧路径同对象与无管理/ROS依赖检查、Ruff/diff检查；
+真实命令、版本、结果和平台限制实施后补录。仅提交固定功能分支，不部署或推送，
+不发运动请求、不启动仿真/实车/开发/ROS服务，不宣称实车手动控制已通。
+
+
+本片实际16文件，产品增2改11、工具文档改3，无测试/配置修改或删除。
+除保留原logger名的显式Compatible写法外，两叶子主体与基线保持；旧出口同对象，
+launch_recovery仅更新一条child_lifetime导入。安装检查先在旧wheel确认缺owner失败，
+迁移后新Root wheel仓库外canonical/兼容身份/惰性边界检查通过；指定3条非仿真测试
+全部通过，Ruff14文件与diff检查通过，26包临时安装夹具pip check通过。
+完整命令、版本、实际安装来源与限制见
+[manager本片记录](../../../senior_control/README.md#r1-第二片生命周期事件与进程资源叶子)。
+不声称实车手动控制可用，未运行任何仿真验证、ROS/实车/开发服务或部署，不推送；
+提交后由负责人审核，Linux父亡分支与Humble/真实设备验证仍未完成。
+
+
+### R1 第三片：采集时间与纯传感器时效策略（2026-11-21）
+
+固定功能分支基线 `d3c7dec`，实施前工作区干净。先记录本范围，再迁唯一实现：
+`src/senior_control/sensors/sample_time.py` 逐字节归 `src/vehicle_core/sample_time.py`；
+policy中的Age、SensorTiming、SensorClockError、default_policy、sensor_current纯实现归
+`vehicle_core/sensor_policy.py`，仅调整sample_time和资源路径、去掉诊断依赖。
+原policy显式Compatible转发同对象，唯一ros_sensor_parameters适配及延迟诊断导入留原位。
+原sample_time显式转发原类、函数及内部常量；不重写时间或引入新owner副本。
+
+原 `sensors/defaults.json` 原字节移动到 `vehicle_core/sensor_defaults.json`，只保留一个资源，
+算法、阈值、lru_cache和缺失/时效语义保持。36个实际产品消费者接纯叶子；
+3个仅导入ros_sensor_parameters的launch继续用旧专用适配入口。仿真文件只静态改引用，
+不运行或验证。范围：产品增2改38、配置资源迁移1、工具文档改4，测试不改，无其他删除
+或配置；工具文档限安装工具、manager README、本计划、hardware-motion-parameters路径。
+不增加依赖、发行或工厂，不改ROS/IPC行为、诊断owner或控制/手动权限。
+
+限定验证：`tests/unit/test_sensor_timing.py`（含独立C++合成输入算术契约）与
+`tests/unit/test_runtime_diagnostics.py::test_age_raw_dedup_separate_compute_and_five_second_debug`；
+另核对仓库外新wheel唯一资源、canonical/旧路径类函数与默认缓存同对象、纯叶子无诊断/ROS
+导入，以及Ruff/diff。无需新增测试或skill工作区，按已有明确方案独立实施、自审后仅在
+固定分支提交，禁止推送/部署/运动请求/任何仿真或车辆/开发/ROS服务。
+
+
+本片实际45逻辑文件（产品增2改38、唯一资源迁移1、工具文档改4），测试/其他配置无改。
+sample_time/JSON原字节相同，策略主体与缓存AST保持、仅资源路径调整，唯一ROS adapter
+AST不变且仍延迟导入诊断；36个消费者接新纯叶子，3个专用launch适配入口保留。
+指定离线pytest **17通过**（含独立C++合成时钟契约），Ruff41文件及diff通过；
+根wheel新资源唯一、canonical/旧路径和缓存同对象、无诊断/ROS依赖的仓库外检查通过。
+完整命令、版本、工具初稿转义修正与限制见
+[manager本片记录](../../../senior_control/README.md#r1-第三片采集时间与纯传感器时效策略)。
+未运行任何仿真验证、车辆/开发/ROS服务或部署，不发运动请求、不推送；
+真实Humble及设备行为仍未验证，提交后等待负责人审核。
+
+
+### R1 第四片：唯一进程诊断 owner（2026-11-21）
+
+固定功能分支基线 `105494a`，实施前工作区干净。先登记范围，再将
+`src/senior_control/runtime/diagnostics.py` 唯一实现迁入 `src/vehicle_core/diagnostics.py`；
+只将默认logger的 `__name__` 明确为原 `senior_control.runtime.diagnostics`，
+其余锁、队列/log、帧龄、时钟、lru_cache、公开及必要私有类型/函数保持。
+旧模块显式Compatible同对象转发，不复制缓存、诊断实例或新增替代owner。
+
+32个实际产品消费者改诊断引用，包含旧policy的ROS参数适配中延迟诊断import；
+纯sensor_policy保持独立，3个launch不动，cloud自己的诊断实现不改。
+测试仅改 `test_estimation_review_contracts.py` 中指定拒收回执用例的monkeypatch定义点，
+由旧诊断模块指向canonical，保留输入、assert及其余测试。
+预报38文件：产品增1改33、测试改1、工具文档改3，配置0，无删除。
+
+已逐项阅读指定runtime/logging诊断测试，均为离线值/队列/替身链路，无仿真运行项；
+只复用 `tests/unit/test_runtime_diagnostics.py`、`tests/unit/test_logging_diagnostics.py` 与
+`tests/unit/test_estimation_review_contracts.py::test_rejected_native_receipt_uses_original_identity_without_live_state_mutation`。
+另做根wheel、仓库外同对象/单缓存owner/logger/无管理ROS或旧SDK业务导入检查，以及Ruff/diff。
+不新增测试或额外工作区，不改变诊断业务和控制/手动权限；不发运动请求、不启动仿真、
+车辆/开发/ROS服务，不部署推送；自审后仅提交固定分支，等待负责人审核。
+
+
+本片实际38文件，产品增1改33、测试改1、工具文档改3，配置0、无删。
+诊断主体AST除显式原logger名称外与基线相同；32消费者仅改导入，唯一测试仅改
+monkeypatch定义点，原cloud诊断/纯sensor策略/3个launch不动。
+指定非仿真pytest **29通过**，Ruff36文件及diff通过；根wheel与仓库外旧新18出口、
+单缓存owner、原logger名及无旧SDK业务/管理ROS导入检查通过，26包pip check通过。
+完整命令、版本、自审及未验项见
+[manager本片记录](../../../senior_control/README.md#r1-第四片唯一进程诊断-owner)。
+其他历史测试旧定义点monkeypatch未扩改；不宣称全量或实车控制通过，未运行仿真验证、
+开发/车辆/ROS服务，不部署、推送或发送运动请求，提交后等待负责人审核。
+
+
+### R1 共享 IPC：通用 v1 Unix 传输（2026-11-21）
+
+固定功能分支基线 `1b1318b`，实施前工作区干净。先记范围，再将
+`src/senior_control/runtime/ipc.py` 唯一实现迁到 `src/vehicle_core/ipc.py`；
+旧模块Compatible显式同对象转发原常量、类型、类、必要私有函数与logger。
+只显式固定原 `senior_control.runtime.ipc` logger名，其余实现保持。
+通用车内v1协议不进入云车契约，不新建调用、构造、工厂或独立发行。
+
+10个真实产品消费者更新canonical import：agent_adapter；agent的composition/connection/
+main/ports/workspace；docker_start_helper/operator_actions/simulation_cli/vehicle_deploy。
+模拟文件只迁引用，不运行或验证；SO_PEERCRED外部调用、frame字节/上界/timeout、
+request与intent lane隔离、socket身份/生命周期/并发bind/取消保护不变。
+
+测试仅3文件真实monkeypatch定义点适配：RGBD同步的3处旧diagnostics module；
+exclusive_bind的race socket module；导航state polling的fake IPC server module。
+输入、fixture行为和assert不变，其他旧兼容导入保留；前片RGBD的2通过3失败已由
+负责人复现，本片不重复该已知基线取证。预报18文件：产品增1改11、测试改3、
+工具文档改3（安装工具/manager README/本计划），配置0、无删，扩大前先报告。
+
+限定验证为test_ipc_frames、test_ipc_lifecycle、test_intent_ipc_stream、
+test_ipc_exclusive_bind、test_rgbd_sync_ordering，以及指定导航state polling用例。
+已核对exclusive_bind虽有历史simulation注释，但所有实际场景只操作本地Unix socket、
+路径、symlink与替身，没有静态验证仿真launch或启动仿真；导航用例明确禁止controller
+或IPC请求并以fake server/ROS模块替身执行，不启动ROS。另核对Ruff/diff、根wheel、
+仓库外canonical/旧出口及诊断缓存归属；不发运动请求、不启动任何仿真/车辆/开发/ROS
+服务，不部署推送，自审后仅提交固定分支，等待负责人审核。
+
+
+本片实际18文件，与预报一致；10消费者和3测试只改import定义点，IPC主体AST除
+显式原logger名外与基线相同，原17出口同对象。指定本地Unix/离线/fake server测试
+**33通过**（含RGBD5项恢复），Ruff16文件、根wheel与仓库外出口/字节常量/诊断cache/
+惰性导入检查通过，26包pip check通过。agent_adapter保留原809行CRLF，普通diff的3条
+CR行尾提示改用显式保留其他空白保护的cr-at-eol参数检查通过，不写Git配置。
+完整命令、版本、真实范围与未验项见
+[manager本片记录](../../../senior_control/README.md#r1-共享-ipc通用-v1-unix-传输)。
+未启动仿真/ROS/车辆/开发服务、未向实车发送运动、不部署推送；
+真实Linux peer及Humble/设备行为另验，提交后等待负责人审核。
+
+
+### R1 共享车内值、异常与运行态（2026-11-21）
+
+固定功能分支基线 `f565a17`，实施前工作区干净；AST核对73个实际产品消费者，
+跳过test/tests目录，符合82文件预报。先记录范围，再迁唯一实现：
+`models.py` → `vehicle_core/values.py`，`errors.py` → `vehicle_core/errors.py`；
+protocol中仅BodyReferenceState、RuntimeObservation、MotionRuntimeState原实现 →
+`vehicle_core/runtime_state.py`，仅复用senior_contracts.wire的StrictModel及既有整数界。
+原ErrorCode仍复用senior_contracts，旧三模块Compatible同对象转发，保留_finite等私有接口，
+不重建别名类/枚举/异常；其余旧protocol的WS导出逐项原样保持。
+
+73个产品消费者只改import，混合协议import仅分离3个本地类型，类型构造与业务不变；
+仿真文件只静态迁引，不验证。预算82文件：产品增3改76、测试/配置不改、
+工具文档改3（安装工具、manager README、本计划），无删除或新依赖/协议状态。
+
+限定测试：test_protocol.py、manager test_agent_ports.py、指定
+test_runtime_guard_ready.py::test_duplicate_wrong_source_and_wrong_robot_cannot_replace_receiver；
+后者只用受控ROS I/O，不调用同文件manual_target或仿真环境，若旧fixture失败限量基线对照，
+不改测试。另做Ruff、保留CRLF的diff检查、根wheel及仓库外身份/精确校验/序列化/惰性导入。
+不改Requires-Dist或锁，不改权限、过滤、schema、日志或时序；不运行仿真/ROS/实车/开发
+服务，不发运动、不部署推送，仅固定分支提交，等待负责人审核。
+
+
+本片实际82文件，与预报一致：产品增3改76、工具文档改3，测试/配置0、无删。
+values/errors原字节与3个DTO class AST保持，protocol全部原WS导出行原样；
+73消费者仅改import。指定回归30通过、1旧guard fixture缺 `_output_incarnation` 设置错误，
+f565a17归档仅对照该节点复现相同错误，未修改测试；Ruff80文件、既有CRLF约定diff、
+根wheel及仓库外13出口/ErrorCode身份、精确schema alias/校验/序列化和惰性导入检查通过，
+26包pip check通过。完整命令、版本、失败证据及未验项见
+[manager本片记录](../../../senior_control/README.md#r1-共享车内值异常与运行态)。
+不宣称guard用例或全量通过，不运行仿真/ROS/实车/开发服务、不发运动、不部署推送；
+提交固定分支后等待负责人审核，真实设备验证与旧fixture后续另批处理。
+
+
+### R5 首片：通用 AgentConfig 与 PoseReply（2026-11-21）
+
+固定功能分支基线 `6266c9a`，实施前工作区干净。先登记范围，再将AgentConfig通用
+字段、环境读取与TLS/路径校验归manager/agent/config.py；canonical frozen基类不含具体
+诊断类型，不依赖vehicle_core/旧包/ROS。旧composition.AgentConfig用Compatible frozen
+dataclass子类补原diagnostics字段及原诊断解析绑定，保持字段顺序、默认工厂与行为。
+两类不同，不能声称同对象；共用唯一from_environment与__post_init__，在原全部必填
+读取/路径构造之后、cls构造之前调用受保护类方法补诊断kwargs，避免新增配置框架、
+伪默认诊断或全局provider。保留缺必填/坏诊断/构造校验的异常优先级、KeyError链与文本。
+
+PoseReply原pydantic校验归manager/agent/pose_reply.py，旧ports显式同对象转发；
+IpcHomePort解析对象、请求顺序不变，RuntimeState/StateReply仍原位，发行DAG另批。
+预算7文件：产品增2改2、工具文档改3（安装工具/manager README/本计划），
+测试/配置0、无删；依赖/锁/systemd/CLI/生产parser与run_agent实例传递不变。
+
+限定测试仅manager的test_agent_config.py与test_agent_ports.py，均非仿真；必要临时Unix
+socket沿原受控测试能力，不跑同名仿真环境。另做Ruff/CRLF约定diff、manager/root wheel、
+仓库外manager-only和兼容SDK检查：环境/TLS/路径/secret repr、新基类不加载core/旧业务/ROS，
+旧签名/诊断解析/默认factory/缺必填优先与PoseReply身份保持。
+不发运动请求、不启任何仿真/ROS/实车/开发服务、不部署推送；自审后仅固定分支提交。
+
+
+本片实际7文件，产品增2改2、工具文档改3，测试/配置无改、无删。
+通用配置字段/校验原样，唯一解析只加末尾诊断kwargs接缝；旧类为不同Compatible子类，
+原构造顺序/默认/异常优先级保持，PoseReply class AST及旧新身份相同。
+指定非仿真测试 **14通过**，Ruff5文件、CRLF约定diff、manager/root wheel通过；
+仓库外8包manager-only无core/旧包/ROS安装及26包SDK兼容检查、两边pip check通过。
+完整命令、版本、自审和限制见
+[manager本片记录](../../../senior_control/README.md#r5-首片通用-agentconfig-与-posereply)。
+未改运行入口/依赖/锁，不宣称完整独立生产部署；未运行仿真/开发/ROS/车辆服务、
+无运动请求或部署推送，提交固定分支后等待负责人审核。
+
+
+### R5 数据库装配：Home协调与domain schema（2026-11-21）
+
+固定功能分支基线 `0e0f7f0`，实施前工作区干净。先登记范围，再新增manager/storage/
+home_database.py承接逐DB/逐robot协调对象与目标锁缓存，继承既有Database单连接owner，
+显式注入lock/coordination工厂，复用原OperationT形状；setdefault的每次参数构造时机保持，
+不改为懒get或改变粒度。旧HomeExecutionCoordination无参薄子类绑定原DiagnosticLock和
+OperationResult，旧Database默认签名与实际协调类型保持，传入原构造工厂，不复制锁业务。
+
+新增manager/storage/domain_schema.py，只用canonical Migration和Task/Waypoint SQL tuple，
+工厂显式接地图原SQL tuple，持有1地图/2航点/3任务唯一顺序声明；旧schema在原import
+时机注入原地图tuple，保留DOMAIN_MIGRATIONS、Migration与全部历史SQL常量访问。
+manager不导入core/旧SDK/地图/ROS/cloud owner；map_persistence与业务执行不改。
+预算7文件：产品增2改2、工具文档改3，测试/配置0、无删除，扩大前先报告。
+
+限定测试已核对为纯本地SQLite/内存Home与Gate替身：manager database ownership、
+tests/integration/test_storage.py、指定2条Home guard（含原参数化）、
+ros2/tests/test_map_operations.py::test_startup_blocks_motion_before_waiting_for_database。
+不执行同文件其他场景、不运行仿真；旧失败限量基线对照且不改断言。
+另验证 --manager-tasks-only真实独立wheel的注入/owner/纯依赖，与SDK中旧签名、
+同锁/协调类型、SQL identity及真实SQLite单连接/schema；Ruff/CRLF约定diff、manager/root
+wheel后自审，仅固定分支提交，不启任何服务、不发运动、不部署推送。
+
+
+本片实际7文件，与预报一致，测试/配置/依赖/锁/map_persistence/引擎不改。
+原协调状态及eager setdefault时机保持；旧类薄装配注入原DiagnosticLock/协调工厂，
+实际旧协调类型和同DB/robot锁身份保持；domain顺序唯一声明，旧模块同tuple注入。
+指定非仿真测试 **27通过**，Ruff5文件、CRLF约定diff、manager/root wheel通过；
+仓库外manager-tasks-only和SDK真实SQLite验证工厂时机、同owner/锁/单主连接、
+版本/SQL tuple身份和无反向依赖通过，两夹具pip check通过。完整命令、版本、
+实际安装与限制见
+[manager本片记录](../../../senior_control/README.md#r5-数据库装配home协调与domain-schema)。
+无仿真验证/任何服务/运动请求/部署推送，不宣称完整独立生产部署或实车通过；
+提交固定分支后等待负责人审核。
+
+
+### R0/R5 发行DAG切换（基线2acd5c5）
+
+复用senior-control根发行承载vehicle_core与暂留的 //Compatible senior_control命名空间。
+根只保留contracts与原四项基础依赖；原九项聚合依赖原版本移入vehicle组，默认dev+vehicle，
+保留现场uv sync --frozen --no-dev --inexact --extra agent --extra safety --extra ros --extra video
+选择的整车闭包和单套.venv。agent/video直接声明manager同约束第三方依赖；manager声明
+senior-control及父根本地source，形成manager→core发行DAG，不新增发行或改变产品。
+预算8文件：四配置（根/manager pyproject、根uv.lock、backend.yml），四工具文档
+（安装工具、部署文档、manager README、本计划）；不改产品、测试、cloud/manager独立锁。
+
+验收：offline锁更新逐包比对版本/source和registry完整记录，冻结导出对比原现场闭包；
+临时副本独立manager解析不读取父组；真实非editable根/manager wheel在空临时base/agent
+环境安装声明闭包、pip check、METADATA和文件归属、无cloud/ROS安装及旧业务模块加载；
+原SDK闭包安装及兼容检查。manager-agent-only只执行真实profile渲染/惰性import与本地
+接口检查，不调用仿真监督或启动入口。精确命令的宿主冻结安装/干跑与Linux3.10锁导出
+分开记录环境和限制，Ruff及CRLF约定diff通过后固定分支提交，不推送或部署。
+
+本片实际8文件，与预报一致，产品/测试/删除0，cloud锁及manager独立锁不改。
+离线锁71条版本/source全同，除root/manager外69条完整记录不变；新旧精确现场冻结导出
+54行（11本地+43带marker需求）一致，Linux/aarch64 Python3.10干跑均46包。
+独立manager临时解析36条、仅3本地项目，无父dev/vehicle组。真实root/manager wheel通过，
+空base12包与SDK26包安装/pip check及安装工具非仿真有效入口通过。
+agent extra安装缺原websockets15.0.1缓存，Python3.10尝试缺PyYAML6.0.3，
+宿主整车实际冻结安装缺numpy2.5.4缓存；未升级/联网，未称agent-only或整车实际安装通过。
+Ruff/format/CRLF约定diff及8文件实际diff自审通过；命令/闭包/兼容代价和未验限制见
+[manager本片记录](../../../senior_control/README.md#r0r5-发行dag切换)。
+固定分支提交，禁hooks避免全量/仿真，未启服务或发运动、未部署推送，等待负责人审核。
+
+
+### R5 本地IPC实际装配（基线5988c42）
+
+14文件：产品增2改9（local_state/local_adapters、旧ports/connection及七个生产消费者），
+工具文档改3（原安装工具/manager README/本计划），测试/配置/锁0、无删。
+RuntimeState/StateReply原定义及for_tasks迁manager；实际RouteProgress公共路径是
+senior_contracts.navigation（无nav模块），复用原同对象，不新建契约。
+具体IpcState/Home/Map/TaskAwareMotion、IpcMotion/MotionRejected迁唯一local_adapters，
+保留原MRO、同client/锁/异常cause、时钟和所有effects，HomeWriter只替换store注解。
+旧ports仅保留IpcNavigation真实导航绑定，其余原名显式 //Compatible 同对象转发。
+生产七消费者改canonical，composition仅旧IpcNavigation保留，底层generic类不改。
+
+验收：先核对指定agent ports/config与intent IPC流用例不含仿真；仅本地SQLite/替身/Unix
+socket，核实九client、1000/3000ms和独立停车路径；不启动实车/ROS/仿真/开发服务。
+manager wheel装入无ROS base，证明具体绑定/模型、原0.5秒状态解析、parse/error分派、
+MRO和无旧业务/cloud/ROS/Nav2/mapping导入；SDK检查旧新身份且保留bound!=generic断言。
+Ruff/format/CRLF约定diff、自审与固定分支提交，不改CLI/systemd/发行/锁，不部署推送。
+
+本片实际14文件符合预算，产品增2改9、工具文档改3，测试/配置/锁0。
+模型/类文本逐字对照通过（Home仅协议注解替换），七消费者业务AST不变；
+旧IpcNavigation文本保留、旧新具体绑定同对象、generic区别与有效MRO均验证。
+指定非仿真用例首轮13通过2例沙箱bind EPERM，允许临时Unix socket后原命令15通过；
+九client、八1000ms/一3000ms及独立停车、原learning receipt/deadline检查通过。
+真实root/manager wheel重装无ROS base与SDK、两边pip check、专用IPC安装入口和原
+manager-tasks-only通过；原0.5秒状态解析/错误分派/cause和无旧业务/ROS加载保持。
+agent extra离线仍缺websockets15.0.1缓存，未升级/联网、不称agent-only或实车通过。
+Ruff/format与CRLF约定diff检查通过，具体命令、环境与限制见
+[manager本片记录](../../../senior_control/README.md#r5-本地ipc实际装配)。
+固定分支提交，禁hooks避免全量/仿真，未启服务、未发实车运动、未部署推送。
+
+
+### R5 具体Agent依赖绑定（基线ba0d4f7）
+
+13文件：产品增2改8（manager config、storage/bindings、agent/production_bindings、
+旧六模块及composition），工具文档改3，测试/配置/锁0、无删。
+将原diagnostics字段和环境解析最后实参迁回canonical AgentConfig，去掉两处过渡
+_environment_fields；旧composition.AgentConfig与新类同对象，保留签名/默认/异常优先级。
+原带DiagnosticLock/OperationResult的Database与Home协调薄构造迁storage/bindings；
+JournalEntry/_OPEN/AgentJournal、log/settings/websocket绑定与VehicleLogService迁
+production_bindings，只用manager/core/contracts既有同对象，不加载旧业务/nav/ROS/cloud。
+旧六模块显式 //Compatible 同对象转发原公开与现用辅助名；composition只改目标绑定，
+其余九client、mapping/media、启动组合/systemd/CLI不动。
+
+验收先读指定五个非仿真测试文件，执行agent config/ports、database ownership、vehicle logs、
+websocket link（本地测试网络替身/临时监听，非开发服务，记录预装依赖版本不冒充锁定extra）。
+真实manager/root wheel在空base与SDK检查诊断/绑定默认、身份/继承方法、真实SQLite/锁/
+日志与网络惰性加载，保留旧generic基类与bound子类区别。Ruff/format/CRLF diff、自审后
+仅固定分支提交；不发实车运动，不启动ROS/实车/开发/仿真或部署推送。
+
+本片实际13文件符合预算，产品增2改8、工具文档改3、测试/配置/锁0。
+原10个绑定类/函数文本不变，composition业务AST不变；Config恢复完整字段与明确诊断实参，
+旧新同类和原签名/默认/required-key→诊断→TLS优先级验证通过。
+指定五份非仿真测试67通过（预装websockets15.0.1/httpx0.28.1，不冒充extra安装）。
+真实root/manager wheel、全新base12包与SDK26包重装/pip check通过，仓库外真实SQLite/
+同锁/同诊断缓存/类型与辅助名身份、无旧业务/ROS/网络库加载通过，generic区别保护保留。
+原Home兼容和本地IPC兼容安装检查继续通过；Ruff/format、CRLF diff及13文件自审通过。
+完整命令与未验限制见[manager本片记录](../../../senior_control/README.md#r5-具体agent依赖绑定)。
+固定分支提交禁hooks，不启动服务/仿真、不发实车运动、不部署推送；agent extra缓存缺口
+仍按前片保留，不称完整生产agent、ROS或实车通过。
+
+
+### R5 任务执行和路线IPC装配（基线d445b12）
+
+15文件：产品增2改10、工具文档改3，测试/配置/删除0。RoutePlan/RouteRejected原定义迁
+vehicle_core/route_plan，QualifiedRoute仍归senior_navigation执行owner，WS契约不增。
+导航route/旧Root navigation显式 //Compatible 同对象，ROS adapter三处仅换共享类型引用，
+保持robot agent_adapter原CRLF。具体TaskExecutor/QualificationUnavailable/_error_code/
+NavigationEffects归manager/tasks/execution_bindings，旧两模块显式重导并保留辅助名；
+具体IpcNavigation归现有local_adapters，引用既有manager store且保留原对象注入和方法。
+composition只改三个实际绑定导入，其余运行组合/九client/mapping/media不动。
+
+验收：指定task_runner/terminal_release_outbox/agent_ports与navigation_collision_qualification
+先读确认不涉及仿真：后者只用authority/Executor/Server/ROS ModuleType替身，controller.open
+明确禁止，无真实ROS调用。限定原用例，若失败按d445b12最小基线复现，不改断言。
+仓库外真实root/manager/navigation/robot wheel构建与base/SDK安装：新旧类型/方法同对象、
+路线schema/独立manager实际store/执行装配、不加载旧业务/ROS/nav/mapping/cloud。
+Ruff/format/CRLF diff和实际15文件自审后固定分支提交，不启动任何服务/仿真、不发实车
+运动、不部署推送，不增加依赖/协议/功能；其他旧wheel复用情况如实记录。
+
+本片实际15文件符合预算，产品增2改10、工具文档改3，测试/配置/锁0。
+原路线类/执行构造文本不变，QualifiedRoute留原导航owner，adapter/composition业务AST及
+robot agent_adapter CRLF保持；IpcNavigation只收窄waypoint接口并在generic类型边界保留同实例。
+指定非仿真用例87通过，接口收尾后复跑87通过（1.68s），无基线失败或断言修改。
+四个真实root/manager/navigation/robot wheel构建及base12包/SDK26包pip check通过，
+manager-only真实SQLite/store/生命周期/执行类型装配及无旧业务/nav/ROS加载通过；
+SDK旧新同对象/generic方法和实际composition装配通过。导航类型安装检查通过，
+ament/ROS prefix不存在故ROS executable/share明确UNVERIFIED；其余7个旧wheel复用。
+Ruff/format、CRLF diff及15文件自审通过，完整命令和未验限制见
+[manager本片记录](../../../senior_control/README.md#r5-任务执行和路线ipc装配)。
+固定分支提交禁hooks，未启动服务/仿真、不发实车运动、不部署推送，不声称实车通过。
+
+
+### R5 请求和Agent具体运行绑定（基线0a13d2c）
+
+开始时固定功能分支干净。预报9文件：产品增request_bindings/runtime_bindings两文件、
+改旧dispatcher/direct_navigation/main/composition四文件；工具/README/本计划三文件，
+测试/配置/删除0。请求值/异常/具体绑定唯一迁移，旧dispatcher仅保留StoreHomePort/StoreMapPort，
+旧CLI/main与其他组合不动。验收只限指定非仿真用例与base/SDK wheel隔离及Ruff/diff。
+
+产品修改前发现一个原依赖需确认：AgentRuntimePorts.video_signaling实际绑定旧
+senior_control.vision.signaling.VideoSignaling，它是原DiagnosticAsyncQueue具体子类；
+manager.media.signaling.VideoSignaling仍要求queue_factory参数，不是同对象。
+在禁止legacy import且保持原具体构造/类型身份的约束下，应将该小类同迁runtime_bindings，
+旧vision/signaling显式同对象转发，需要额外改1文件（总10）。已向负责人请求范围选择，
+未先改产品或以partial/新默认/全局provider改变行为；未启动服务或仿真。
+
+负责人批准扩围至10文件：将原具体VideoSignaling同迁runtime_bindings，额外修改旧
+vision/signaling.py为显式同对象出口，保留原logger/VideoSession；无新增依赖或可选库急切导入。
+其余产品/测试范围不变，开始按批准范围实施。
+
+本片按批准范围实际10文件：产品增2改5、工具文档改3，测试/配置/锁0。
+15个迁移定义保留（两处store注解收敛至manager/已有接口），旧特殊适配/CLI与composition
+业务AST不变，旧新同对象/generic方法身份及获批VideoSignaling队列/logger边界通过。
+指定非仿真15用例通过（0.68s），无原失败/断言修改；root/manager真实wheel、全新base12包
+及SDK26包重装/pip check、真实SQLite请求提交/重放/冲突与Agent构造/隔离通过。
+agent extra离线仍缺websockets15.0.1缓存，未换版本联网，不称完整网络运行通过。
+Ruff/format、CRLF diff及10文件自审通过；完整命令与限制见
+[manager本片记录](../../../senior_control/README.md#r5-请求和agent具体运行绑定)。
+固定分支提交禁hooks，不启动服务或仿真、不发实车运动、不部署推送。
+
+
+### R5 状态快照与RGB1生产绑定（基线388d1bf）
+
+开始时固定分支干净，预算13文件：产品增4改6，工具文档改3，测试/配置/删除0。
+core motion_state只承接原MotionMode/MotionState，其他控制契约不动；core rgb1承接原唯一
+codec完整字节/常量/函数。manager snapshot_bindings承接实际SnapshotState和vehicle_frame
+投影绑定，frame_bindings承接具体LatestFrameFile和原读帧/poll注入。旧入口显式兼容，
+manual_control.vehicle_frame保留原签名并惰性调用canonical，ROS手动ingress导入不带投影；
+composition用canonical工厂并保留模块名patch入口，其他运行/地图/媒体/CLI不动。
+仿真相机只换codec import，不运行脚本、不验证其环境或仿真行为。
+
+限定非仿真验证：test_vehicle_state、test_agent_config，以及runtime_reporting的
+test_ipc_failure_still_reports/test_report_heartbeat_does_not_extend_motion_evidence两条纯报告
+场景；不执行调用CommandNode/ASGI组合夹具的其他场景，不跑simulation_video或仿真测试。
+离仓库验证canonical生产绑定、旧对象身份和手动ingress惰性导入，以及非仿真临时RGB1
+字节读写公开API；root/manager wheel，Ruff/CRLF diff。原失败最小同版本基线对照。
+不改控制许可/新鲜度/配额/帧协议，不启动服务/ROS/实车/仿真，不发运动、部署或推送。
+
+本片实际13文件与预算一致：产品增4改6、工具文档改3，测试/配置/锁0。
+codec逐字节一致，原Mode/State/投影/读取构造定义保持，控制/ingress/composition其余业务AST
+不变；SnapshotState仅store注解指向manager。仿真相机仅换import，不执行或验证环境。
+指定非仿真选择23通过，兼容名收尾后23通过（0.57s），无基线失败/断言修改。
+真实root/manager wheel及base12包/SDK26包重装、pip check、纯core/手动ingress惰性导入、
+具体生产snapshot/frame/非仿真普通文件codec、旧对象身份与工厂patch入口通过。
+其他9旧wheel复用；10份非仿真Python的Ruff/format、CRLF diff及13文件自审通过。
+完整命令/选择与未验项见[manager本片记录](../../../senior_control/README.md#r5-状态快照与rgb1生产绑定)。
+固定分支提交禁hooks，未运行或新增仿真验收、未启服务、不发实车运动、不部署推送。
+
+
+### R5 工作区与domain具体存储绑定（基线5745fee3）
+
+固定功能分支开始时干净，严格14文件：产品增4改7，工具文档改3，测试/配置/删除0。
+core workspace_limits承接原三个数值常量；map_journal_schema承接原版本1 SQL tuple字节。
+manager domain_bindings持有原具体TaskStore/WaypointStore/Waypoint/StoredWaypoint、adopted
+helper和唯一DOMAIN_MIGRATIONS装配，原prepare domain→core顺序及同连接/事务不变。
+manager workspace_bindings持有原验证器与具体reader，默认只用IPC；导出grid必须显式注入
+真实read效果，未提供provider不默默忽略grid，原generic只读校验/IPC优先/失败分派不改。
+旧workspace保留原签名仅注入WorkspaceMap真实效果的薄子类；composition保留该真实效果
+绑定与模块patch点，只切canonical task/waypoint构造，不移动地图算法或归档/图读效果。
+旧store/schema显式 //Compatible 同对象；mapping仅改共享常量/SQL引用，原CRLF布局保持。
+
+限定非仿真：workspace_data原四项（明确排除simulation_waypoint_create）、database ownership、
+waypoint_store两条Home唯一性/修订冲突、task_runner两条重启/版本3以及agent_config。
+真实root/manager/mapping wheel、base/SDK具体SQLite owner/schema/tuple/旧新身份与明确
+效果注入、临时文件的真实地图导出fallback验证；不启动/验证任何仿真/ROS/车辆/服务。
+Ruff/CRLF diff与实际14文件自审后固定分支提交，不发运动、部署或推送。
+
+本片实际14文件符合预算，产品增4改7、工具文档改3、测试/配置/锁0。
+原SQL字节、常量数值、验证器/值/helper保持，store prepare顺序/同连接及mapping算法和
+composition其余业务AST不变，schema CRLF保持。canonical默认IPC、导出明确效果注入/
+无provider拒绝，legacy原签名真实WorkspaceMap效果和原fallback/校验/错误/patch位置保持。
+指定17项非仿真原测试通过，收尾后同选择复跑17通过（0.59s），无基线失败或断言修改；root/manager/mapping真实
+wheel、base12包/SDK26包重装与pip check、真实SQLite/schema/tuple/旧新身份及真实临时
+归档加载和原WorkspaceMap显示fallback检查通过，不验证SLAM后端或来源。
+12份Python Ruff/format、CRLF diff及14文件自审通过；完整命令与限制见
+[manager本片记录](../../../senior_control/README.md#r5-工作区与domain具体存储绑定)。
+固定分支提交禁hooks，无仿真/服务/ROS/车辆启动或验证、不发运动、不部署推送。
+
+
+### R5 正式 Agent 入口切换（基线 c4a2844）
+
+范围固定15文件：产品新增 production.py、__main__.py，修改旧 composition/main 兼容入口及 manager service/simulation 子进程 argv；部署 unit 同步入口；仅修改5个已有测试的真实 patch/import/argv；安装工具、manager README 与本计划。唯一具体装配迁入 manager，默认只使用 IPC；配置启用时局部导入地图/摄像头公共效果，内部导入失败不得吞掉。旧运行/关闭、九客户端、超时、状态报告及配对退出语义保持；仿真仅静态迁 argv，不执行任何仿真验证。
+
+验收：明确非仿真已有场景、Ruff/CRLF diff；真实 root/manager wheel、仓库外 base 和 SDK，canonical module help/坏配置及临时 SQLite/Unix IPC/WS 替身真实生命周期，验证隔离、九客户端与关闭。尝试原锁 agent extra 离线安装，缺缓存如实记录；不启动任何生产/开发/车辆/ROS/仿真服务，不部署或推送。
+
+本片实际完成15文件，无扩围。新正式 module、纯 manager 生产装配、旧显式兼容出口与 service/unit
+argv 已切换；可选地图/camera效果仅配置启用后导入，缺顶层功能包明确告警/原UNAVAILABLE，内部导入错误保留。
+root/manager wheel和空base12包、兼容SDK26包真实安装/pip check通过；仓库外canonical实际临时SQLite/
+Unix IPC/WS替身生命周期证明九client、状态报告与原退出清理，另验旧入口身份/委托及真实归档显示fallback。
+非仿真配置/故障隔离17通过（排除11），其余选择7通过（排除1）；short_admission11参数与目录日志场景
+遇旧learning_capability fixture失败，原c4a2844仅代表tick+目录日志2节点同样失败，未改断言。
+agent extra离线缓存缺websockets15.0.1，原锁URL亦缺缓存，未升级联网；完整网络extra与Linux/ROS/实车未验。
+12份Python Ruff/format、CRLF diff、AST/字节自审通过；命令、环境与限制详见manager README本片记录。
+仿真仅静态argv迁移，未执行任何相关环境/验收；无服务/实车运动/部署/推送。

@@ -3,12 +3,12 @@
 from dataclasses import replace
 
 import pytest
+from senior_motion_control.controller import MotionController
 from test_directional_constraints import engine, snapshot
 from test_motion_controller import config, feedback, imu_feedback
 from test_navigation_small_intent import rig  # noqa: F401
 
-from senior_control.models import Velocity
-from senior_control.motion.controller import MotionController
+from vehicle_core.values import Velocity
 
 
 @pytest.mark.parametrize(

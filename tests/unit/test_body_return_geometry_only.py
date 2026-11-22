@@ -2,75 +2,35 @@
 
 import math
 from dataclasses import replace
-from types import SimpleNamespace
 
 import pytest
-from control_process_test_support import generic_motion_profile
-from learning_test_support import TestRun, geometry
-from senior_robot.motion_core_output import MotionCoreOutput
-from senior_robot.raw_safety_observation import RawSafetyObservation
-from sensor_time_test_support import capture_fields, sample_time
-from test_startup_learning import observation, record, side_observation
+from learning_test_support import geometry
+from senior_perception.external_motion_features import external_feature_ranges
+from senior_perception.learning_record import LearnedCatalog, LearningAnchor
+from senior_perception.learning_view import LearningFilterView
+from senior_perception.self_filter import filter_self
+from senior_perception.self_learning import SelfReturnModel
+from test_motion_core_handoff import core as motion_core  # noqa: F401
+from test_startup_learning import observation, side_observation
 from test_startup_learning_feasibility import BOUNDARY
 
-from senior_control.config import DeviceProfile
-from senior_control.motion.learning_record import LearnedCatalog, LearningAnchor
-from senior_control.motion.startup_learning import StartupLearning
-from senior_control.safety.external_motion_features import (
-    external_feature_ranges,
-)
-from senior_control.safety.learning_view import LearningFilterView
-from senior_control.safety.self_filter import filter_self
-from senior_control.safety.self_learning import SelfReturnModel
+from vehicle_core.config import DeviceProfile
 
 
 @pytest.fixture
-def core(tmp_path):
-    run = TestRun(tmp_path / "geometry")
-    value = MotionCoreOutput.__new__(MotionCoreOutput)
-    value.profile = generic_motion_profile(length=0.6, width=0.4)
-    value._learning_client = run.client()
-    value.startup = StartupLearning(value._learning_client)
-    value.sensors = SimpleNamespace(wheel_linear=lambda _: 0.0, stationary=lambda _: True)
-    capture = SimpleNamespace(
-        frame_id="laser_link",
-        raw_gid="01",
-        bridge_gid="02",
-        source_epoch="scan",
-        bridge_boot_id="boot",
-        capture_generation=1,
-        sequence=1,
-        valid=True,
-        reason="",
-        **capture_fields(
-            time=sample_time(
-                stamp_ns=10_000_000_000,
-                received_ros_ns=10_000_000_000,
-                received_steady_ns=10_000_000_000,
-            )
-        ),
-    )
-    message = SimpleNamespace(
-        source_epoch="scan",
-        sequence=1,
-        frame_id="laser_link",
-        ranges=[0.15],
-        sensor_x=0.0,
-        sensor_y=0.0,
-        sensor_yaw=0.0,
-        angle_min=0.0,
-        angle_increment=0.01,
-        range_min=0.05,
-        range_max=5.0,
-        transform_stamp=10.0,
-        raw_capture=capture,
-    )
-    value.node = SimpleNamespace(
-        _body="base_link", _scans=[RawSafetyObservation(message, 10.0, 10.0, 10.0, 10.0)]
-    )
-    value._learning_geometry = value._learning_scan_key = value.self_returns = None
+def core(motion_core, tmp_path):  # noqa: F811
+    from learning_test_support import bind_core, raw_scan
+
+    value = motion_core
+    value.profile = value.profile.model_copy(update={"length": 0.6, "width": 0.4})
+    value.node._body = "base_link"
+    client = bind_core(value, tmp_path / "geometry")
+    raw = raw_scan(10.0, 1)
+    raw.message.ranges[540] = 0.15
+    value.node._scans = [raw]
     yield value
-    run.close()
+    value.close()
+    client.run.close()
 
 
 @pytest.mark.parametrize("sensor_error,orientation_error", [(0.0, 0.0), (0.05, 0.05), (0.5, 0.7)])
@@ -80,18 +40,16 @@ def test_global_errors_preserve_model_learning_and_classification(
     orientation_error,
 ):
     core._learning_observation(10.0)
-    model = core.self_returns
-    model.begin_segment("model-test")
-    for _i in range(12):
-        record(model, side_observation(0.15))
-    assert model.validate() == 1
+    model = core.learning.self_returns
+    model.learn_samples(tuple(side_observation(0.15) for _i in range(5)))
+    assert len(model.learned) == 1
     anchors = model.learned
     feature_bytes = core._learning_client.run.path.read_bytes()
     core.profile = core.profile.model_copy(
         update={"sensor_error": sensor_error, "orientation_error_rad": orientation_error}
     )
     core._learning_observation(10.0)
-    assert core.self_returns is model and model.learned == anchors
+    assert core.learning.self_returns is model and model.learned == anchors
     assert core._learning_client.run.path.read_bytes() == feature_bytes
     assert model.filter(side_observation(0.15), provisional=False).rays[180].kind == "self"
     assert model.filter(observation(0.301), provisional=False).external_hits
@@ -132,9 +90,10 @@ def test_mask_does_not_extend_ray_towards_nearby_body_geometry():
 
 def noisy_model():
     model = SelfReturnModel(BOUNDARY)
-    for i in range(12):
-        record(model, side_observation(0.15 + (0.0002 if i % 2 else -0.0002)))
-    assert model.validate() == 1
+    model.learn_samples(
+        tuple(side_observation(0.15 + (0.0002 if i % 2 else -0.0002)) for i in range(5))
+    )
+    assert len(model.learned) == 1
     return model
 
 
@@ -155,9 +114,8 @@ def test_nonzero_measurement_changes_learn_and_remain_usable_without_drift():
 )
 def test_user_one_centimeter_matching_bound_is_inclusive(offset, expected):
     model = SelfReturnModel(BOUNDARY)
-    for _i in range(12):
-        record(model, side_observation(0.15))
-    assert model.validate() == 1
+    model.learn_samples(tuple(side_observation(0.15) for _i in range(5)))
+    assert len(model.learned) == 1
     assert (
         model.filter(side_observation(0.15 + offset), provisional=False).rays[180].kind == expected
     )
@@ -192,7 +150,7 @@ def test_new_adjacent_and_moving_nearby_external_hits_remain_obstacles():
 @pytest.mark.parametrize("offset,expected", [(0.01, 1), (0.01001, 0)])
 def test_learning_uses_same_one_centimeter_range_as_runtime(offset, expected):
     model = SelfReturnModel(BOUNDARY)
-    for i in range(12):
-        distance = 0.15 + (offset if i % 2 == 0 else 0.0)
-        record(model, side_observation(distance))
-    assert model.validate() == expected
+    model.learn_samples(
+        tuple(side_observation(0.15 + (offset if i % 2 == 0 else 0.0)) for i in range(5))
+    )
+    assert len(model.learned) == expected

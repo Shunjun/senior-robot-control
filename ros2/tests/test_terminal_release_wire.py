@@ -100,7 +100,7 @@ def test_missing_receipt_cannot_send_a_new_global_barrier_over_later_authority(w
     node._navigation_source = None
     node._last_close_source = ("idle", "", 0, 0.0, "", 0)
     if foreign == "prepared_manual":
-        from senior_control.motion.manual_authority import ManualAuthorityState
+        from senior_motion_control.manual_authority import ManualAuthorityState
 
         node._manual_ingress = N(view=lambda _: N(state=ManualAuthorityState.PREPARED))
     elif foreign == "manual":
@@ -195,8 +195,8 @@ async def test_ipc_terminal_effect_is_explicit_exact_and_query_does_not_invent_u
 
 
 def test_ipc_port_never_accepts_mismatched_terminal_receipt():
-    from senior_control.agent.ports import IpcNavigation
-    from senior_control.tasks.lifecycle import Effect
+    from vehicle_manager.agent.local_adapters import IpcNavigation
+    from vehicle_manager.tasks.lifecycle import Effect
 
     effect = Effect("terminal_release", "effect", "execution", 2, terminal_outcome="canceled")
     reply = dict(
@@ -224,11 +224,11 @@ def test_missing_local_receipt_handshake_learns_original_core_epoch(wire, monkey
     import ast
     from pathlib import Path
 
+    from senior_motion_control.arbiter import FinalCommandFence
     from test_motion_core_exit_deadline import rig as core_fixture
     from test_motion_core_exit_deadline import start
 
-    from senior_control.models import Velocity
-    from senior_control.safety.arbiter import FinalCommandFence
+    from vehicle_core.values import Velocity
 
     fixture = core_fixture.__wrapped__(monkeypatch)
     core_rig = next(fixture)

@@ -17,7 +17,7 @@ def test_adapter_signal_closes_ipc_and_exits_cleanly(tmp_path, signal_name):
     pytest.importorskip("rclpy")
     socket_path = tmp_path / "adapter.sock"
     script = """
-from senior_control.runtime.ipc import IpcServer
+from vehicle_core.ipc import IpcServer
 from senior_robot.agent_adapter import main
 from senior_robot.command_node import CommandNode
 
@@ -75,7 +75,7 @@ def test_adapter_repeated_signals_close_owned_resources(tmp_path, signal_name, s
 import os
 import signal
 import rclpy
-from senior_control.runtime.ipc import IpcServer
+from vehicle_core.ipc import IpcServer
 from senior_robot.agent_adapter import main
 
 signum = getattr(signal, os.environ["TEST_SIGNAL"])
@@ -125,7 +125,7 @@ import os
 import signal
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
-from senior_control.runtime.ipc import IpcServer
+from vehicle_core.ipc import IpcServer
 from senior_robot.agent_adapter import AdapterCore, main
 
 if os.environ["TEST_FAILURE"] == "spin":

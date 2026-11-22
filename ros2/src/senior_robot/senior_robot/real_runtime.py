@@ -5,8 +5,7 @@ from typing import Any
 
 import yaml
 from pydantic import ValidationError
-
-from senior_control.motion.hardware_profile import HardwareMotionProfile, load_hardware_profile
+from senior_motion_control.hardware_profile import HardwareMotionProfile, load_hardware_profile
 
 # Required parameters have no hardware defaults. Sensor and response calibration
 # belongs in this file, not in a simulation YAML or product driving preferences.
@@ -273,7 +272,7 @@ def validate_navigation(reference: Path | None, parameters: Path | None) -> None
         return  # Manual-only is valid; navigation remains explicitly unavailable.
     if reference is None or parameters is None:
         raise ValueError("navigation_reference and navigation_parameters must be supplied together")
-    from senior_control.hardware_navigation import load_navigation_reference
+    from senior_localization.navigation_reference import load_navigation_reference
 
     load_navigation_reference(reference)
     if not parameters.is_absolute():

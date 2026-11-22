@@ -1,4 +1,4 @@
-from senior_control.safety.freshness import SafetyFreshness
+from senior_perception.freshness import SafetyFreshness
 
 
 def test_original_measurement_expiry_and_true_monotonic_regression():

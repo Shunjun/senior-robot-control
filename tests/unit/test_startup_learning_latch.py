@@ -3,8 +3,8 @@
 from test_motion_core_handoff import barrier
 from test_startup_learning_chain import rig  # noqa: F401
 
-from senior_control.models import Velocity
-from senior_control.motion.contracts import MotionMode
+from vehicle_core.motion_state import MotionMode
+from vehicle_core.values import Velocity
 
 
 def test_estop_before_output_never_consumes_or_restarts_learning(rig):  # noqa: F811

@@ -4,21 +4,21 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from senior_motion_control.constraints import ConstraintConfig, ConstraintEngine, Perception
+from senior_motion_control.contracts import MotionTarget
+from senior_motion_control.controller import MotionController
+from senior_motion_control.hardware_profile import load_hardware_profile
+from senior_motion_control.stopping_input import StoppingRisk
+from senior_motion_estimation.observations import Source
 from senior_robot.motion_core_output import MotionCoreOutput
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from sensor_time_test_support import sample_time
 from shapely.geometry import GeometryCollection, Point, box
 from test_unified_motion_runtime import point
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
-from senior_control.motion.constraints import ConstraintConfig, ConstraintEngine, Perception
-from senior_control.motion.contracts import MotionTarget
-from senior_control.motion.controller import MotionController
-from senior_control.motion.hardware_profile import load_hardware_profile
-from senior_control.motion.observations import Source
-from senior_control.motion.stopping_input import StoppingRisk
-from senior_control.runtime.diagnostics import RuntimeDiagnostics
+from vehicle_core.config import DeviceProfile
+from vehicle_core.diagnostics import RuntimeDiagnostics
+from vehicle_core.values import Pose2D, Velocity
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -70,7 +70,7 @@ def test_stationary_and_low_speed_do_not_invent_front_inertia(speed, imu):
 
 def test_repository_hardware_deceleration_is_operator_assumption():
     p = output().profile
-    assert p.decel == 0.5
+    assert p.decel == 0.8
     assert "ASSUMED" in p.evidence_basis and "no physical measurements" in p.evidence_basis
 
 
@@ -107,7 +107,7 @@ def test_turning_sweep_keeps_real_side_obstacle():
 
 
 def test_failed_laser_with_live_wheel_still_uses_unified_result():
-    from senior_control.motion.estimator import MotionObservation, Origin
+    from senior_motion_estimation.estimator import MotionObservation, Origin
 
     core = output(0.02, imu=True)
     laser = MotionObservation(
@@ -142,7 +142,7 @@ def test_failed_laser_with_live_wheel_still_uses_unified_result():
 
 @pytest.mark.parametrize("newer", ["wheel", "laser"])
 def test_conflict_stopping_uses_owner_choice_not_independent_view(newer):
-    from senior_control.motion.estimator import MotionObservation, Origin
+    from senior_motion_estimation.estimator import MotionObservation, Origin
 
     core = output()
     core.sensors.invalidate(Source.WHEEL)
@@ -290,22 +290,22 @@ def test_actual_snapshot_constraints_and_controller_output(speed, obstacle, expe
 def test_hardware_profile_schema_and_launch_resolver_preserve_other_parameters():
     import json
 
+    from senior_motion_control.hardware_profile import HardwareMotionProfile
     from senior_robot.motion_profile import select_motion_profile
-
-    from senior_control.motion.hardware_profile import HardwareMotionProfile
 
     schema = json.loads((ROOT / "config/hardware-motion.schema.json").read_text())
     assert schema == HardwareMotionProfile.model_json_schema()
     p = select_motion_profile(
         hardware_path=str(ROOT / "config/hardware-motion.json"),
     )
-    assert p.decel == 0.5
-    assert (p.accel, p.yaw_decel, p.jerk, p.horizon_s) == (0.2, 0.15, 0.4, 12)
+    assert p.decel == 0.8
+    assert (p.accel, p.yaw_decel, p.jerk, p.horizon_s) == (0.5, 0.15, 0.4, 12)
+    assert p.reaction_linear_accel == 0.5
 
 
 @pytest.mark.parametrize("fraction", [-1.0, -0.5, 0.5, 1.0])
 def test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting(fraction):
-    from senior_control.motion.manual_target import ManualLinearTarget
+    from senior_motion_control.manual_target import ManualLinearTarget
 
     core = output()
     core.target = MotionTarget(
@@ -322,7 +322,7 @@ def test_hardware_manual_degraded_default_and_percentage_remain_owned_by_setting
 
 
 def test_nonzero_trajectory_residual_survives_opposite_fused_velocity():
-    from senior_control.motion.trajectory import Trajectory
+    from senior_motion_control.trajectory import Trajectory
 
     core = output(-0.02)
     core.controller.trajectory = Trajectory(Velocity(0.8, 0), Velocity(0.1, 0))
@@ -334,7 +334,7 @@ def test_nonzero_trajectory_residual_survives_opposite_fused_velocity():
 
 @pytest.mark.parametrize("trajectory", [0.0, 0.2])
 def test_expired_linear_axis_does_not_erase_inertia_while_imu_remains_fresh(trajectory):
-    from senior_control.motion.trajectory import Trajectory
+    from senior_motion_control.trajectory import Trajectory
 
     core = output(0.8, imu=True)
     core.target = MotionTarget(Velocity(0, 0.2), "test", "boot", 30)
@@ -363,7 +363,7 @@ def missing_linear(core, now, sequence=2):
 
 @pytest.mark.parametrize("trajectory", [0.0, 0.2])
 def test_only_actual_zero_output_can_start_missing_axis_response_and_settle(trajectory):
-    from senior_control.motion.trajectory import Trajectory
+    from senior_motion_control.trajectory import Trajectory
 
     core = output(0.8, imu=True)
     core.target = MotionTarget(Velocity(0, 0.2), "test", "boot", 40)

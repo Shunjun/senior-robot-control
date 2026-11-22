@@ -6,7 +6,7 @@ from types import SimpleNamespace as N
 
 import pytest
 
-from senior_control.models import Velocity
+from vehicle_core.values import Velocity
 
 
 class Axis:

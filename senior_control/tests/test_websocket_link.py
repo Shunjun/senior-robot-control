@@ -1,10 +1,9 @@
 import json
 
 import pytest
-
-from senior_control.agent.connection import HeartbeatFrame
-from senior_control.agent.websocket import WebSocketLink
-from senior_control.runtime.supervisor import AuthRejected
+from vehicle_manager.agent.connection import HeartbeatFrame
+from vehicle_manager.agent.production_bindings import WebSocketLink
+from vehicle_manager.agent.supervisor import AuthRejected
 
 
 class Socket:
@@ -45,9 +44,8 @@ async def test_reply_must_match_outstanding_nonce_and_epoch(wrong) -> None:
 
 
 async def test_connector_uses_authenticated_socket_and_epoch() -> None:
+    from vehicle_manager.agent.production_bindings import WebSocketConnector
     from websockets.asyncio.server import serve
-
-    from senior_control.agent.websocket import WebSocketConnector
 
     async def handler(socket: object) -> None:
         await socket.wait_closed()  # type: ignore[attr-defined]
@@ -141,7 +139,7 @@ async def test_missing_reply_times_out_even_if_receive_is_idle(monkeypatch) -> N
 
 
 async def test_link_receives_and_sends_video_signaling() -> None:
-    from senior_control.protocol import SdpPayload, VideoSdpEnvelope
+    from senior_contracts.wire import SdpPayload, VideoSdpEnvelope
 
     socket = Socket()
     link = WebSocketLink(socket, "robot-a", 3)

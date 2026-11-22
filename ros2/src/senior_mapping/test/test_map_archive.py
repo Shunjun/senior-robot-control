@@ -23,8 +23,8 @@ from senior_mapping.references import (
 )
 from senior_mapping.store import MapReferenceStore
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, Pose2D
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, Pose2D
 
 CELL = 0.5
 _HINT = Pose2D(1.0, 2.0, 0.25)

@@ -416,7 +416,7 @@ def test_default_required_depth_missing_stops_after_freshness_checks(monkeypatch
     rclpy = pytest.importorskip("rclpy")
     from senior_robot.safety_node import SafetyGate
 
-    from senior_control.models import Velocity
+    from vehicle_core.values import Velocity
 
     rclpy.init()
     gate = SafetyGate()

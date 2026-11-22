@@ -3,19 +3,19 @@
 from dataclasses import replace
 
 import pytest
+from senior_motion_control.contracts import ManualIntent, MotionTarget
+from senior_motion_control.manual_control import ManualIngress
+from senior_motion_control.manual_target import ManualLinearTarget
+from senior_motion_estimation.estimator import MotionObservation, Origin
+from senior_motion_estimation.observations import Source
+from senior_motion_estimation.source_modes import SourceMode
 from sensor_time_test_support import sample_time
 from test_directional_constraints import scene
 from test_motion_core_handoff import core  # noqa: F401
 from test_unified_motion_runtime import point
+from vehicle_manager.settings.models import vehicle_settings_profile
 
-from senior_control.agent.manual_control import ManualIngress
-from senior_control.models import Pose2D, Velocity
-from senior_control.motion.contracts import ManualIntent, MotionTarget
-from senior_control.motion.estimator import MotionObservation, Origin
-from senior_control.motion.manual_target import ManualLinearTarget
-from senior_control.motion.observations import Source
-from senior_control.motion.source_modes import SourceMode
-from senior_control.settings.models import vehicle_settings_profile
+from vehicle_core.values import Pose2D, Velocity
 
 
 def context(
@@ -152,9 +152,8 @@ def test_invalid_manual_metadata_rejected(field, value):
 
 
 def test_percentage_mapping_mode_switches_keep_controller_acceleration_bounded():
+    from senior_motion_control.controller import MotionController
     from test_motion_controller import config, context_for, engine, feedback
-
-    from senior_control.motion.controller import MotionController
 
     metadata = ManualLinearTarget(0.5, 0.8, 0.2)
     controller = MotionController(engine(), config(), Velocity(0.4, 0), Velocity(0, 0))

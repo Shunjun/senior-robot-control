@@ -63,7 +63,7 @@ def test_independent_path_install_passes_normalized_arguments_without_evaluation
     assert result.returncode == 0, result.stderr
     assert trace.read_text().splitlines() == [
         "-m",
-        "senior_control.operator_actions",
+        "vehicle_manager.operator_entry",
         "start",
         "profile",
         selected,
@@ -139,8 +139,8 @@ else:
         assert sys.argv[3] == str(os.getuid()) + ":" + str(os.getgid())
         del sys.argv[2:4]
     assert sys.argv[1:5] == ["exec", "-i", "ros2", "/container/project/.venv/bin/python"]
-    assert sys.argv[5:] == ["-m", "senior_control.operator_actions", "docker-request"]
-    from senior_control.operator_actions import main
+    assert sys.argv[5:] == ["-m", "vehicle_manager.operator_entry", "docker-request"]
+    from vehicle_manager.operator_entry import main
     sys.argv = ["operator_actions", "docker-request"]
     raise SystemExit(main())
 """)
@@ -204,8 +204,8 @@ def test_stopped_docker_preview_and_start_fail_before_exec_or_host_python(
 def test_running_docker_preview_uses_container_venv_and_original_renderer(
     tmp_path, monkeypatch, request
 ):
-    from senior_control.cli import load_profile
-    from senior_control.vehicle_deploy import render_service
+    from vehicle_manager.deployment import render_service
+    from vehicle_manager.profile import load_profile
 
     control, trace, docker_trace = docker_fixture(tmp_path, monkeypatch, request, running=True)
     result = run_script("docker", "deploy", "--dry-run", "--control-dir", str(control))

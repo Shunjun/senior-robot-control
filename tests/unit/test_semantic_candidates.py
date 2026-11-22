@@ -5,9 +5,8 @@ from types import SimpleNamespace
 
 import pytest
 from detector_test_helpers import slow_detector, wait_until
+from senior_perception.vision.depth_runtime import CameraInfoFrame
 from sensor_time_test_support import capture_fields, sample_time
-
-from senior_control.vision.depth_runtime import CameraInfoFrame
 
 
 def color_info():
@@ -56,7 +55,7 @@ def depth_metadata():
 
 
 def test_registration_requires_explicit_profile_and_exact_calibrated_frames():
-    from senior_control.vision.semantic_runtime import qualify_registration
+    from senior_perception.vision.semantic_runtime import qualify_registration
 
     info, depth = color_info(), depth_metadata()
     registration = qualify_registration(
@@ -91,9 +90,9 @@ def test_registration_requires_explicit_profile_and_exact_calibrated_frames():
 
 
 def test_candidates_preserve_y_range_and_depth_without_erasing_wall():
-    from senior_control.vision import Detection
-    from senior_control.vision.depth import GeometrySample
-    from senior_control.vision.semantic_runtime import associate_samples
+    from senior_perception.vision import Detection
+    from senior_perception.vision.depth import GeometrySample
+    from senior_perception.vision.semantic_runtime import associate_samples
 
     samples = (
         GeometrySample(0, 1, 0, 1.0, 1.0, 0.0, 0.3),
@@ -185,7 +184,7 @@ def wire_depth(stamp_ns=1_000_000_000):
 
 @pytest.mark.parametrize("stamp_ns", [0, 1_000_000_000])
 def test_depth_snapshot_validates_real_pixel_and_transform_and_is_immutable(stamp_ns):
-    from senior_control.vision.semantic_runtime import depth_snapshot
+    from senior_perception.vision.semantic_runtime import depth_snapshot
 
     wire = wire_depth(stamp_ns)
     depth = depth_snapshot(wire)
@@ -207,12 +206,13 @@ def test_depth_snapshot_validates_real_pixel_and_transform_and_is_immutable(stam
 
 
 def test_synchronizer_ros_correction_keeps_original_pair_without_future_queue():
-    from senior_control.vision.semantic_runtime import (
+    from senior_perception.vision.semantic_runtime import (
         ColorCapture,
         SemanticSynchronizer,
         depth_snapshot,
     )
-    from senior_control.vision.synchronizer import ImageFrame
+
+    from vehicle_core.image_frame import ImageFrame
 
     stamp = 1_002_000_000
     rgb = ColorCapture(
@@ -238,10 +238,11 @@ def test_synchronizer_ros_correction_keeps_original_pair_without_future_queue():
 
 
 def test_late_semantic_result_binds_original_depth_not_newest_frame(tmp_path):
-    from senior_control.vision.semantic_coordinator import SemanticCoordinator
-    from senior_control.vision.semantic_runtime import ColorCapture, depth_snapshot
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
-    from senior_control.vision.synchronizer import ImageFrame
+    from senior_perception.vision.semantic_coordinator import SemanticCoordinator
+    from senior_perception.vision.semantic_runtime import ColorCapture, depth_snapshot
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
+
+    from vehicle_core.image_frame import ImageFrame
 
     weights = tmp_path / "fixture.pt"
     weights.write_bytes(b"fixture")
@@ -308,10 +309,11 @@ def test_late_semantic_result_binds_original_depth_not_newest_frame(tmp_path):
 def test_semantic_epoch_invalidation_cancels_inflight_result(tmp_path):
     import time
 
-    from senior_control.vision.semantic_coordinator import SemanticCoordinator
-    from senior_control.vision.semantic_runtime import ColorCapture, depth_snapshot
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
-    from senior_control.vision.synchronizer import ImageFrame
+    from senior_perception.vision.semantic_coordinator import SemanticCoordinator
+    from senior_perception.vision.semantic_runtime import ColorCapture, depth_snapshot
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
+
+    from vehicle_core.image_frame import ImageFrame
 
     weights = tmp_path / "fixture.pt"
     weights.write_bytes(b"fixture")
@@ -340,7 +342,7 @@ def test_semantic_epoch_invalidation_cancels_inflight_result(tmp_path):
 
 
 def test_registration_rejects_stale_info_even_when_image_and_depth_are_fresh():
-    from senior_control.vision.semantic_runtime import qualify_registration
+    from senior_perception.vision.semantic_runtime import qualify_registration
 
     info, depth = color_info(), depth_metadata()
     stale_info = replace(info, received_steady=9.0)
@@ -358,8 +360,9 @@ def test_registration_rejects_stale_info_even_when_image_and_depth_are_fresh():
 
 
 def test_synchronizer_discards_missed_frames_and_rejects_clock_rollback():
-    from senior_control.vision.semantic_runtime import ColorCapture, SemanticSynchronizer
-    from senior_control.vision.synchronizer import ImageFrame
+    from senior_perception.vision.semantic_runtime import ColorCapture, SemanticSynchronizer
+
+    from vehicle_core.image_frame import ImageFrame
 
     sync = SemanticSynchronizer(max_age_ms=300)
     rgb = ColorCapture(
@@ -381,9 +384,9 @@ def test_synchronizer_discards_missed_frames_and_rejects_clock_rollback():
 
 
 def test_semantic_associations_bound_number_of_objects_and_never_assume_static():
-    from senior_control.vision import Detection
-    from senior_control.vision.depth import GeometrySample
-    from senior_control.vision.semantic_runtime import associate_samples
+    from senior_perception.vision import Detection
+    from senior_perception.vision.depth import GeometrySample
+    from senior_perception.vision.semantic_runtime import associate_samples
 
     sample = GeometrySample(0, 1, 1, 1.0, 0.0, 0.0, 1.0)
     detection = Detection("person", 0.9, (0.0, 0.0, 2.0, 2.0), 1.0)
@@ -394,7 +397,7 @@ def test_semantic_associations_bound_number_of_objects_and_never_assume_static()
 
 @pytest.mark.parametrize("age,valid", [(0.3, True), (0.5, True), (0.999, True), (1.0, False)])
 def test_semantic_registration_uses_common_original_age(age, valid):
-    from senior_control.vision.semantic_runtime import SemanticSynchronizer, qualify_registration
+    from senior_perception.vision.semantic_runtime import SemanticSynchronizer, qualify_registration
 
     assert SemanticSynchronizer(max_age_ms=1000)._age == 1
 

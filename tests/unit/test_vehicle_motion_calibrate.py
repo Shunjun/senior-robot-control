@@ -234,7 +234,7 @@ def test_motion_evidence_rejects_replayed_truth_and_spinning_start():
 
     assert hasattr(calibration, "SimulationSample"), "typed simulation evidence is required"
     plan = CalibrationPlan.from_dict(plan_data(), hard_seconds=8)
-    from senior_control.sensors.sample_time import map_sample
+    from vehicle_core.sample_time import map_sample
 
     def timing(stamp):
         return map_sample(

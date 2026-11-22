@@ -15,15 +15,15 @@ from typing import TYPE_CHECKING, Any
 from senior_robot.control_inputs import ControlInputs
 from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 
-from senior_control.motion.process_resources import LatestSnapshot
+from vehicle_core.process_resources import LatestSnapshot
 
 if TYPE_CHECKING:
-    from senior_control.motion.hardware_profile import HardwareMotionProfile
+    from senior_motion_control.hardware_profile import HardwareMotionProfile
 
 
 def generic_motion_profile(**overrides: Any) -> "HardwareMotionProfile":
     """Load explicit test numerics through the same profile model as deployment."""
-    from senior_control.motion.hardware_profile import HardwareMotionProfile
+    from senior_motion_control.hardware_profile import HardwareMotionProfile
 
     path = Path(__file__).resolve().parents[1] / "fixtures/generic_motion_profile.json"
     values = json.loads(path.read_text())
@@ -82,9 +82,10 @@ class Reception:
 
     def capture(self, packet):
         """Historic raw-source fixture enters only the reception-side offline adapter."""
-        from senior_control.motion.observations import Frame, Source, SourceStatus
-        from senior_control.motion.sample_types import PointObservation
-        from senior_control.sensors.sample_time import SampleTime
+        from senior_motion_estimation.observations import Frame, Source, SourceStatus
+        from senior_motion_estimation.sample_types import PointObservation
+
+        from vehicle_core.sample_time import SampleTime
 
         for row in packet.get("sources", []):
             sample = row["sample"]

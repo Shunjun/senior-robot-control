@@ -2,8 +2,8 @@ import math
 
 import pytest
 
-from senior_control.sensors.policy import default_policy
-from senior_control.sensors.sample_time import map_sample
+from vehicle_core.sample_time import map_sample
+from vehicle_core.sensor_policy import default_policy
 
 
 @pytest.mark.parametrize(
@@ -61,7 +61,7 @@ def test_later_consumption_preserves_original_deadline():
 
 
 def test_standard_stamp_mapping_retains_transport_and_queue_age():
-    from senior_control.sensors.sample_time import map_sample
+    from vehicle_core.sample_time import map_sample
 
     sample = map_sample(
         stamp_ns=99_800_000_000,
@@ -131,7 +131,7 @@ def test_fixture_shared_endpoints_and_cached_repeats_keep_original_deadline():
     from collections import defaultdict
     from pathlib import Path
 
-    from senior_control.sensors.sample_time import SampleTime
+    from vehicle_core.sample_time import SampleTime
 
     paths = [
         Path("tests/fixtures") / name

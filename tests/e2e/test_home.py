@@ -3,11 +3,11 @@
 from pathlib import Path
 
 from conftest import SimulationProfile
+from senior_mapping.store import MapReferenceStore
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.waypoints.home import HomeService, LocalizedPose, StartupReference
 
-from senior_control.mapping.store import MapReferenceStore
-from senior_control.models import MapRef, Pose2D
-from senior_control.storage.database import Database
-from senior_control.waypoints import HomeService, LocalizedPose, StartupReference
+from vehicle_core.values import MapRef, Pose2D
 
 MAP = MapRef("yard", 3)
 

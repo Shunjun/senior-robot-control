@@ -7,9 +7,9 @@ import pytest
 from test_motion_core_exit_deadline import rig as exit_rig
 from test_motion_core_exit_deadline import start
 
-from senior_control.models import OperationResult, OperationStatus
-from senior_control.motion.contracts import MotionMode
-from senior_control.navigation import RoutePlan
+from vehicle_core.motion_state import MotionMode
+from vehicle_core.route_plan import RoutePlan
+from vehicle_core.values import OperationResult, OperationStatus
 
 
 @pytest.fixture
@@ -171,7 +171,7 @@ def test_completion_uses_existing_correlated_retirement_barrier(monkeypatch):
 
 
 def test_completion_never_recovers_latched_physical_fault(rig):
-    from senior_control.motion.contracts import MotionEventKind as K
+    from senior_motion_control.contracts import MotionEventKind as K
 
     start(rig, 0.5)
     rig.core._event(K.EXECUTION_FAULT, rig.clock.steady)

@@ -16,12 +16,12 @@ from agent_fakes import (
 )
 from test_shutdown import ArbiterRig
 from test_shutdown import socket_path as socket_path
+from vehicle_manager.agent.local_adapters import IpcMotion
+from vehicle_manager.agent.production_bindings import AgentJournal
+from vehicle_manager.agent.runtime_bindings import Agent
+from vehicle_manager.storage.bindings import Database
 
-from senior_control.agent import Agent
-from senior_control.agent.connection import IpcMotion
-from senior_control.agent.journal import AgentJournal
-from senior_control.runtime.ipc import IpcClient, IpcServer
-from senior_control.storage.database import Database
+from vehicle_core.ipc import IpcClient, IpcServer
 
 
 async def test_received_estop_survives_epoch_invalidation(
@@ -29,8 +29,7 @@ async def test_received_estop_survives_epoch_invalidation(
 ) -> None:
     """An already received fresh estop must latch even if the epoch is disabled in transit."""
     from agent_fakes import simple
-
-    from senior_control.safety.arbiter import Arbiter
+    from senior_motion_control.arbiter import Arbiter
 
     rig = ArbiterRig()
     rig.arbiter = Arbiter(ROBOT, 300)

@@ -9,7 +9,8 @@ def test_initialization_wait_does_not_consume_learning_budget(tmp_path):
     owner.advance(None, now=100, stationary=False)
     assert owner.state == "initializing" and owner.started is None
     owner.advance(0.0, now=100.1, stationary=True)
-    assert owner.state == "sampling" and not owner.prepare_action()
+    assert owner.state == "moving" and owner.started is None
+    assert not owner.session.record.action.consumed
     begin_action(owner, 100.5)
     assert owner.started == 100.5 and owner.deadline == 103.5
 
@@ -27,37 +28,32 @@ def test_unstarted_action_cannot_validate_or_reopen_after_hold(tmp_path):
     assert owner.session.record.model is None
 
 
-def test_post_stop_validation_does_not_count_a_frame_observed_while_wheels_move(tmp_path):
+def test_capture_closes_on_stop_fact_without_waiting_for_extra_scan_frames(tmp_path):
     from learning_test_support import TestRun
+    from senior_perception.learning_wire import MotionObservedThrough
     from test_learning_compute import opened, recorded, send
 
-    from senior_control.runtime.learning_wire import MotionObservedThrough
-
-    run = TestRun(tmp_path / "stopped-frames")
+    run = TestRun(tmp_path / "stop-confirmation")
     try:
         session = opened(run)
-        motion = [recorded(i, 10 + i / 10) for i in range(1, 25)]
-        validation = [recorded(25 + i, 13.1 + i / 10) for i in range(5)]
-        send(run, motion + validation)
+        send(run, [recorded(i, 10 + i / 10) for i in range(1, 25)], through=13.1)
 
-        def observed(through, stationary):
+        def observed(stationary):
             run.rpc(
                 MotionObservedThrough(
                     session=session,
                     attempt_id=run.owner.record.attempt_id,
                     segment_id="3" * 32,
-                    through_steady_ns=round(through * 1e9),
+                    through_steady_ns=13_100_000_000,
                     validation_after_steady_ns=13_000_000_000,
                     stationary=stationary,
                 )
             )
 
-        observed(13.3, True)
-        observed(13.4, False)
-        observed(13.5, True)
+        observed(False)
         assert run.owner.record.capture_summary.state == "open"
-        send(run, [recorded(30, 13.6)])
-        observed(13.7, True)
+        observed(True)
         assert run.owner.record.capture_summary.state == "complete"
+        assert run.owner.record.capture_summary.closed_steady_ns == 13_000_000_000
     finally:
         run.close()

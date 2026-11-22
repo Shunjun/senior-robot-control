@@ -4,9 +4,8 @@ import asyncio
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
-
-from senior_control.motion.contracts import ManualIntent
-from senior_control.motion.manual_authority import (
+from senior_motion_control.contracts import ManualIntent
+from senior_motion_control.manual_authority import (
     ManualAuthorityContext,
     ManualAuthorityError,
     ManualAuthorityManager,

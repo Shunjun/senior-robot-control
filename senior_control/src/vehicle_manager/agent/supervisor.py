@@ -12,7 +12,7 @@ from typing import Any
 
 from senior_contracts.wire import HEARTBEAT_INTERVAL_MS
 
-logger = logging.getLogger("senior_control.runtime.supervisor")
+logger = logging.getLogger("vehicle_manager.agent.supervisor")
 
 
 class AuthRejected(Exception):

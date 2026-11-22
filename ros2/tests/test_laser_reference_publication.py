@@ -19,7 +19,7 @@ from senior_motion_estimation.motion_observation_adapter import NativeObservatio
 from senior_robot import motion_core_output
 from sensor_time_test_support import capture_fields, sample_time
 
-from senior_control.sensors.sample_time import SampleTime
+from vehicle_core.sample_time import SampleTime
 
 
 def native(value):

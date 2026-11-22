@@ -6,7 +6,7 @@ import pytest
 from test_motion_core_exit_deadline import delayed_decision, start
 from test_motion_core_exit_deadline import rig as exit_rig
 
-from senior_control.models import Velocity
+from vehicle_core.values import Velocity
 
 
 @pytest.fixture

@@ -1,13 +1,10 @@
 from dataclasses import replace
 
 import pytest
+from vehicle_manager.agent.state_projection import project_vehicle_state
+from vehicle_manager.agent.vehicle_state import ConnectionState, RuntimeSnapshot
 
-from senior_control.agent.vehicle_state import (
-    ConnectionState,
-    RuntimeSnapshot,
-    project_vehicle_state,
-)
-from senior_control.motion.contracts import MotionMode, MotionState
+from vehicle_core.motion_state import MotionMode, MotionState
 
 
 def runtime(sequence=1, mode=MotionMode.TASK, actions=("pause_task",)):
@@ -59,8 +56,8 @@ def test_reconnect_same_snapshot_restores_allowed_actions():
 
 
 def test_t5_priority_reason_is_consumed_without_rewriting_reducer():
-    from senior_control.motion.contracts import MotionEvent, MotionEventKind
-    from senior_control.motion.state_machine import MotionStateMachine
+    from senior_motion_control.contracts import MotionEvent, MotionEventKind
+    from senior_motion_control.state_machine import MotionStateMachine
 
     machine = MotionStateMachine()
     for sequence, kind in enumerate(
@@ -92,8 +89,9 @@ def test_new_sequence_cannot_regress_independent_safety_revision():
 
 
 def test_body_average_source_age_and_staleness_are_independent_of_wheels():
-    from senior_control.models import BodyTwist
-    from senior_control.motion.contracts import BodyMotion
+    from senior_motion_control.contracts import BodyMotion
+
+    from vehicle_core.values import BodyTwist
 
     body = BodyMotion(BodyTwist(vx=0.2, vy=0.1, wz=0.3), None, 1, 2, 10, 11, "epoch", True, "laser")
     snapshot = replace(runtime(), body=body, body_source="laser_imu", wheel_linear_mps=0.8)
@@ -117,8 +115,8 @@ def test_body_average_source_age_and_staleness_are_independent_of_wheels():
 
 
 def test_lower_priority_last_event_cannot_replace_primary_fault_reason():
-    from senior_control.motion.contracts import MotionEvent, MotionEventKind
-    from senior_control.motion.state_machine import MotionStateMachine
+    from senior_motion_control.contracts import MotionEvent, MotionEventKind
+    from senior_motion_control.state_machine import MotionStateMachine
 
     machine = MotionStateMachine()
     machine.reduce(MotionEvent(MotionEventKind.EXECUTION_FAULT, "fault", 0, 0), now_steady=0)

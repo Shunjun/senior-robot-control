@@ -204,7 +204,7 @@ elif [[ "$mode" == docker ]]; then
             # Preserve credential UID/GID and the directory's OS access checks.
             command+=(--user "$(id -u):$(id -g)")
         fi
-        "${command[@]}" -i "$container" "$project/.venv/bin/python" -m senior_control.operator_actions docker-request
+        "${command[@]}" -i "$container" "$project/.venv/bin/python" -m vehicle_manager.operator_entry docker-request
     }
     docker_invoke() { docker_request "$1" | remote "$1"; }
     metadata=
@@ -273,7 +273,7 @@ else
     fi
     [[ "$python" == /* && -x "$python" ]] || fail 'project .venv Python is unavailable; set an absolute SENIOR_ROBOT_PYTHON' 127
     invoke() {
-        "$python" -m senior_control.operator_actions "$1" "$selection" "$selected" "$headless" "$dry_run" "$cloud_url" "$name"
+        "$python" -m vehicle_manager.operator_entry "$1" "$selection" "$selected" "$headless" "$dry_run" "$cloud_url" "$name"
     }
 fi
 case "$action" in

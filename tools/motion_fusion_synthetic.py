@@ -6,8 +6,7 @@ from dataclasses import asdict, replace
 from pathlib import Path
 from typing import Any
 
-from senior_control.models import Pose2D
-from senior_control.motion.observations import (
+from senior_motion_estimation.observations import (
     Covariance,
     CovarianceKind,
     Frame,
@@ -16,9 +15,11 @@ from senior_control.motion.observations import (
     Source,
     SourceStatus,
 )
-from senior_control.motion.sample_types import PointObservation
-from senior_control.sensors.sample_time import map_sample
+from senior_motion_estimation.sample_types import PointObservation
+
 from tools.motion_fusion_replay import ReplayChain, replay_policy
+from vehicle_core.sample_time import map_sample
+from vehicle_core.values import Pose2D
 
 
 def _point(

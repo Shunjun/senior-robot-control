@@ -2,8 +2,9 @@ import os
 import time
 from pathlib import Path
 
-from senior_control.vision.rgb1 import publish_image
-from senior_control.vision.simulation_video import LatestFrameFile
+from vehicle_manager.media.frame_bindings import LatestFrameFile
+
+from vehicle_core.rgb1 import publish_image
 
 
 async def test_source_reads_only_the_latest_new_frame(tmp_path: Path) -> None:

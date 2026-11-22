@@ -4,11 +4,11 @@ from concurrent.futures import Future
 from dataclasses import replace
 
 import pytest
+from senior_motion_control.constraint_worker import ConstraintScheduler
+from senior_motion_control.contracts import BrakeKind
 from test_directional_constraints import engine, scene, snapshot
 
-from senior_control.models import Velocity
-from senior_control.motion.constraint_worker import ConstraintScheduler
-from senior_control.motion.contracts import BrakeKind
+from vehicle_core.values import Velocity
 
 
 class Worker:

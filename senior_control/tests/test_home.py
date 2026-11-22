@@ -6,13 +6,13 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from senior_mapping.evidence import CellEvidence
+from senior_mapping.store import MapReferenceStore
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.waypoints.home import HomeService, LocalizedPose, StartupReference
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.evidence import CellEvidence
-from senior_control.mapping.store import MapReferenceStore
-from senior_control.models import MapRef, OperationResult, OperationStatus, Pose2D
-from senior_control.storage.database import Database
-from senior_control.waypoints import HomeService, LocalizedPose, StartupReference
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, OperationResult, OperationStatus, Pose2D
 
 
 class SyntheticHomeService(HomeService):
@@ -798,7 +798,7 @@ async def test_home_without_localization_generation_stays_unavailable(tmp_path: 
 async def test_home_reference_nonce_survives_obstacle_and_new_anchor_but_not_moved_anchor(
     tmp_path: Path,
 ) -> None:
-    from senior_control.mapping.references import AnchorPose, AnchorSnapshot, GridExtent
+    from senior_mapping.references import AnchorPose, AnchorSnapshot, GridExtent
 
     reference = MapReferenceStore(MAP, "odom", CELL)
     navigation = RecordingNavigation()
@@ -964,7 +964,7 @@ async def test_map_switch_during_home_save_never_binds_the_stale_pose(tmp_path: 
 async def test_home_edit_waits_for_target_acceptance(
     tmp_path: Path, edit_kind: str, phase: str
 ) -> None:
-    from senior_control.mapping.archive import BundleWaypoint
+    from senior_mapping.archive import BundleWaypoint
 
     events: list[tuple[str, Pose2D]] = []
     entered, resume = asyncio.Event(), asyncio.Event()
@@ -1027,7 +1027,7 @@ async def test_home_edit_waits_for_target_acceptance(
 
 
 async def test_anchor_change_invalidates_home_during_pending_acceptance(tmp_path: Path) -> None:
-    from senior_control.mapping.references import AnchorPose, AnchorSnapshot, GridExtent
+    from senior_mapping.references import AnchorPose, AnchorSnapshot, GridExtent
 
     navigation = AcceptThenWait()
     reference = MapReferenceStore(MAP, "odom", CELL)
@@ -1648,10 +1648,10 @@ async def test_acceptance_callback_after_response_cannot_replace_returned_identi
 async def test_legacy_home_guard_migration_preserves_safety_and_unknowns(
     tmp_path: Path, execution_id: str | None
 ) -> None:
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.storage.core_schema import CORE_MIGRATIONS, migrate_core
-    from senior_control.storage.migrations import migrate
-    from senior_control.storage.schema import DOMAIN_MIGRATIONS
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.storage.core_schema import CORE_MIGRATIONS, migrate_core
+    from vehicle_manager.storage.domain_bindings import DOMAIN_MIGRATIONS
+    from vehicle_manager.storage.migrations import migrate
 
     async with Database(tmp_path / "legacy-home-guard.db") as database:
         await migrate(database, list(DOMAIN_MIGRATIONS))
@@ -1681,7 +1681,7 @@ async def test_legacy_home_guard_migration_preserves_safety_and_unknowns(
 
 
 async def test_navigation_adapter_cancels_route_when_reference_changes():
-    from senior_control.models import OperationResult, OperationStatus
+    from vehicle_core.values import OperationResult, OperationStatus
 
     adapter_module = navigation_module()
     generation = "first"

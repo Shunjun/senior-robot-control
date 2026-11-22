@@ -24,9 +24,9 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from senior_robot.real_runtime import load_real_parameters, validate_real_runtime
 
-from senior_control.runtime.launch_recovery import restart_prefix
-from senior_control.runtime.lifecycle_events import report_ros_exit
-from senior_control.sensors.policy import ros_sensor_parameters
+from vehicle_core.launch_recovery import restart_prefix
+from vehicle_core.lifecycle_events import report_ros_exit
+from vehicle_core.sensor_parameters import ros_sensor_parameters
 
 
 def _nodes(context):

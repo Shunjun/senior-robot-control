@@ -8,8 +8,6 @@ is not constructed unless that stack is imported.
 from pathlib import Path
 from typing import Protocol
 
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import OperationResult, OperationStatus, Pose2D
 from senior_mapping.references import (
     AnchorPose,
     AnchorSnapshot,
@@ -19,6 +17,8 @@ from senior_mapping.references import (
     anchor_from_graph_marker,
 )
 from senior_mapping.store import MapReferenceStore
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import OperationResult, OperationStatus, Pose2D
 
 # slam_toolbox/srv/SerializePoseGraph.srv on the 2.6.10 tag.
 SERIALIZE_SERVICE = "/slam_toolbox/serialize_map"

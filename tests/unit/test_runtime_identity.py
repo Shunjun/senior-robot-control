@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from senior_control.runtime.ipc import IpcClient, IpcError, IpcServer
+from vehicle_core.ipc import IpcClient, IpcError, IpcServer
 
 
 async def test_each_new_connection_checks_identity_before_business_or_stream():
@@ -64,7 +64,7 @@ async def test_owned_adapter_must_have_current_peer_verification_record():
             with pytest.raises(IpcError):
                 await client.request("manual")
             assert not calls and path.exists()
-            from senior_control.runtime.ipc import _record
+            from vehicle_core.ipc import _record
 
             _record(path, run_id="old-run")
             with pytest.raises(IpcError):

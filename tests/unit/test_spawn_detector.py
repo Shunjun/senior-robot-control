@@ -4,8 +4,7 @@ import time
 from pathlib import Path
 
 from detector_test_helpers import slow_detector, wait_until
-
-from senior_control.vision import (
+from senior_perception.vision import (
     CameraCalibration,
     CameraExtrinsic,
     DepthFrame,
@@ -28,7 +27,7 @@ def conditional_detector(frame):
 
 
 def capture(epoch, stamp_ns, marker=0):
-    from senior_control.vision.spawn_detector import CaptureIdentity, RetainedFrame
+    from senior_perception.vision.spawn_detector import CaptureIdentity, RetainedFrame
 
     measured = 9.99 + (stamp_ns - 1_000_000_000) / 1e9
     identity = CaptureIdentity(
@@ -70,7 +69,7 @@ def capture(epoch, stamp_ns, marker=0):
 
 
 def test_missing_weights_disabled_without_loading_or_downloading(tmp_path: Path):
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 
     worker = SpawnInferenceWorker(weights_path=tmp_path / "missing.pt")
     try:
@@ -82,7 +81,7 @@ def test_missing_weights_disabled_without_loading_or_downloading(tmp_path: Path)
 
 
 def test_late_result_keeps_original_rgb_depth_and_source_identity(tmp_path: Path):
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 
     weights = tmp_path / "provided.pt"
     weights.write_bytes(b"fixture")
@@ -106,7 +105,7 @@ def test_late_result_keeps_original_rgb_depth_and_source_identity(tmp_path: Path
 
 
 def test_hung_child_times_out_and_shutdown_is_bounded(tmp_path: Path):
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 
     weights = tmp_path / "provided.pt"
     weights.write_bytes(b"fixture")
@@ -121,7 +120,7 @@ def test_hung_child_times_out_and_shutdown_is_bounded(tmp_path: Path):
 
 
 def test_old_epoch_late_result_and_failed_inference_cannot_reappear(tmp_path: Path):
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 
     weights = tmp_path / "provided.pt"
     weights.write_bytes(b"fixture")
@@ -156,7 +155,7 @@ def busy_detector(frame):
 
 
 def test_cpu_inference_isolated_from_geometry_and_latest_queue_bounded(tmp_path: Path):
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 
     weights = tmp_path / "provided.pt"
     weights.write_bytes(b"fixture")
@@ -179,7 +178,7 @@ def test_cpu_inference_isolated_from_geometry_and_latest_queue_bounded(tmp_path:
 def test_same_epoch_replay_or_invalid_frame_fences_inflight_result(tmp_path: Path):
     from dataclasses import replace
 
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 
     weights = tmp_path / "provided.pt"
     weights.write_bytes(b"fixture")
@@ -205,8 +204,7 @@ def test_unavailable_or_wrong_runtime_is_explicit_and_never_loads_model(tmp_path
     from importlib.metadata import PackageNotFoundError, version
 
     import pytest
-
-    from senior_control.vision.spawn_detector import (
+    from senior_perception.vision.spawn_detector import (
         SUPPORTED_ULTRALYTICS_VERSION,
         SpawnInferenceWorker,
     )
@@ -232,7 +230,7 @@ def test_unavailable_or_wrong_runtime_is_explicit_and_never_loads_model(tmp_path
 
 
 def test_bound_result_requires_original_fresh_receipts_and_current_epoch(tmp_path: Path):
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 
     weights = tmp_path / "provided.pt"
     weights.write_bytes(b"fixture")
@@ -263,7 +261,7 @@ def test_bound_result_requires_original_fresh_receipts_and_current_epoch(tmp_pat
 def test_fabricated_result_cannot_borrow_an_active_epoch(tmp_path: Path):
     from dataclasses import replace
 
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 
     weights = tmp_path / "provided.pt"
     weights.write_bytes(b"fixture")
@@ -284,8 +282,8 @@ def test_fabricated_result_cannot_borrow_an_active_epoch(tmp_path: Path):
 def test_detector_accepts_original_sampled_geometry_without_invented_laser_rays(tmp_path: Path):
     from dataclasses import replace
 
-    from senior_control.vision.semantic_runtime import SampledGeometry
-    from senior_control.vision.spawn_detector import SpawnInferenceWorker
+    from senior_perception.vision.semantic_runtime import SampledGeometry
+    from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 
     weights = tmp_path / "provided.pt"
     weights.write_bytes(b"fixture")

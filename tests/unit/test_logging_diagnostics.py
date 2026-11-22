@@ -16,7 +16,7 @@ def test_uplink_error_keeps_cause_and_location_without_exception_secrets():
             raise ConnectionError("wss://user:private-token@host/?token=private-token") from cause
     except ConnectionError:
         record = logging.LogRecord(
-            "senior_control.runtime.supervisor",
+            "vehicle_manager.agent.supervisor",
             logging.WARNING,
             __file__,
             12,
@@ -26,7 +26,7 @@ def test_uplink_error_keeps_cause_and_location_without_exception_secrets():
         )
     result = json.loads(JsonFormatter().format(record))
     assert result["event"] == "uplink_failed"
-    assert result["logger"] == "senior_control.runtime.supervisor"
+    assert result["logger"] == "vehicle_manager.agent.supervisor"
     assert result["exceptions"][0]["type"] == "ConnectionError"
     assert result["exceptions"][1]["type"] == "ConnectionRefusedError"
     assert result["exceptions"][1]["errno"] == errno.ECONNREFUSED
@@ -45,7 +45,7 @@ def test_http_handshake_error_keeps_status_without_headers_or_body():
         raise InvalidStatus(Response(403, "private-token", Headers({"secret": "private-token"})))
     except InvalidStatus:
         record = logging.LogRecord(
-            "senior_control.runtime.supervisor",
+            "vehicle_manager.agent.supervisor",
             logging.WARNING,
             __file__,
             12,
@@ -65,7 +65,7 @@ def test_revocation_reason_is_allowlisted():
         ("Bearer private-token", None),
     ):
         record = logging.LogRecord(
-            "senior_control.runtime.supervisor",
+            "vehicle_manager.agent.supervisor",
             logging.ERROR,
             __file__,
             12,
@@ -81,7 +81,7 @@ def test_revocation_reason_is_allowlisted():
 
 def test_unknown_message_and_arguments_stay_private():
     record = logging.LogRecord(
-        "senior_control.agent",
+        "vehicle_manager.agent",
         logging.ERROR,
         __file__,
         12,
@@ -105,7 +105,7 @@ def test_exception_chain_and_frames_are_bounded():
         fail(12)
     except RuntimeError:
         record = logging.LogRecord(
-            "senior_control.agent",
+            "vehicle_manager.agent",
             logging.ERROR,
             __file__,
             12,
@@ -131,12 +131,12 @@ async def test_supervisor_failure_logs_diagnostic_without_global_revocation():
     import asyncio
     import io
 
-    from senior_control.runtime.supervisor import Supervisor
+    from vehicle_manager.agent.supervisor import Supervisor
 
     output = io.StringIO()
     handler = logging.StreamHandler(output)
     handler.setFormatter(JsonFormatter())
-    logger = logging.getLogger("senior_control.runtime.supervisor")
+    logger = logging.getLogger("vehicle_manager.agent.supervisor")
     saved = list(logger.handlers), logger.level, logger.propagate, logger.disabled
     logger.handlers = [handler]
     logger.setLevel(logging.INFO)

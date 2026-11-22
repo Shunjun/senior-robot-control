@@ -1,152 +1,111 @@
-"""One stateful CPU child; no ROS, actuator, filesystem or supervisor-loop work."""
+"""One five-frame CPU task; no streaming model or per-batch acknowledgements."""
 
-import multiprocessing as mp
-import os
+from concurrent.futures import Future
 from dataclasses import dataclass
+from functools import partial
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D
-from senior_control.motion.process_resources import LatestSnapshot, child_lifetime, stop_process
-from senior_control.safety.self_filter import ScanObservation, filter_self
-from senior_control.safety.self_learning import SelfReturnModel
 from senior_perception.learning_record import LearningGeometry
 from senior_perception.learning_wire import RecordedFrame
+from senior_perception.self_filter import FilteredObservation, ScanObservation, filter_self
+from senior_perception.self_learning import LEARNING_SAMPLE_COUNT, SelfReturnModel
+from vehicle_core.config import DeviceProfile
+from vehicle_core.process_resources import ProcessWorker
+from vehicle_core.values import Pose2D
 
 
 @dataclass(frozen=True)
-class ComputeBatch:
+class ComputeRequest:
     attempt_id: str
-    segment_id: str
     geometry: LearningGeometry
     frames: tuple[RecordedFrame, ...]
-    finish: bool = False
 
 
 @dataclass(frozen=True)
 class ComputeResult:
     attempt_id: str
-    processed: int
-    finished: bool
     points: tuple[tuple[float, float], ...] | None = None
     error: str | None = None
 
 
-class LearningKernel:
-    """Serial original model, fed only the immutable motion-window raw frames."""
-
-    def __init__(self) -> None:
-        self.identity: tuple[str, str] | None = None
-        self.model: SelfReturnModel | None = None
-        self.geometry: LearningGeometry | None = None
-        self.processed = 0
-        self.profile = DeviceProfile()
-
-    def update(self, batch: ComputeBatch) -> ComputeResult:
-        identity = batch.attempt_id, batch.segment_id
-        if identity != self.identity:
-            self.identity, self.geometry = identity, batch.geometry
-            self.model = SelfReturnModel(batch.geometry.physical_polygon)
-            self.model.begin_segment(batch.segment_id)
-            self.processed = 0
-        if not batch.geometry.same_structure(self.geometry):
-            raise ValueError("learning_geometry_changed")
-        assert self.model is not None
-        for frame in batch.frames:
-            geometry, capture = frame.geometry, frame.capture
-            if not geometry.same_structure(self.geometry):
-                raise ValueError("learning_geometry_changed")
-            ranges = tuple(float(value) for value in frame.ranges)
-            observation = filter_self(
-                ScanObservation(
-                    ranges,
-                    geometry.angle_min,
-                    geometry.angle_increment,
-                    geometry.range_min,
-                    geometry.range_max,
-                    capture.stamp_ns / 1e9,
-                    "ros",
-                    Pose2D(*geometry.sensor_to_body),
-                    frame.transform_stamp,
-                    geometry.body_frame,
-                    capture.stamp_ns / 1e9,
-                ),
-                self.profile,
-            )
-            if not self.model.observe(observation, capture=capture, segment_id=batch.segment_id):
-                raise ValueError("learning_frame_not_in_segment")
-            self.processed += 1
-        points = None
-        if batch.finish:
-            count = self.model.validate()
-            no_interior = any(self.model.frames) and not any(
-                self.model.interior(point) for frame in self.model.frames for point in frame
-            )
-            if self.processed and (count or no_interior):
-                points = self.model.learned
-        return ComputeResult(batch.attempt_id, self.processed, batch.finish, points)
+def decode_observation(frame: RecordedFrame) -> FilteredObservation:
+    geometry, capture = frame.geometry, frame.capture
+    return filter_self(
+        ScanObservation(
+            tuple(float(value) for value in frame.ranges),
+            geometry.angle_min,
+            geometry.angle_increment,
+            geometry.range_min,
+            geometry.range_max,
+            capture.stamp_ns / 1e9,
+            "ros",
+            Pose2D(*geometry.sensor_to_body),
+            frame.transform_stamp,
+            geometry.body_frame,
+            capture.stamp_ns / 1e9,
+        ),
+        DeviceProfile(),
+    )
 
 
-def _compute_loop(requests, responses, stop, parent_pid):
-    child_lifetime(parent_pid)
-    kernel, version = LearningKernel(), 0
-    while not stop.is_set() and os.getppid() == parent_pid:
-        row = requests.take(version)
-        if row is None:
-            stop.wait(0.005)
-            continue
-        version, batch = row
-        try:
-            result = kernel.update(batch)
-        except Exception as exc:
-            result = ComputeResult(batch.attempt_id, kernel.processed, True, error=str(exc)[:256])
-        while not stop.is_set() and not responses.put(result):
-            stop.wait(0.001)
+def compute_samples(request: ComputeRequest) -> ComputeResult:
+    if len(request.frames) != LEARNING_SAMPLE_COUNT:
+        raise ValueError("learning_sample_count")
+    captures = [frame.capture for frame in request.frames]
+    origins = {
+        (c.bridge_boot_id, c.source_epoch, c.raw_gid, c.capture_generation, c.time.clock_generation)
+        for c in captures
+    }
+    if len(origins) != 1 or any(
+        b.sequence <= a.sequence
+        or b.stamp_ns <= a.stamp_ns
+        or b.time.sample_steady_ns < a.time.sample_steady_ns
+        for a, b in zip(captures, captures[1:], strict=False)
+    ):
+        raise ValueError("learning_sample_identity")
+    if any(not request.geometry.same_structure(frame.geometry) for frame in request.frames):
+        raise ValueError("learning_geometry_changed")
+    observations = tuple(decode_observation(frame) for frame in request.frames)
+    model = SelfReturnModel(request.geometry.physical_polygon)
+    count = model.learn_samples(observations)
+    hits = tuple(ray for observation in observations for ray in observation.external_hits)
+    no_interior = bool(hits) and not any(
+        model.interior(ray.endpoint) for ray in hits if ray.endpoint is not None
+    )
+    return ComputeResult(request.attempt_id, model.learned if count or no_interior else None)
 
 
 class LearningCompute:
-    """One acknowledged flight of <=4 frames; the service owns its bounded FIFO."""
+    """Lazy dedicated CPU resource, one whole request and one result per attempt."""
 
     def __init__(self) -> None:
-        context = mp.get_context("spawn")
-        self.requests: LatestSnapshot[ComputeBatch] = LatestSnapshot(context, 262144)
-        self.responses: LatestSnapshot[ComputeResult] = LatestSnapshot(context, 262144)
-        self.stop = context.Event()
-        self.version = 0
-        self.flight: ComputeBatch | None = None
-        self._sent = False
-        self.process = context.Process(
-            target=_compute_loop,
-            args=(self.requests, self.responses, self.stop, os.getpid()),
-            name="learning-compute",
-        )
-        self.process.start()
-        self._closed = False
+        self.flight: ComputeRequest | None = None
+        self._worker: ProcessWorker[ComputeResult] | None = None
+        self._future: Future[ComputeResult] | None = None
 
-    def submit(self, batch: ComputeBatch) -> None:
-        if self.flight is not None or len(batch.frames) > 4:
+    def submit(self, request: ComputeRequest) -> None:
+        if self.flight is not None:
             raise ValueError("learning_compute_busy")
-        self.flight = batch
-        self._sent = self.requests.put(batch)
+        if self._worker is None:
+            self._worker = ProcessWorker(name="learning-compute")
+        self._future = self._worker.submit(partial(compute_samples, request))
+        self.flight = request
 
     def poll(self) -> ComputeResult | None:
-        if self.flight is None:
+        if self._future is None or not self._future.done():
             return None
-        if not self.process.is_alive():
-            batch, self.flight = self.flight, None
-            return ComputeResult(batch.attempt_id, 0, True, error="learning_compute_exited")
-        if not self._sent:
-            self._sent = self.requests.put(self.flight)
-            return None
-        row = self.responses.take(self.version)
-        if row is None:
-            return None
-        self.version, result = row
-        if result.attempt_id != self.flight.attempt_id:
+        assert self.flight is not None
+        request, future = self.flight, self._future
+        self.flight = self._future = None
+        try:
+            result = future.result()
+        except Exception as exc:
+            return ComputeResult(request.attempt_id, error=str(exc)[:256])
+        if result.attempt_id != request.attempt_id:
             raise ValueError("learning_compute_identity")
-        self.flight = None
         return result
 
     def close(self) -> None:
-        if not self._closed:
-            self._closed = True
-            stop_process(self.process, self.stop)
+        if self._worker is not None:
+            self._worker.close()
+            self._worker = None
+        self.flight = self._future = None

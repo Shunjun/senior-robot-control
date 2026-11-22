@@ -13,9 +13,9 @@ from test_motion_core_handoff import Node, barrier, core  # noqa: F401
 from test_navigation_command_clock import navigation  # noqa: F401
 from test_runtime_guard_ready import CASE, ready  # noqa: F401
 
-from senior_control.models import Velocity
-from senior_control.motion.contracts import MotionMode
-from senior_control.protocol import MotionRuntimeState
+from vehicle_core.motion_state import MotionMode
+from vehicle_core.runtime_state import MotionRuntimeState
+from vehicle_core.values import Velocity
 
 
 @pytest.mark.parametrize("old_state", [None, '{"latched":true}', "broken", "unreadable"])
@@ -93,9 +93,8 @@ def test_expired_or_old_estop_report_cannot_relock_after_owner_clear(ready):
 
 
 def test_raw_wheel_imu_reset_without_independent_body_never_restores_old_target(core):
+    from senior_motion_estimation.observations import Source
     from test_unified_motion_runtime import point
-
-    from senior_control.motion.observations import Source
 
     receiver = core.node._reception_test
     receiver.sensors.ingest(point(Source.WHEEL, 10, 10, (0.015, 0.02)), 10, 10, 10)

@@ -6,10 +6,9 @@ from pathlib import Path
 
 import pytest
 from senior_perception.learning_owner import LearningRecordOwner
+from senior_perception.learning_view import LearningFilterView
 from senior_perception.startup_learning import StartupLearning
 from sensor_time_test_support import sample_time
-
-from senior_control.safety.learning_view import LearningFilterView
 
 DOMAIN = "00000000-0000-0000-0000-000000000001"
 
@@ -28,24 +27,25 @@ class ImmediateWorker:
 
 
 class InlineCompute:
-    """Transport substitute only; actual stateful learning kernel stays unchanged."""
+    """Only transport is inline; the real one-shot compute function is used."""
 
     def __init__(self):
-        from senior_perception.learning_compute import LearningKernel
-
-        self.kernel = LearningKernel()
         self.flight = None
         self.held = False
+        self.requests = []
 
-    def submit(self, batch):
+    def submit(self, request):
         assert self.flight is None
-        self.flight = batch
+        self.requests.append(request)
+        self.flight = request
 
     def poll(self):
+        from senior_perception.learning_compute import compute_samples
+
         if self.flight is None or self.held:
             return None
-        batch, self.flight = self.flight, None
-        return self.kernel.update(batch)
+        request, self.flight = self.flight, None
+        return compute_samples(request)
 
 
 class TestRun:
@@ -64,8 +64,6 @@ class TestRun:
         self.service.owner = self.owner
         self.service.compute = InlineCompute()
         self.clients = []
-        self.stream_id = "1" * 32
-        self.index = 0
         self.hold_ingress = False
         self.profile = type("Profile", (), {"length": 0.6, "width": 0.4})()
         self.pump()
@@ -91,18 +89,16 @@ class TestRun:
 
         recorder = object.__new__(LearningFrames)
         recorder.profile, recorder.body_frame = self.profile, "base_link"
-        recorder._index, recorder._frames = self.index, deque()
-        recorder._lock, recorder._gap = threading.Lock(), False
+        recorder._frames = deque(maxlen=16)
+        recorder._lock = threading.Lock()
+        recorder._recording, recorder._attempt = True, self.owner.record.attempt_id
         with patch(
             "senior_perception.learning_client.time.monotonic_ns",
             return_value=round(raw.received * 1e9),
         ):
             recorder.offer(raw)
-        self.index = recorder._index
         batch = FrameBatch(
-            after_index=recorder._frames[0].index - 1,
             attempt_id=self.owner.record.attempt_id,
-            stream_id=self.stream_id,
             frames=tuple(recorder._frames),
             through_steady_ns=round(raw.received * 1e9),
         )
@@ -116,9 +112,7 @@ class TestRun:
         if not self.hold_ingress:
             self.service._accept_frames(
                 FrameBatch(
-                    after_index=self.index,
                     attempt_id=self.owner.record.attempt_id,
-                    stream_id=self.stream_id,
                     frames=(),
                     through_steady_ns=now_ns,
                 )
@@ -324,8 +318,8 @@ def startup_for(label):
 
 def bind_core(core, label):
     client = client_for(label)
-    core._learning_client = client
-    core.startup = StartupLearning(client)
+    core.learning._learning_client = client
+    core.learning.startup = StartupLearning(client)
     return client
 
 
@@ -382,8 +376,8 @@ def write_geometry_record(path, boundary):
 
 def learning_point(source, stamp_ns, received_ros_ns, received_steady_ns, values, sequence=1):
     """Explicit point input with real mapping, no environment-specific admission."""
-    from senior_control.motion.observations import Frame, SourceStatus
-    from senior_control.motion.sample_types import PointObservation
+    from senior_motion_estimation.observations import Frame, SourceStatus
+    from senior_motion_estimation.sample_types import PointObservation
 
     return PointObservation(
         source=source,
@@ -402,3 +396,49 @@ def learning_point(source, stamp_ns, received_ros_ns, received_steady_ns, values
         model_id=None,
         body_from_sensor=None,
     )
+
+
+def save_completed(run, points):
+    """Persist a frozen model through the actual owner, for restoration-only tests."""
+    from senior_perception.learning_record import CaptureSummary
+
+    session = run.owner._session
+    if session is None:
+        session, _ = run.owner.begin_consumer()
+    if not run.owner.record.action.consumed:
+        run.owner.reserve_action(session)
+    run.owner.capture(CaptureSummary(state="complete", compute_complete=True))
+    run.owner.complete_model(session, tuple(points))
+    for _ in range(3):
+        run.pump()
+
+
+def raw_scan(stamp, sequence):
+    """A real-shaped raw observation without the retired ScanGeometry test fixture."""
+    import math
+    from dataclasses import asdict
+    from types import SimpleNamespace
+
+    from senior_perception.raw_safety_observation import RawSafetyObservation
+    from sensor_time_test_support import capture_fields
+    from test_learning_compute import recorded
+
+    capture = recorded(sequence, stamp).capture
+    fields = asdict(capture)
+    fields.pop("time")
+    message = SimpleNamespace(
+        source_epoch="raw",
+        sequence=sequence,
+        frame_id="laser_link",
+        ranges=[2.0] * 720,
+        angle_min=-math.pi,
+        angle_increment=math.tau / 720,
+        range_min=0.05,
+        range_max=20.0,
+        sensor_x=0.0,
+        sensor_y=0.0,
+        sensor_yaw=0.0,
+        transform_stamp=stamp,
+        raw_capture=SimpleNamespace(**fields, **capture_fields(time=capture.time)),
+    )
+    return RawSafetyObservation(message, stamp, stamp, stamp, stamp)

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from senior_control.motion.process_resources import ProcessWorker
 from senior_perception.learning_record import (
     ActiveReference,
     CaptureSummary,
@@ -29,8 +28,9 @@ from senior_perception.learning_store import (
     read_record,
     write_record,
 )
+from vehicle_core.process_resources import ProcessWorker
 
-_LOG = logging.getLogger("senior_control.runtime.learning_owner")  # //Compatible: log filters.
+_LOG = logging.getLogger("vehicle_core.learning_owner")  # //Compatible: log filters.
 
 
 CommitResult = int | LearningRecord | None

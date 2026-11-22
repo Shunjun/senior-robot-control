@@ -12,9 +12,9 @@ from senior_localization.heading import HeadingObserver, MotionSample
 from senior_localization.relocalization import PoseHint, Relocalizer
 from senior_mapping.archive import Georeference
 
-from senior_control.clock import Clock
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, OperationStatus, Pose2D, Velocity
+from vehicle_core.clock import Clock
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, OperationStatus, Pose2D, Velocity
 
 ROOT = Path(__file__).resolve().parents[4]
 MAP = MapRef("yard", 3)

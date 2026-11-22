@@ -24,8 +24,8 @@ from control_process_test_support import (
 from motion_reference_test_support import ReadySubscription
 from senior_robot import motion_core_output as module
 
-from senior_control.config import DeviceProfile
-from senior_control.models import Velocity
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Velocity
 
 
 class Node:

@@ -31,26 +31,23 @@ from senior_motion_msgs.msg import (
 from senior_motion_msgs.msg import (
     DriveExecutionFeedback as DriveFeedbackMessage,
 )
+from senior_perception.freshness import SafetyFreshness
 from senior_perception.raw_safety_observation import RawSafetyObservation
-
-from senior_control.models import Velocity
-from senior_control.motion.source_fences import (
-    ProducerTopology,
-    SourceEpochFence,
-)
-from senior_control.safety.freshness import SafetyFreshness
-from senior_control.sensors.policy import default_policy
-from senior_control.vision.egress_receipt import (
+from senior_perception.vision.egress_receipt import (
     EgressAdmission,
     depth_capture_headers,
     egress_from_message,
     safety_scan_capture,
 )
-from senior_control.vision.raw_capture import RawCaptureAdmission, capture_from_message
-from senior_control.vision.runtime_evidence import DepthAdmission, DepthHeader
+from senior_perception.vision.raw_capture import RawCaptureAdmission, capture_from_message
+from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
+
 from senior_motion_control.arbiter import FinalCommandFence
 from senior_motion_control.motion_lifecycle import MotionExecutor, run
 from senior_motion_control.native import native_executable
+from senior_motion_control.source_fences import ProducerTopology, SourceEpochFence
+from vehicle_core.sensor_policy import default_policy
+from vehicle_core.values import Velocity
 
 
 class SafetyGate(Node):
@@ -184,7 +181,7 @@ class SafetyGate(Node):
             from senior_perception.scan_gap_compensation import ScanGapCompensator
             from tf2_ros import Buffer, TransformListener
 
-            from senior_control.runtime.diagnostics import configure_diagnostics
+            from vehicle_core.diagnostics import configure_diagnostics
 
             self._scan_compensator = ScanGapCompensator(candidate_profile)
             from pathlib import Path
@@ -200,7 +197,7 @@ class SafetyGate(Node):
             self._input_sensors = MotionSensorRuntime(
                 candidate_profile, configure_diagnostics(candidate_profile.diagnostics)
             )
-            from senior_control.motion.diagnostic_pump import DiagnosticPump
+            from senior_motion_control.diagnostic_pump import DiagnosticPump
 
             self._input_diagnostics = self._own(DiagnosticPump(self._input_sensors.diagnostics))
             if not self.has_parameter("wheel_frame"):
@@ -516,17 +513,12 @@ class SafetyGate(Node):
         self._scan_generation += 1
         try:
             steady = time.monotonic()
-            stamp = Time.from_msg(msg.stamp).nanoseconds / 1e9
-            capture = capture_from_message(msg.raw_capture)
+            stamp = capture.stamp_ns / 1e9
             if (
                 not self._clock_ok(steady)
                 or not msg.valid
-                or not msg.raw_source
                 or msg.raw_source != self._scan_source
-                or not msg.frame_id
                 or not 1 <= len(msg.ranges) <= 2048
-                or not all(math.isfinite(v) for v in (msg.ingress_steady, msg.ingress_ros))
-                or not 0 <= steady - msg.ingress_steady <= self._freshness.max_age
                 or not self._freshness.scan(capture.measurement_steady, msg.ingress_steady, steady)
             ):
                 raise ValueError("bounded scan unqualified")
@@ -541,7 +533,7 @@ class SafetyGate(Node):
                 try:
                     self._learning_frames.offer(raw)
                 except (ValueError, TypeError, OverflowError):
-                    self._learning_frames.mark_gap()
+                    pass  # Optional learning may skip a malformed recording.
             self._scans.append(
                 self._scan_compensator.update(raw, self._input_bridge.core.poses, now=steady)
             )

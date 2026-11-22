@@ -4,9 +4,8 @@ from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
+from senior_motion_control.hardware_profile import HardwareMotionProfile
 from senior_robot.real_runtime import load_real_parameters
-
-from senior_control.motion.hardware_profile import HardwareMotionProfile
 
 
 def test_shared_sensor_policy_stays_independent_of_command_ttl():

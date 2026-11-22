@@ -1,8 +1,8 @@
+from senior_motion_estimation.estimator import Origin
+from senior_motion_estimation.gps_course import CourseFix, GPSCourseObserver
 from sensor_time_test_support import sample_time
 
-from senior_control.localization.gps_course import CourseFix, GPSCourseObserver
-from senior_control.motion.estimator import Origin
-from senior_control.sensors.sample_time import StampInterval
+from vehicle_core.sample_time import StampInterval
 
 
 def motion(o, start, end, vx=0.2, wz=0, domain=None):
@@ -77,7 +77,7 @@ def test_explicit_enu_adapter_initializes_without_heading_or_tf(monkeypatch):
 
     from senior_robot.optional_motion_inputs import OptionalMotionInputs
 
-    from senior_control.runtime.diagnostics import RuntimeDiagnostics
+    from vehicle_core.diagnostics import RuntimeDiagnostics
 
     adapter = object.__new__(OptionalMotionInputs)
     adapter._course_frame, adapter._gps_family = "enu", "gnss"

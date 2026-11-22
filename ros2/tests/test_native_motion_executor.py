@@ -21,6 +21,8 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
     rclpy = pytest.importorskip("rclpy")
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
+    from senior_motion_control.hardware_profile import load_hardware_profile
+    from senior_motion_estimation.observations import Source
     from senior_robot.motion_lifecycle import MotionExecutor, run, with_dds_info
     from senior_robot.motion_observation_adapter import (
         NativeObservationRosBridge,
@@ -30,9 +32,7 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
     from senior_sensor_ingress.native_receipt import subscribe
     from std_msgs.msg import String
 
-    from senior_control.motion.hardware_profile import load_hardware_profile
-    from senior_control.motion.observations import Source
-    from senior_control.runtime.diagnostics import RuntimeDiagnostics
+    from vehicle_core.diagnostics import RuntimeDiagnostics
 
     assert os.environ.get("ROS_DOMAIN_ID") == "173" and os.environ.get("ROS_LOCALHOST_ONLY") == "1"
     original = Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/senior_robot"

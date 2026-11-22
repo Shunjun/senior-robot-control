@@ -6,24 +6,24 @@ from types import SimpleNamespace as NS
 
 import pytest
 from control_process_test_support import generic_motion_profile
-from senior_robot.motion_core_output import MotionCoreOutput
-from senior_robot.motion_core_perception import ScanGeometry
-from senior_robot.raw_safety_observation import RawSafetyObservation
-from sensor_time_test_support import capture_fields, sample_time
-
-from senior_control.config import DeviceProfile
-from senior_control.models import Pose2D, Velocity
-from senior_control.motion.constraints import (
+from senior_motion_control.constraints import (
     ConstraintConfig,
     ConstraintEngine,
     ConstraintSnapshot,
     Footprint,
     RiskEnvelope,
 )
-from senior_control.motion.contracts import BodyMotion, MotionTarget, ResponseBounds
-from senior_control.motion.controller import Feedback, MotionController
-from senior_control.motion.source_modes import SourceMode
-from senior_control.safety.space_estimator import SpaceEstimation
+from senior_motion_control.contracts import BodyMotion, MotionTarget, ResponseBounds
+from senior_motion_control.controller import Feedback, MotionController
+from senior_motion_estimation.source_modes import SourceMode
+from senior_perception.space_estimator import SpaceEstimation
+from senior_robot.motion_core_output import MotionCoreOutput
+from senior_robot.motion_core_perception import ScanGeometry
+from senior_robot.raw_safety_observation import RawSafetyObservation
+from sensor_time_test_support import capture_fields, sample_time
+
+from vehicle_core.config import DeviceProfile
+from vehicle_core.values import Pose2D, Velocity
 
 
 class Delayed(Future):
@@ -195,8 +195,8 @@ def run_scan_trace(hz, delay, *, real_pose=False):
         from senior_robot.motion_observation_adapter import NativeObservations
         from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 
-        from senior_control.motion.process_resources import LatestSnapshot
-        from senior_control.runtime.diagnostics import RuntimeDiagnostics
+        from vehicle_core.diagnostics import RuntimeDiagnostics
+        from vehicle_core.process_resources import LatestSnapshot
 
         source = MotionSensorRuntime(profile, RuntimeDiagnostics(lambda *_: None))
         core.sensors = MotionSensorRuntime(profile, RuntimeDiagnostics(lambda *_: None))

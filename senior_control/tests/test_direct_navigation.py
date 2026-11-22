@@ -1,13 +1,13 @@
 from pathlib import Path
 
 import pytest
+from vehicle_manager.agent.local_state import RuntimeState
+from vehicle_manager.agent.request_bindings import DirectNavigation
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import WaypointStore
 
-from senior_control.agent.direct_navigation import DirectNavigation
-from senior_control.agent.ports import RuntimeState
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.models import MapRef, Pose2D
-from senior_control.storage.database import Database
-from senior_control.waypoints.store import WaypointStore
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef, Pose2D
 
 REF = MapRef("sim", 1)
 BODY = {"map_id": "sim", "reference_revision": 1, "grid_id": "current"}

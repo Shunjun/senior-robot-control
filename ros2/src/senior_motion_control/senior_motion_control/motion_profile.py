@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from senior_control.motion.hardware_profile import HardwareMotionProfile, load_hardware_profile
+from senior_motion_control.hardware_profile import HardwareMotionProfile, load_hardware_profile
 
 
 def select_motion_profile(*, hardware_path: str) -> HardwareMotionProfile:

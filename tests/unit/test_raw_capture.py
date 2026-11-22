@@ -6,7 +6,7 @@ from sensor_time_test_support import sample_time
 
 
 def raw_header(**changes):
-    from senior_control.vision.raw_capture import RawCaptureHeader
+    from senior_perception.vision.raw_capture import RawCaptureHeader
 
     base = RawCaptureHeader(
         frame_id="camera_optical_frame",
@@ -28,7 +28,7 @@ def raw_header(**changes):
 
 
 def test_bridge_and_raw_restart_retire_old_data_without_restamping():
-    from senior_control.vision.raw_capture import RawCaptureAdmission
+    from senior_perception.vision.raw_capture import RawCaptureAdmission
 
     admission = RawCaptureAdmission(max_age_ms=300)
     old = raw_header()
@@ -56,7 +56,7 @@ def test_bridge_and_raw_restart_retire_old_data_without_restamping():
 
 
 def test_failed_frame_revokes_and_old_or_same_sequence_cannot_revive():
-    from senior_control.vision.raw_capture import RawCaptureAdmission
+    from senior_perception.vision.raw_capture import RawCaptureAdmission
 
     admission = RawCaptureAdmission(max_age_ms=300)
     good = raw_header()
@@ -81,7 +81,7 @@ def test_failed_frame_revokes_and_old_or_same_sequence_cannot_revive():
 
 
 def test_source_conflict_invalidates_epoch_and_original_first_receipts_expire():
-    from senior_control.vision.raw_capture import RawCaptureAdmission
+    from senior_perception.vision.raw_capture import RawCaptureAdmission
 
     admission = RawCaptureAdmission(max_age_ms=300)
     good = raw_header()
@@ -107,7 +107,7 @@ def test_source_conflict_invalidates_epoch_and_original_first_receipts_expire():
 
 
 def test_graph_disappearing_revokes_current_source_without_old_queue_revival():
-    from senior_control.vision.raw_capture import RawCaptureAdmission
+    from senior_perception.vision.raw_capture import RawCaptureAdmission
 
     admission = RawCaptureAdmission(max_age_ms=300)
     good = raw_header()
@@ -122,7 +122,7 @@ def test_graph_disappearing_revokes_current_source_without_old_queue_revival():
 
 
 def test_same_stamp_cannot_pair_across_bridge_boot_or_global_capture_generation():
-    from senior_control.vision.raw_capture import compatible_captures
+    from senior_perception.vision.raw_capture import compatible_captures
 
     first = raw_header(bridge_boot_id="boot-a", capture_generation=3)
     aligned = replace(first, raw_gid="09" * 24, bridge_gid="08" * 24)
@@ -143,7 +143,7 @@ def test_same_stamp_cannot_pair_across_bridge_boot_or_global_capture_generation(
 
 
 def test_delayed_old_global_generation_cannot_reopen_after_replacement():
-    from senior_control.vision.raw_capture import RawCaptureAdmission
+    from senior_perception.vision.raw_capture import RawCaptureAdmission
 
     admission = RawCaptureAdmission(max_age_ms=300)
     old = raw_header(bridge_boot_id="boot-a", capture_generation=1)
@@ -165,8 +165,7 @@ def test_capture_header_decoding_preserves_original_metadata_and_rejects_bad_tim
     from types import SimpleNamespace
 
     import pytest
-
-    from senior_control.vision.raw_capture import capture_from_message
+    from senior_perception.vision.raw_capture import capture_from_message
 
     original = raw_header()
     wire = SimpleNamespace(
@@ -192,7 +191,7 @@ def test_capture_header_decoding_preserves_original_metadata_and_rejects_bad_tim
 
 
 def test_group_revokes_all_streams_on_new_generation_and_rejects_old_packets():
-    from senior_control.vision.raw_capture import RawCaptureGroup
+    from senior_perception.vision.raw_capture import RawCaptureGroup
 
     group = RawCaptureGroup(("depth", "info"), max_age_ms=300)
     depth = raw_header(source_epoch="depth", bridge_gid="02" * 24)
@@ -215,7 +214,7 @@ def test_group_revokes_all_streams_on_new_generation_and_rejects_old_packets():
 
 
 def test_group_rejects_same_stamp_from_different_bridge_boots():
-    from senior_control.vision.raw_capture import RawCaptureGroup
+    from senior_perception.vision.raw_capture import RawCaptureGroup
 
     group = RawCaptureGroup(("depth", "info"), max_age_ms=300)
     first = raw_header(source_epoch="depth")
@@ -227,7 +226,7 @@ def test_group_rejects_same_stamp_from_different_bridge_boots():
 
 
 def test_group_recovers_bridge_restart_without_reviving_retired_boot():
-    from senior_control.vision.raw_capture import RawCaptureGroup
+    from senior_perception.vision.raw_capture import RawCaptureGroup
 
     group = RawCaptureGroup(("depth", "info"), max_age_ms=300)
     first = raw_header(source_epoch="depth")
@@ -247,7 +246,7 @@ def test_group_recovers_bridge_restart_without_reviving_retired_boot():
 
 
 def test_group_graph_loss_revokes_all_without_waiting_for_another_message():
-    from senior_control.vision.raw_capture import RawCaptureGroup
+    from senior_perception.vision.raw_capture import RawCaptureGroup
 
     group = RawCaptureGroup(("depth", "info"), max_age_ms=300)
     depth = raw_header(source_epoch="depth")
@@ -263,8 +262,7 @@ def test_group_graph_loss_revokes_all_without_waiting_for_another_message():
 
 def test_legacy_receipt_age_override_cannot_extend_shared_one_second_policy():
     import pytest
-
-    from senior_control.vision.raw_capture import RawCaptureAdmission
+    from senior_perception.vision.raw_capture import RawCaptureAdmission
 
     with pytest.raises(ValueError):
         RawCaptureAdmission(max_age_ms=3000)

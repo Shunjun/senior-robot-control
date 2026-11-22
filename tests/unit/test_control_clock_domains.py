@@ -8,13 +8,13 @@ and observable clock generations fence replacement; receipt rates are not inferr
 from dataclasses import replace
 
 import pytest
+from senior_motion_estimation.estimator import MotionEstimation, MotionObservation, Origin
+from senior_motion_estimation.kinematics import compose, exponential
+from senior_motion_estimation.pose_estimator import PoseEstimation, PoseObservation
 from sensor_time_test_support import sample_time
 
-from senior_control.models import Pose2D
-from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
-from senior_control.motion.kinematics import compose, exponential
-from senior_control.motion.pose_estimator import PoseEstimation, PoseObservation
-from senior_control.sensors.sample_time import StampInterval
+from vehicle_core.sample_time import StampInterval
+from vehicle_core.values import Pose2D
 
 
 def observation(

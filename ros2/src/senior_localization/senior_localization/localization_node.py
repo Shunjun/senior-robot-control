@@ -6,11 +6,11 @@ into the adapter; this process does not read a GPS device and does not sleep.
 
 from senior_mapping.archive import Georeference
 
-from senior_control.clock import Clock, SystemClock
-from senior_control.models import MapRef
 from senior_localization.geo import GeoAlignment, PositionEstimate, QualifiedFix
 from senior_localization.heading import HeadingObservation, HeadingObserver, MotionSample
 from senior_localization.relocalization import Relocalizer
+from vehicle_core.clock import Clock, SystemClock
+from vehicle_core.values import MapRef
 
 
 class LocalizationAdapter:

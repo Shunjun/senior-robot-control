@@ -3,8 +3,8 @@
 import json
 
 import pytest
+from senior_contracts.wire import validate_frame
 
-from senior_control.protocol import validate_frame
 from tools.vehicle_motion_capture import TOPICS, ros_sample
 
 

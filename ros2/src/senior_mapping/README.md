@@ -185,7 +185,7 @@ pytest使用原主仓库.venv/bin/python；以下原生输出与数据均在/tmp
 - 35个移动文件和6个接口逐字节核对，完整原生target/探针参数/timeout注册核对、包依赖无环、无bridge反向运行依赖、launch仅owner/说明变化：通过；只证明源码和声明。
 - 定向ruff check/format、按原CRLF的 `git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check`：通过；作者已审diff，仍待负责人亲审。
 
-未验证：真实Humble隔离prefix的colcon构建/安装、旧类型生成与typesupport导出、私有2.6.10链接、
+未验证：真实Humble隔离prefix的colcon构建/安装、旧类型生成与typesupport导出、私有2.6.8链接、
 Karto单元、10个DDS探针及其全部模式、native receipt/capture/TF/子进程链、Linux和实车/仿真运行。
 推荐对应环境用全新独立prefix构建bridge→mapping，再执行原CMake/CTest及安装工具，不自动清理已有安装树，
 以免旧lib/senior_slam_bridge残留程序被误判为兼容入口。

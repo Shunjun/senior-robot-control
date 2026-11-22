@@ -1,12 +1,11 @@
 from types import SimpleNamespace as NS
 
+from senior_perception.vision.raw_capture import RawCaptureHeader
+from senior_perception.vision.rgbd_candidate_codec import fill_candidate
+from senior_perception.vision.rgbd_frame_builder import CameraInfoSnapshot, ImageLayoutSnapshot
+from senior_perception.vision.rgbd_spawn_worker import CompactResult
+from senior_perception.vision.static_tf_binding import Edge, Receipt
 from sensor_time_test_support import sample_time
-
-from senior_control.vision.raw_capture import RawCaptureHeader
-from senior_control.vision.rgbd_candidate_codec import fill_candidate
-from senior_control.vision.rgbd_frame_builder import CameraInfoSnapshot, ImageLayoutSnapshot
-from senior_control.vision.rgbd_spawn_worker import CompactResult
-from senior_control.vision.static_tf_binding import Edge, Receipt
 
 
 def stamp():
@@ -149,8 +148,9 @@ def test_candidate_with_missing_original_metadata_is_not_serialized_as_valid():
 def test_original_source_nanoseconds_survive_python_ros_copy_after_a_long_boot():
     from types import SimpleNamespace
 
-    from senior_control.sensors.sample_time import SampleTime
-    from senior_control.vision.rgbd_candidate_codec import _header
+    from senior_perception.vision.rgbd_candidate_codec import _header
+
+    from vehicle_core.sample_time import SampleTime
 
     exact = 10_000_000_000_000_001
     time = SampleTime(100, 102, exact + 2, exact, 7)

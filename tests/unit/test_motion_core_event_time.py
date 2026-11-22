@@ -4,11 +4,10 @@ import json
 from dataclasses import replace
 
 import pytest
+from senior_motion_control.contracts import MotionEventKind as K
 from test_motion_core_exit_deadline import delayed_decision, start
 from test_motion_core_stop_fallback import rig as stop_rig
 from test_motion_core_stop_fallback import stage
-
-from senior_control.motion.contracts import MotionEventKind as K
 
 
 @pytest.fixture

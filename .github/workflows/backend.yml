@@ -18,7 +18,7 @@ jobs:
       - run: bash -n bin/senior-robot.sh
       - run: uv run --no-sync ruff check .
       - run: uv run --no-sync ruff format --check .
-      - run: uv run --no-sync mypy src/senior_control senior_control/src/vehicle_manager cloud/src/cloud
+      - run: uv run --no-sync mypy vehicle_core senior_control/src/vehicle_manager cloud/src/cloud
       - run: uv run --no-sync pytest ros2/tests/test_navigation.py ros2/tests/test_navigation_collision_qualification.py senior_control/tests cloud/tests tests/unit tests/integration ros2/src/senior_mapping/test ros2/tests/test_map_operations.py ros2/src/senior_localization/test ros2/tests/test_navigation_reference.py ros2/tests/test_mapping.py ros2/tests/test_relocalization.py ros2/tests/test_motion_ros_twist_output.py ros2/tests/test_startup_visibility.py ros2/tests/test_terminal_release_wire.py ros2/tests/test_motion_guard_to_owner.py ros2/tests/test_motion_cli_lifecycle.py ros2/tests/test_control_cadence_gate.py ros2/tests/test_terminal_native_channel.py ros2/tests/test_launch_recovery.py ros2/tests/test_navigation_command_clock.py ros2/tests/test_manual_command_generation.py ros2/tests/test_terminal_release_collection.py ros2/src/senior_motion_estimation/test ros2/tests/test_native_motion_observation_adapter.py ros2/tests/test_control_process_resources.py ros2/tests/test_laser_reference_publication.py ros2/src/senior_perception/test ros2/tests/test_motion_core_perception.py ros2/tests/test_scan_gap_compensation.py ros2/tests/test_startup_learning_chain.py
       - run: uv build --out-dir dist
       - run: uv build ros2/src/senior_navigation --out-dir dist
@@ -36,8 +36,8 @@ jobs:
           /tmp/wheel-test/bin/pip install dist/*.whl
           install -m 0755 bin/senior-robot.sh /tmp/wheel-test/bin/senior-robot
           cd /tmp
-          /tmp/wheel-test/bin/python -c 'import senior_control.protocol, senior_control.config, senior_motion_control.state_machine; import importlib.util; assert importlib.util.find_spec("shapely") is None'
-          /tmp/wheel-test/bin/python -c 'import cloud.app, senior_control.cloud.app; from cloud.snapshots import SnapshotCache; from senior_control.cloud.snapshots import SnapshotCache as Old; assert Old is SnapshotCache'
+          /tmp/wheel-test/bin/python -c 'import senior_contracts.wire, vehicle_core.config, senior_motion_control.state_machine; import importlib.util; assert importlib.util.find_spec("shapely") is None'
+          /tmp/wheel-test/bin/python -c 'import cloud.application; import importlib.util; assert importlib.util.find_spec("senior_control") is None'
           /tmp/wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py"
           /tmp/wheel-test/bin/pip install 'senior-control[safety]==0.1.0'
           /tmp/wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --real-preflight-only
@@ -45,9 +45,11 @@ jobs:
         run: |
           uv export --frozen --extra agent --no-hashes --no-emit-local > /tmp/manager-agent-constraints.txt
           python -m venv /tmp/manager-base-wheel-test
-          /tmp/manager-base-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt dist/vehicle_manager-*.whl dist/senior_contracts-*.whl
+          /tmp/manager-base-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt dist/vehicle_manager-*.whl dist/senior_control-*.whl dist/senior_contracts-*.whl
           python -m venv /tmp/manager-agent-wheel-test
-          /tmp/manager-agent-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt 'dist/vehicle_manager-0.1.0-py3-none-any.whl[agent]' dist/senior_contracts-*.whl
+          /tmp/manager-agent-wheel-test/bin/pip install -c /tmp/manager-agent-constraints.txt 'dist/vehicle_manager-0.1.0-py3-none-any.whl[agent]' dist/senior_control-*.whl dist/senior_contracts-*.whl
+          /tmp/manager-base-wheel-test/bin/pip check
+          /tmp/manager-agent-wheel-test/bin/pip check
           cd /tmp
           /tmp/manager-base-wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --manager-tasks-only
           /tmp/manager-agent-wheel-test/bin/python "$GITHUB_WORKSPACE/tools/verify_batch_one_install.py" --manager-agent-only

@@ -7,13 +7,6 @@ stopping envelope or a truth bound.
 
 from dataclasses import asdict, dataclass, replace
 
-from senior_control.models import Pose2D, Velocity
-from senior_control.motion.controller import Feedback
-from senior_control.motion.kinematics import body_delta, logarithm
-from senior_control.motion.source_modes import SourceMode
-from senior_control.motion.stillness import stationary
-from senior_control.runtime.diagnostics import QueueSnapshot, RuntimeDiagnostics
-from senior_control.sensors.sample_time import SampleTime, interval_ns
 from senior_motion_estimation.estimator import (
     MotionEstimate,
     MotionEstimation,
@@ -21,9 +14,16 @@ from senior_motion_estimation.estimator import (
     Origin,
     origin_key,
 )
+from senior_motion_estimation.feedback import Feedback
+from senior_motion_estimation.kinematics import body_delta, logarithm
 from senior_motion_estimation.observations import Frame, Source, SourceStatus
 from senior_motion_estimation.pose_estimator import PoseEstimation, PoseObservation
 from senior_motion_estimation.sample_types import DeltaObservation, MotionSample, PointObservation
+from senior_motion_estimation.source_modes import SourceMode
+from senior_motion_estimation.stillness import stationary
+from vehicle_core.diagnostics import QueueSnapshot, RuntimeDiagnostics
+from vehicle_core.sample_time import SampleTime, interval_ns
+from vehicle_core.values import Pose2D, Velocity
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,7 @@ class MotionSensorRuntime:
         self.diagnostics = diagnostics
         a = profile.acceleration_model().upper
         self.estimator = MotionEstimation(acceleration=(a.vx, a.vx, a.wz))
-        from senior_control.localization.gps_course import GPSCourseObserver
+        from senior_motion_estimation.gps_course import GPSCourseObserver
 
         self.gps_course = GPSCourseObserver()
         self.gps_heading = None
@@ -396,7 +396,7 @@ class MotionSensorRuntime:
         wheel, imu = self.raw_feedback("wheel", now), self.raw_feedback("imu", now)
         if wheel is None or imu is None:
             return None
-        from senior_control.motion.state_machine import RecoveryObservation
+        from senior_motion_control.state_machine import RecoveryObservation
 
         return RecoveryObservation(
             wheel.epoch + "|" + imu.epoch,

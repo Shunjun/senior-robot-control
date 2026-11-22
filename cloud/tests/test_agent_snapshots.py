@@ -8,15 +8,11 @@ from typing import Any
 import pytest
 from agent_fakes import MAP, ROBOT, simple
 from cloud.limits import CloudLimits
+from cloud.relay import CLOSE_BAD_FRAME, CLOSE_POLICY, Connection
+from cloud.runtime_relay import Hub
 from cloud.snapshots import SnapshotCache
-
-from senior_control.agent.snapshots import (
-    HomeSummary,
-    RobotSnapshot,
-    snapshot_envelope,
-)
-from senior_control.cloud.relay import CLOSE_BAD_FRAME, CLOSE_POLICY, Connection, Hub
-from senior_control.protocol import SnapshotEnvelope, serialize_envelope, validate_frame
+from senior_contracts.wire import SnapshotEnvelope, serialize_envelope, validate_frame
+from vehicle_manager.agent.snapshots import HomeSummary, RobotSnapshot, snapshot_envelope
 
 SNAPSHOT = RobotSnapshot(
     robot_id=ROBOT,

@@ -49,7 +49,7 @@ def replay(monkeypatch):
     [(150_000_000, True), (300_000_000, True), (999_999_999, True), (1_000_000_000, False)],
 )
 def test_raw_original_nanosecond_boundary_is_shared_one_second(replay, age_ns, allowed):
-    from senior_control.motion.estimator import MotionEstimation, MotionObservation, Origin
+    from senior_motion_estimation.estimator import MotionEstimation, MotionObservation, Origin
 
     replay.core.node._reception_test.sensors.estimator = MotionEstimation()
     replay.core.node._reception_test.sensors.estimator.ingest(

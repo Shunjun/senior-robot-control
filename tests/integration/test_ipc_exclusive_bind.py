@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 
 import pytest
 
-from senior_control.runtime.ipc import IpcClient, IpcServer
+from vehicle_core.ipc import IpcClient, IpcServer
 
 
 async def answer(_message):
@@ -53,7 +53,7 @@ async def test_exclusive_bind_preserves_path_replaced_after_preflight(replacemen
 
 
 async def test_exclusive_bind_preserves_socket_inserted_at_bind_boundary(monkeypatch):
-    from senior_control.runtime import ipc
+    from vehicle_core import ipc
 
     with TemporaryDirectory(prefix="sr-exclusive-", dir="/tmp") as directory:
         path = Path(directory) / "adapter.sock"

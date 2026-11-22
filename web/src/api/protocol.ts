@@ -98,6 +98,7 @@ export const SNAPSHOT_FIELDS = [
   "tasks",
   "home_revision",
   "map_generation",
+  "map_grid_id",
   "route_progress",
   "navigation_ready",
   "robot_pose",
@@ -216,6 +217,8 @@ export interface SnapshotPayload {
   home_revision: number;
   //Compatible: legacy snapshots omit the live reference generation.
   map_generation?: string;
+  //Compatible: legacy snapshots use map_generation for both reference and raster.
+  map_grid_id?: string;
   route_progress?: RouteProgress;
   navigation_ready?: boolean;
   //Compatible: older snapshots omit live map telemetry.
@@ -377,6 +380,8 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   const navigationReady = value["navigation_ready"];
   if (navigationReady !== undefined && typeof navigationReady !== "boolean") return null;
   const mapGeneration = value["map_generation"];
+  const mapGridId = value["map_grid_id"];
+  if (mapGridId !== undefined && !isText(mapGridId, 128)) return null;
   const route = value["route_progress"] === undefined ? undefined :
     parseRouteProgress(value["route_progress"]);
   if (route === null) return null;
@@ -392,6 +397,7 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   return {
     ...(vehicle === undefined ? {} : { vehicle_ui: vehicle }),
     ...(mapGeneration === undefined ? {} : { map_generation: mapGeneration }),
+    ...(mapGridId === undefined ? {} : { map_grid_id: mapGridId }),
     ...(navigationReady === undefined ? {} : { navigation_ready: navigationReady }),
     ...(route === undefined || route.map_generation !== mapGeneration ? {} : { route_progress: route }),
     connected: value["connected"],

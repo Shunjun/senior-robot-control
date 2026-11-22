@@ -7,26 +7,25 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
-
-from senior_control.errors import DomainError, ErrorCode
-from senior_control.mapping.store import MapReferenceStore
-from senior_control.models import MapRef
-from senior_control.storage.database import Database
-from senior_control.storage.migrations import migrate
-from senior_control.storage.schema import DOMAIN_MIGRATIONS
-from senior_control.tasks.executor import ProcessCrash
-from senior_control.tasks.executor import TaskExecutor as CoreTaskExecutor
-from senior_control.tasks.models import (
+from senior_mapping.store import MapReferenceStore
+from vehicle_manager.storage.bindings import Database
+from vehicle_manager.storage.domain_bindings import DOMAIN_MIGRATIONS, TaskStore
+from vehicle_manager.storage.migrations import migrate
+from vehicle_manager.tasks.execution_bindings import TaskExecutor as CoreTaskExecutor
+from vehicle_manager.tasks.executor import ProcessCrash
+from vehicle_manager.tasks.models import (
     ExecutionContext,
     ExecutionStatus,
     IntentAction,
     TaskDefinition,
     TaskIntent,
 )
-from senior_control.tasks.runner import TaskRunner
-from senior_control.tasks.runtime import TaskRuntime as CoreTaskRuntime
-from senior_control.tasks.schedule import Schedule
-from senior_control.tasks.store import TaskStore
+from vehicle_manager.tasks.runner import TaskRunner
+from vehicle_manager.tasks.runtime import TaskRuntime as CoreTaskRuntime
+from vehicle_manager.tasks.schedule import Schedule
+
+from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import MapRef
 
 MAP = MapRef("yard", 3)
 
@@ -829,7 +828,7 @@ async def test_failed_start_with_unknown_cancel_remains_pending_until_confirmed(
 
 
 async def test_scan_queries_use_indexes_for_existing_database(tmp_path: Path) -> None:
-    from senior_control.tasks.store import ACTIVE_SCAN_SQL, WINDOW_SCAN_SQL
+    from vehicle_manager.tasks.store import ACTIVE_SCAN_SQL, WINDOW_SCAN_SQL
 
     path = tmp_path / "robot.db"
     async with Database(path) as database:
@@ -1010,7 +1009,7 @@ async def test_claim_rejects_stale_or_unavailable_definition(tmp_path: Path, cha
 async def test_runtime_schema_upgrade_preserves_legacy_continuity_and_safety(
     tmp_path: Path,
 ) -> None:
-    from senior_control.agent.journal import AgentJournal
+    from vehicle_manager.agent.production_bindings import AgentJournal
 
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
     path = tmp_path / "robot.db"
@@ -1073,7 +1072,7 @@ async def test_unknown_runtime_schema_version_refuses_open(tmp_path: Path) -> No
 async def test_domain_versions_upgrade_without_touching_agent_safety(
     tmp_path: Path, version: int
 ) -> None:
-    from senior_control.agent.journal import AgentJournal
+    from vehicle_manager.agent.production_bindings import AgentJournal
 
     async with Database(tmp_path / "legacy.db") as database:
         await migrate(database, list(DOMAIN_MIGRATIONS[:version]))
@@ -1094,9 +1093,9 @@ async def test_domain_versions_upgrade_without_touching_agent_safety(
 
 
 async def test_core_migration_failure_rolls_back_and_preserves_safety(tmp_path: Path) -> None:
-    from senior_control.agent.journal import AgentJournal
-    from senior_control.storage.core_schema import CORE_MIGRATIONS, migrate_core
-    from senior_control.storage.migrations import Migration
+    from vehicle_manager.agent.production_bindings import AgentJournal
+    from vehicle_manager.storage.core_schema import CORE_MIGRATIONS, migrate_core
+    from vehicle_manager.storage.migrations import Migration
 
     async with Database(tmp_path / "robot.db") as database:
         await TaskStore(database, robot_id="robot-a").prepare()
@@ -1235,9 +1234,10 @@ async def test_task_map_switch_during_start_requires_cancellation(tmp_path: Path
 async def test_task_reference_qualification_survives_new_anchor_but_not_moved_anchor(
     tmp_path: Path,
 ) -> None:
-    from senior_control.mapping.evidence import CellEvidence
-    from senior_control.mapping.references import AnchorPose, AnchorSnapshot, GridExtent
-    from senior_control.models import Pose2D
+    from senior_mapping.evidence import CellEvidence
+    from senior_mapping.references import AnchorPose, AnchorSnapshot, GridExtent
+
+    from vehicle_core.values import Pose2D
 
     created = datetime(2026, 10, 27, tzinfo=timezone.utc)
     due = created + timedelta(minutes=30)
@@ -1321,9 +1321,9 @@ async def test_task_dispatch_rejects_stale_or_missing_localization_nonce(tmp_pat
 
 
 async def test_legacy_ipc_state_does_not_claim_tasks_are_runnable(tmp_path: Path) -> None:
-    from senior_control.agent.composition import SnapshotState
-    from senior_control.agent.ports import RuntimeState
-    from senior_control.waypoints.store import WaypointStore
+    from vehicle_manager.agent.local_state import RuntimeState
+    from vehicle_manager.agent.production import SnapshotState
+    from vehicle_manager.storage.domain_bindings import WaypointStore
 
     class LegacyState:
         async def read(self) -> RuntimeState:
@@ -1915,7 +1915,7 @@ async def test_cancelling_prior_execution_does_not_dispatch_same_tick(tmp_path: 
 
 
 async def test_runtime_persists_confirmed_route_completion(tmp_path: Path) -> None:
-    from senior_control.navigation import RouteProgress
+    from senior_navigation.route import RouteProgress
 
     created = datetime(2026, 10, 27, 10, 17, 42, tzinfo=timezone.utc)
     occurrence = created + timedelta(minutes=30)

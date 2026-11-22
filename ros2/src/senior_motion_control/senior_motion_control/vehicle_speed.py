@@ -1,8 +1,8 @@
-"""Existing braking and ramp algorithm, unchanged in phase one."""
+"""Directional braking limits, linear ramps and direct angular commands."""
 
 import math
 
-from senior_control.models import Velocity
+from vehicle_core.values import Velocity
 
 
 def _approach(current, target, rate, dt):
@@ -45,10 +45,9 @@ def limit_velocity(requested, previous, measured_linear, clearance, profile, dt)
     vx = math.copysign(min(abs(vx), actual_cap), vx)
     if linear == 0:
         vx = 0.0
-    elif abs(vx) < abs(linear):
-        yaw *= abs(vx / linear)
-    yaw_braking = previous.wz * yaw < 0 or abs(yaw) < abs(previous.wz)
-    wz = _approach(previous.wz, yaw, profile.yaw_decel if yaw_braking else profile.yaw_accel, dt)
+    # Angular intent is applied immediately within yaw_cap; it is independent
+    # of the linear acceleration ramp. Keep the existing blocked-motion rule.
+    wz = yaw
     if linear != 0 and vx == 0:
         wz = 0.0
     return Velocity(vx, wz)

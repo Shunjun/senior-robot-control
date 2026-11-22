@@ -4,8 +4,7 @@ import httpx
 import pytest
 from test_cloud import Cloud
 from test_cloud import cloud as cloud
-
-from senior_control.agent.pairing import pair_device, read_credentials
+from vehicle_manager.agent.pairing import pair_device, read_credentials
 
 
 async def test_pair_api_writes_private_credentials_once(cloud: Cloud, tmp_path: Path) -> None:

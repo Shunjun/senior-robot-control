@@ -40,7 +40,7 @@ def fenced_scan_fixture(monkeypatch):
     from rclpy.time import Time
     from senior_motion_msgs.msg import FencedSafetyScan
 
-    from senior_control.sensors.sample_time import map_sample
+    from vehicle_core.sample_time import map_sample
 
     def wrap(gate, body):
         monkeypatch.setattr(gate, "_scan_topology_ready", lambda: True)

@@ -12,13 +12,13 @@ from senior_perception.collision import CollisionPrediction
 from senior_perception.learning_runtime import LearningControlInput, LearningPorts, LearningRuntime
 from senior_perception.scan_access import SensorAccess
 
-from senior_control.models import Velocity
-from senior_control.motion.contracts import MotionMode
-from senior_control.runtime.diagnostics import configure_diagnostics
 from senior_motion_control.vehicle_arbitration import ArbitrationPorts, CommandArbitration
 from senior_motion_control.vehicle_capabilities import VehicleCapabilities
 from senior_motion_control.vehicle_diagnostics import CoreDiagnostics
 from senior_motion_control.vehicle_speed import SpeedCalculation
+from vehicle_core.diagnostics import configure_diagnostics
+from vehicle_core.motion_state import MotionMode
+from vehicle_core.values import Velocity
 
 _OUTPUT_BUDGET_S = 0.25
 

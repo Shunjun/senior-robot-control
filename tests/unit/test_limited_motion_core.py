@@ -7,15 +7,15 @@ from dataclasses import replace
 import pytest
 import test_motion_core_handoff as handoff
 from control_process_test_support import capture_inputs
+from senior_motion_control.contracts import MotionEventKind as K
+from senior_motion_control.contracts import MotionTarget
+from senior_motion_control.state_machine import RecoveryObservation
+from senior_motion_control.trajectory import Trajectory
 from sensor_time_test_support import sample_time
 from test_directional_constraints import scene
 from test_motion_core_handoff import barrier
 
-from senior_control.models import Pose2D, Velocity
-from senior_control.motion.contracts import MotionEventKind as K
-from senior_control.motion.contracts import MotionTarget
-from senior_control.motion.state_machine import RecoveryObservation
-from senior_control.motion.trajectory import Trajectory
+from vehicle_core.values import Pose2D, Velocity
 
 
 @pytest.fixture
@@ -157,7 +157,7 @@ def test_first_motion_rechecks_evidence_after_neutral(core, monkeypatch, change)
     if change == "expire":
         clock[0] += 1.0
     else:
-        from senior_control.motion.estimator import MotionObservation, Origin
+        from senior_motion_estimation.estimator import MotionObservation, Origin
 
         now = clock[0]
         core.sensors.ingest_observation(

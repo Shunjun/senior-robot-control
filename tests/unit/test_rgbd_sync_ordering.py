@@ -3,9 +3,10 @@
 from types import SimpleNamespace as N
 
 import pytest
+from senior_perception.vision.synchronizer import DepthFrame, RgbdSynchronizer
 
-from senior_control.runtime.diagnostics import RuntimeDiagnostics
-from senior_control.vision.synchronizer import DepthFrame, ImageFrame, RgbdSynchronizer
+from vehicle_core.diagnostics import RuntimeDiagnostics
+from vehicle_core.image_frame import ImageFrame
 
 
 def rgb(stamp):
@@ -34,7 +35,7 @@ def test_out_of_order_consumes_match_and_older_but_preserves_newer(rgb_first):
 
 
 def test_queue_depth_wait_and_drops_survive_arbitrary_index_consumption(monkeypatch):
-    import senior_control.runtime.diagnostics as module
+    import vehicle_core.diagnostics as module
 
     clock = [0.0]
     d = RuntimeDiagnostics(lambda *_: None)
@@ -55,7 +56,7 @@ def test_queue_depth_wait_and_drops_survive_arbitrary_index_consumption(monkeypa
 
 
 def test_reoffered_same_object_is_consumed_once_and_duplicate_slot_is_dropped(monkeypatch):
-    import senior_control.runtime.diagnostics as module
+    import vehicle_core.diagnostics as module
 
     d = RuntimeDiagnostics(lambda *_: None)
     monkeypatch.setattr(module, "process_diagnostics", lambda: d)
@@ -72,7 +73,7 @@ def test_reoffered_same_object_is_consumed_once_and_duplicate_slot_is_dropped(mo
 
 
 def test_unusable_nan_slot_is_not_retained_as_newer_than_the_match(monkeypatch):
-    import senior_control.runtime.diagnostics as module
+    import vehicle_core.diagnostics as module
 
     d = RuntimeDiagnostics(lambda *_: None)
     monkeypatch.setattr(module, "process_diagnostics", lambda: d)

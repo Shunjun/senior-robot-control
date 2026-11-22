@@ -12,12 +12,12 @@ from senior_motion_estimation.observations import (
     SourceStatus,
 )
 from senior_motion_estimation.source_admission import AdmissionOwner
+from senior_motion_estimation.source_modes import SourceMode
 from sensor_time_test_support import sample_time
 from test_motion_sources import config, sample
 from test_motion_temporal import feed, owner, point, resolver
 
-from senior_control.models import Pose2D
-from senior_control.motion.source_modes import SourceMode
+from vehicle_core.values import Pose2D
 
 
 def test_ci_correlated_and_different_values_without_reciprocal_overflow():
@@ -347,9 +347,8 @@ def test_wheel_fallback_after_x_conflict_does_not_regain_normal_cap_from_healthy
 
 
 def test_delta_log_translation_does_not_claim_independence_from_disputed_laser_yaw():
+    from senior_motion_estimation.kinematics import exponential
     from senior_motion_estimation.sample_types import DeltaObservation
-
-    from senior_control.motion.kinematics import exponential
 
     _, _, original, _ = synthetic_window()
     o, r = owner(), resolver()

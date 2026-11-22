@@ -5,13 +5,13 @@ from dataclasses import replace
 from functools import partial
 
 import pytest
+from senior_motion_control.constraints import NoReturnPolicy
+from senior_perception.self_filter import filter_self
 from senior_robot.motion_core_perception import ScanGeometry, prepare_scan_geometry
 from test_directional_constraints import engine, snapshot
 from test_motion_core_perception import observation
 
-from senior_control.config import DeviceProfile
-from senior_control.motion.constraints import NoReturnPolicy
-from senior_control.safety.self_filter import filter_self
+from vehicle_core.config import DeviceProfile
 
 
 class ScheduledWorker:

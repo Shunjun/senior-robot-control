@@ -7,10 +7,10 @@ import os
 import socket
 import struct
 from collections import deque
+from collections.abc import Iterable
 from pathlib import Path
 
-from senior_control.motion.navigation_clock import monotonic_domain
-from senior_perception.learning_compute import ComputeBatch, LearningCompute
+from senior_perception.learning_compute import ComputeRequest, LearningCompute
 from senior_perception.learning_owner import LearningRecordOwner
 from senior_perception.learning_record import MAX_RECORD_BYTES, CaptureSummary, attempt_identity
 from senior_perception.learning_wire import (
@@ -33,13 +33,43 @@ from senior_perception.learning_wire import (
     SessionRequest,
     State,
 )
+from senior_perception.self_learning import LEARNING_SAMPLE_COUNT
+from vehicle_core.navigation_clock import monotonic_domain
 
-_LOG = logging.getLogger("senior_control.runtime.learning_service")  # //Compatible: log filters.
+_LOG = logging.getLogger("senior_perception.learning_service")  # //Compatible: log filters.
 
 
 def address(run_id: str) -> str:
     # Abstract Linux socket avoids root-path length limits and stale socket files.
     return "\0senior-learning-" + run_id
+
+
+def select_motion_frames(
+    frames: Iterable[RecordedFrame], start_ns: int, end_ns: int
+) -> tuple[RecordedFrame, ...]:
+    """Select distinct temporal quartiles, preserving original acquisition order."""
+    motion = tuple(
+        frame for frame in frames if start_ns <= frame.capture.time.sample_steady_ns < end_ns
+    )
+    if len(motion) < LEARNING_SAMPLE_COUNT:
+        raise ValueError("learning_samples_insufficient")
+    first = motion[0].capture.time.sample_steady_ns
+    span = motion[-1].capture.time.sample_steady_ns - first
+    selected, previous = [motion[0]], 0
+    for slot in range(1, LEARNING_SAMPLE_COUNT - 1):
+        # Integer comparisons keep nanosecond sample identities exact. Leave
+        # enough later acquisitions for the remaining distinct sample slots.
+        stop = len(motion) - (LEARNING_SAMPLE_COUNT - slot - 1)
+        index = min(
+            range(previous + 1, stop),
+            key=lambda i: abs(
+                (motion[i].capture.time.sample_steady_ns - first) * (LEARNING_SAMPLE_COUNT - 1)
+                - span * slot
+            ),
+        )
+        selected.append(motion[index])
+        previous = index
+    return (*selected, motion[-1])
 
 
 class LearningService:
@@ -53,24 +83,19 @@ class LearningService:
         self._peer_sequence = 0
         self.compute: LearningCompute | None = None
         self.proposal: BeginAttempt | None = None
-        self._reset_stream()
+        self._reset_capture()
 
-    def _reset_stream(self) -> None:
+    def _reset_capture(self) -> None:
         self.frames: deque[RecordedFrame] = deque()
-        self.stream_id = None
-        self.through_index = 0
         self.ingress_through = 0
         self.motion_through = 0
-        self._stationarity: deque[tuple[int, bool]] = deque()
+        self._stationary = False
         self.first_takeover = None
         self.validation_after = None
-        self.gap = False
         self.accepted_frames = 0
         self._frame_origin = None
         self._last_measurement = None
-        self._capture_keys: deque[tuple[str, str, int]] = deque(maxlen=128)
-        self._validation: list[RecordedFrame] = []
-        self._finish_sent = False
+        self._compute_submitted = False
         self._pending_failure = None
 
     def _accept_frames(self, batch: FrameBatch) -> None:
@@ -78,106 +103,96 @@ class LearningService:
         owner, record = self.owner, self.owner.record
         if batch.attempt_id != record.attempt_id:
             return
-        if self.stream_id is None:
-            self.stream_id = batch.stream_id
-            self.through_index = batch.after_index
-        if self.stream_id != batch.stream_id:
-            # A replacement receiver cannot close the old recording stream. Its
-            # causal retirement settles earlier accepted old-stream packets first.
+        if record.capture_summary.state != "open" or record.phase in {
+            "completed",
+            "failed",
+            "unconfirmed",
+        }:
             return
-        self.gap |= batch.gap
         for frame in batch.frames:
-            if frame.index <= self.through_index:
-                continue
-            if frame.index != self.through_index + 1:
-                self.gap = True
-            self.through_index = frame.index
-            if (
-                record.capture_summary.state != "open"
-                or frame.recorded_steady_ns < record.created_steady_ns
-            ):
+            if frame.recorded_steady_ns < record.created_steady_ns:
                 continue
             capture = frame.capture
-            key = capture.bridge_boot_id, capture.source_epoch, capture.sequence
-            origin = capture.bridge_boot_id, capture.source_epoch, capture.time.clock_generation
-            if key in self._capture_keys:
-                continue
+            origin = (
+                capture.bridge_boot_id,
+                capture.source_epoch,
+                capture.raw_gid,
+                capture.capture_generation,
+                capture.time.clock_generation,
+            )
             if self._frame_origin is not None and origin != self._frame_origin:
-                self.gap = True
+                self._fail_capture("learning_source_changed")
+                return
             self._frame_origin = origin
-            measurement = capture.time.stamp_ns, capture.time.sample_steady_ns
+            measurement = capture.stamp_ns, capture.time.sample_steady_ns, capture.sequence
             if self._last_measurement is not None:
                 if measurement[0] == self._last_measurement[0]:
-                    continue  # One physical capture cannot become five preparation records.
-                if (
-                    measurement[0] < self._last_measurement[0]
-                    or measurement[1] < self._last_measurement[1]
-                ):
-                    self.gap = True
+                    continue  # A duplicate acquisition cannot supply another sample.
+                if any(b < a for a, b in zip(self._last_measurement, measurement, strict=True)):
+                    self._fail_capture("learning_capture_clock_regressed")
+                    return
             self._last_measurement = measurement
-            self._capture_keys.append(key)
             if record.geometry is None:
                 owner._revise(geometry=frame.geometry)
                 record = owner.record
             elif not record.geometry.same_structure(frame.geometry):
-                self.gap = True
+                self._fail_capture("learning_geometry_changed")
+                return
             if len(self.frames) >= 128:
-                self.gap = True
-            else:
-                self.frames.append(frame)
-                self.accepted_frames += 1
+                # This is a sampling buffer, not a lossless frame log. Compact
+                # dense data in time order, preserving both temporal endpoints.
+                rows = tuple(self.frames)
+                self.frames = deque(rows[i * (len(rows) - 1) // 63] for i in range(64))
+            self.frames.append(frame)
+            self.accepted_frames += 1
             if not record.action.consumed:
-                while len(self.frames) > 5:
-                    self.frames.popleft()
+                self.frames = deque((frame,))
         self.ingress_through = max(self.ingress_through, batch.through_steady_ns)
         self._advance_capture()
 
     def _advance_capture(self) -> None:
         assert self.owner is not None
         owner, record = self.owner, self.owner.record
-        if record.capture_summary.state != "open":
-            return
-        if self.gap:
-            self._fail_capture("learning_stream_incomplete")
+        if record.capture_summary.state != "open" or record.phase in {
+            "completed",
+            "failed",
+            "unconfirmed",
+        }:
             return
         start, end = record.action.first_submitted_steady_ns, record.action.deadline_steady_ns
-        if start is None or end is None:
-            if self.first_takeover is not None and self.ingress_through >= self.first_takeover:
-                self._fail_capture(self._pending_failure or "control_takeover")
-            return
-        # Classify only by original acquisition time. CPU completion never moves this window.
-        while self.frames and self.frames[0].capture.time.sample_steady_ns < start:
-            self.frames.popleft()
-        if self.validation_after is not None:
-            self._validation = [
+        stopped = self.validation_after
+        if (
+            start is not None
+            and end is not None
+            and stopped is not None
+            and stopped >= end
+            and self._stationary
+            and self.motion_through >= stopped
+            and self.ingress_through >= stopped
+            and (self.first_takeover is None or stopped < self.first_takeover)
+        ):
+            # No extra post-stop frames: only actual motion-window samples are
+            # used. Discard arrivals recorded after takeover, even if acquired earlier.
+            self.frames = deque(
                 frame
                 for frame in self.frames
-                if frame.capture.time.sample_steady_ns >= max(self.validation_after, end)
-                and self._stationary_at(frame.recorded_steady_ns)
+                if start <= frame.capture.time.sample_steady_ns < end
                 and (self.first_takeover is None or frame.recorded_steady_ns < self.first_takeover)
-            ][:5]
-        if len(self._validation) == 5:
-            final = self._validation[-1]
-            if self.motion_through >= final.recorded_steady_ns:
-                owner.capture(
-                    CaptureSummary(
-                        state="complete",
-                        stream_id=self.stream_id,
-                        through_index=self.through_index,
-                        accepted_frames=self.accepted_frames,
-                        validation_after_steady_ns=self.validation_after,
-                        closed_steady_ns=final.recorded_steady_ns,
-                    )
-                )
+            )
+            if len(self.frames) < LEARNING_SAMPLE_COUNT:
+                self._fail_capture("learning_samples_insufficient")
                 return
+            owner.capture(
+                CaptureSummary(
+                    state="complete",
+                    accepted_frames=self.accepted_frames,
+                    validation_after_steady_ns=stopped,
+                    closed_steady_ns=stopped,
+                )
+            )
+            return
         if self.first_takeover is not None and self.ingress_through >= self.first_takeover:
             self._fail_capture(self._pending_failure or "control_takeover")
-
-    def _stationary_at(self, recorded_ns: int) -> bool:
-        for through, stationary in self._stationarity:
-            if through >= recorded_ns:
-                return stationary
-        return False
 
     def _fail_capture(self, reason: str) -> None:
         assert self.owner is not None
@@ -185,8 +200,6 @@ class LearningService:
             reason,
             CaptureSummary(
                 state="incomplete",
-                stream_id=self.stream_id,
-                through_index=self.through_index,
                 accepted_frames=self.accepted_frames,
             ),
         )
@@ -201,7 +214,7 @@ class LearningService:
         if result is not None and result.attempt_id == owner.record.attempt_id:
             if result.error is not None:
                 self._fail_capture(result.error)
-            elif result.finished:
+            else:
                 summary = owner.record.capture_summary.model_copy(update={"compute_complete": True})
                 owner.capture(summary)
                 if result.points is None:
@@ -211,7 +224,7 @@ class LearningService:
                     if owner._session is not None:
                         owner.complete_model(owner._session, result.points)
         record = owner.record
-        if self.compute.flight is not None or self._finish_sent:
+        if self.compute.flight is not None or self._compute_submitted:
             return
         if record.capture_summary.state == "incomplete" or record.phase in {
             "failed",
@@ -222,25 +235,16 @@ class LearningService:
         start, end = record.action.first_submitted_steady_ns, record.action.deadline_steady_ns
         if start is None or end is None or record.geometry is None or record.segment_id is None:
             return
-        batch = []
-        while self.frames and len(batch) < 4:
-            frame = self.frames[0]
-            stamp = frame.capture.time.sample_steady_ns
-            if stamp >= end:
-                break
-            self.frames.popleft()
-            if stamp >= start:
-                batch.append(frame)
-        finish = record.capture_summary.state == "complete" and not any(
-            frame.capture.time.sample_steady_ns < end for frame in self.frames
-        )
-        if batch or finish:
-            self.compute.submit(
-                ComputeBatch(
-                    record.attempt_id, record.segment_id, record.geometry, tuple(batch), finish
-                )
-            )
-            self._finish_sent = finish
+        if record.capture_summary.state != "complete":
+            return  # Motion and capture proceed independently of CPU computation.
+        try:
+            samples = select_motion_frames(self.frames, start, end)
+        except ValueError as exc:
+            self._fail_capture(str(exc))
+            return
+        self.compute.submit(ComputeRequest(record.attempt_id, record.geometry, samples))
+        self.frames.clear()
+        self._compute_submitted = True
 
     async def _lookup(self, attempt_id):
         assert self.owner is not None
@@ -381,16 +385,11 @@ class LearningService:
             if request.attempt_id != owner.record.attempt_id:
                 raise ValueError("learning_attempt_identity")
             if request.through_steady_ns >= self.motion_through:
-                if not owner.record.action.consumed:
-                    self._stationarity.clear()
-                if self._stationarity and self._stationarity[-1][1] == request.stationary:
-                    self._stationarity[-1] = request.through_steady_ns, request.stationary
-                elif len(self._stationarity) < 128:
-                    self._stationarity.append((request.through_steady_ns, request.stationary))
-                else:
-                    self.gap = True
                 self.motion_through = request.through_steady_ns
-            self.gap |= request.gap
+                self._stationary = request.stationary
+            if request.gap:
+                self._fail_capture("learning_motion_facts_incomplete")
+                return Reply(ok=True, recording=False)
             if request.validation_after_steady_ns is not None:
                 self.validation_after = request.validation_after_steady_ns
             if request.first_takeover_ns is not None:
@@ -426,7 +425,7 @@ class LearningService:
                 )
                 attempt = owner.record.attempt_id
                 if state == "accepted" and previous_attempt != attempt:
-                    self._reset_stream()
+                    self._reset_capture()
                     self.proposal = request
             data = dict(start_request_id=request.start_request_id, attempt_id=attempt, state=state)
         elif isinstance(request, AcceptAttempt):
@@ -489,6 +488,8 @@ class LearningService:
             record = None
         return Reply(
             ok=True,
+            recording=owner.record.capture_summary.state == "open"
+            and owner.record.phase not in {"completed", "failed", "unconfirmed"},
             error=owner.error,
             record=record,
             manifest=owner.public_manifest,
@@ -496,7 +497,6 @@ class LearningService:
             active_record=active,
             proposal=self.proposal,
             data=data,
-            through_index=self.through_index,
             accepted_frames=self.accepted_frames,
             session=session,
             revision=revision,

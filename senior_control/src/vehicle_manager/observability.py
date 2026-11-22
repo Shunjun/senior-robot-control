@@ -97,6 +97,18 @@ def _exception_details(error: BaseException) -> list[dict[str, Any]]:
 
 
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9_.:-]{1,128}$")
+APPLICATION_LOG_NAMES = (
+    "vehicle_manager",
+    "vehicle_core",
+    "senior_perception",
+    "senior_motion_control",
+    "senior_motion_estimation",
+    "senior_localization",
+    "senior_mapping",
+    "senior_navigation",
+    "senior_robot",
+    "senior_control",  # Persisted/third-party event sources may retain this logger name.
+)
 
 
 class JsonFormatter(logging.Formatter):
@@ -106,7 +118,8 @@ class JsonFormatter(logging.Formatter):
         event = getattr(record, "event", None)
         diagnostic = (
             _DIAGNOSTICS.get(record.msg)
-            if isinstance(record.msg, str) and record.name.startswith("senior_control.")
+            if isinstance(record.msg, str)
+            and record.name.startswith(tuple(name + "." for name in APPLICATION_LOG_NAMES))
             else None
         )
         data: dict[str, Any] = {
@@ -136,15 +149,18 @@ class JsonFormatter(logging.Formatter):
 
 def configure_logging(stream: TextIO | None = None) -> None:
     """Configure only this application's namespace when starting a process."""
-    parent = logging.getLogger("senior_control")
     handler = logging.StreamHandler(stream)
     handler.setFormatter(JsonFormatter())
-    parent.handlers[:] = [handler]
-    parent.setLevel(logging.INFO)
-    parent.propagate = False
-    parent.disabled = False
+    for name in APPLICATION_LOG_NAMES:
+        parent = logging.getLogger(name)
+        parent.handlers[:] = [handler]
+        parent.setLevel(logging.INFO)
+        parent.propagate = False
+        parent.disabled = False
     for name, child in logging.root.manager.loggerDict.items():
-        if name.startswith("senior_control.") and isinstance(child, logging.Logger):
+        if name.startswith(tuple(prefix + "." for prefix in APPLICATION_LOG_NAMES)) and isinstance(
+            child, logging.Logger
+        ):
             child.handlers.clear()
             child.setLevel(logging.NOTSET)
             child.propagate = True

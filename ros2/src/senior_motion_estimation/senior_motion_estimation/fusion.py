@@ -3,12 +3,10 @@
 import math
 from dataclasses import dataclass
 
-from senior_control.models import BodyTwist
-from senior_control.motion.source_modes import SourceMode
-from senior_control.sensors.sample_time import StampInterval
 from senior_motion_estimation.admission_events import SourceSnapshot
 from senior_motion_estimation.observations import Covariance, Source
 from senior_motion_estimation.sample_types import PointObservation
+from senior_motion_estimation.source_modes import SourceMode
 from senior_motion_estimation.temporal import (
     ComponentKey,
     Key,
@@ -17,6 +15,8 @@ from senior_motion_estimation.temporal import (
     TemporalResolver,
     Values,
 )
+from vehicle_core.sample_time import StampInterval
+from vehicle_core.values import BodyTwist
 
 
 def covariance_intersection(m1: float, p1: float, m2: float, p2: float) -> tuple[float, float]:
