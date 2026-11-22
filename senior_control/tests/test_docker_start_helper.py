@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -128,6 +129,40 @@ def test_adapter_command_sources_runtime_overlay_without_motion_launch(service_r
     assert "robot_id:=robot-a" in command
     assert not (service_root / "estop-state.json").exists()
     assert "launch" not in command
+
+
+def test_motion_launch_uses_project_python_for_env_shebang(service_root):
+    from senior_robot.platform_runtime import _motion_command
+
+    profile = real_profile(service_root)
+    system_bin = service_root / "system-bin"
+    system_bin.mkdir()
+    system_python = system_bin / "python3"
+    system_python.write_text("#!/bin/sh\nexit 73\n")
+    system_python.chmod(0o700)
+    profile.ros_setup.write_text(f'export PATH="{system_bin}:$PATH"\n')
+
+    ros2cli = service_root / "ros2cli"
+    ros2cli.mkdir()
+    (ros2cli / "__init__.py").touch()
+    (ros2cli / "cli.py").write_text(
+        "import os, subprocess\n"
+        "def main():\n"
+        "    return subprocess.call([os.environ['SENIOR_TEST_NODE']])\n"
+    )
+    node = service_root / "safety_node"
+    node.write_text("#!/usr/bin/env python3\nimport sys\nprint(sys.executable)\n")
+    node.chmod(0o700)
+
+    result = subprocess.run(
+        _motion_command(profile, "robot-a"),
+        env={**os.environ, "PYTHONPATH": str(service_root), "SENIOR_TEST_NODE": str(node)},
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    assert result.returncode == 0, result.stderr
+    assert Path(result.stdout.strip()).parent == Path(sys.executable).parent
 
 
 async def test_active_or_unrecognized_socket_is_never_replaced(service_root):

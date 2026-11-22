@@ -150,7 +150,7 @@ node名slam_toolbox、原扫描/TF/frame/receipt、参数文件、进程数及re
 ### 构建与注册
 
 默认完整构建所有原生目标，不加可选自动探测、静默漏目标或缺依赖fallback。
-CMake显式要求slam_toolbox 2.6.10 EXACT，沿用其私有async_slam_toolbox/toolbox_common/kartoSlamToolbox
+当前构建使用车端 ROS 2 Humble 容器中已有的 slam_toolbox 2.6.8。CMake 和 package.xml 均锁定 2.6.8，沿用其私有 async_slam_toolbox/toolbox_common/kartoSlamToolbox
 库定位与Boost serialization/thread、OpenSSL::Crypto、TBB::tbb、Threads、rclcpp/tf2/sensor_msgs/motion_msgs依赖。
 bridge只rosidl生成接口，mapping通过标准ament导出消费它，不猜外部imported target名称或复制同项目graph_typesupport变量。
 真实Humble类型导出/私有符号链接仍须实际编译验证，源码核对不能替代。
@@ -185,7 +185,7 @@ pytest使用原主仓库.venv/bin/python；以下原生输出与数据均在/tmp
 - 35个移动文件和6个接口逐字节核对，完整原生target/探针参数/timeout注册核对、包依赖无环、无bridge反向运行依赖、launch仅owner/说明变化：通过；只证明源码和声明。
 - 定向ruff check/format、按原CRLF的 `git -c core.whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol diff --check`：通过；作者已审diff，仍待负责人亲审。
 
-未验证：真实Humble隔离prefix的colcon构建/安装、旧类型生成与typesupport导出、私有2.6.10链接、
+未验证：真实Humble隔离prefix的colcon构建/安装、旧类型生成与typesupport导出、私有2.6.8链接、
 Karto单元、10个DDS探针及其全部模式、native receipt/capture/TF/子进程链、Linux和实车/仿真运行。
 推荐对应环境用全新独立prefix构建bridge→mapping，再执行原CMake/CTest及安装工具，不自动清理已有安装树，
 以免旧lib/senior_slam_bridge残留程序被误判为兼容入口。
