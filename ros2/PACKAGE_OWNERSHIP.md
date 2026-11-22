@@ -1,6 +1,6 @@
 # 当前 ROS 包归属
 
-2026-11-22，功能分支 `feat/vehicle-architecture-refactor`。代码迁移已提交，Linux ROS 原生构建与车端验收待完成，不代表已经部署。
+2026-11-22，功能分支 `feat/vehicle-architecture-refactor`。代码迁移及剩余依赖/失败测试清理已完成；Linux ROS 原生构建与车端验收仍待完成，不代表已经部署。
 
 | 包 | 职责及入口 |
 | --- | --- |
@@ -38,6 +38,6 @@ colcon test-result --test-result-base build-ownership --verbose
 
 建图使用 `ros2 launch senior_mapping mapping.launch.py`；导航使用 `senior_navigation navigation.launch.py`；仿真使用 `senior_sim` 的对应 launch。实车仍使用 `senior_robot` 的整车组合。这些命令会启动节点，本文未执行。
 
-Python wheel 构建不生成 ROS interfaces，不替代 colcon。接口 typesupport、已安装时序头 consumer、原生 SLAM 链接、DDS 和实际相机链路必须在 Linux ROS 环境验证。当前依赖声明无环；历史 Python 感知/估计相互引用及感知对硬件 profile 类型的引用仍存在，本轮不宣称功能包完全独立。
+Python wheel 构建不生成 ROS interfaces，不替代 colcon。接口 typesupport、已安装时序头 consumer、原生 SLAM 链接、DDS 和实际相机链路必须在 Linux ROS 环境验证。当前依赖声明无环；2026-11-23 已将空间估计、RGB-D 车体运动解释归入估计包，并以感知自有只读 LearningProfile 接口替代具体控制 profile 类型。感知源码不再导入估计或控制，估计单向消费感知结果。
 
 验证详情见 [本轮测试记录](../docs/testing/2026-11-22-ros-package-cleanup.md)。

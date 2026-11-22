@@ -195,5 +195,3 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
     assert core.target.source == "idle"
     assert state["body_reference"] is not None
     assert core.sensors.latest.vx.error is None  # No invented physical error bound.
-
-

@@ -12,6 +12,7 @@ import pytest
 from control_process_test_support import generic_motion_profile
 from learning_test_support import TestRun, learning_point
 from senior_motion_control.motion_core_output import MotionCoreOutput
+from senior_motion_control.vehicle_speed import limit_velocity as reference_limit_velocity
 from senior_motion_estimation.observations import Source
 from senior_perception.raw_safety_observation import RawSafetyObservation
 from sensor_time_test_support import capture_fields, sample_time
@@ -155,7 +156,7 @@ class LearningRig:
             self.run.owner.new_attempt("manual-round", "a" * 64, 0, output_boot_id=self.core.boot)
             == "accepted"
         )
-        self.run.service._reset_stream()
+        self.run.service._reset_capture()
         self.run.service.proposal = request
         self.run.owner.record = self.run.owner.record.model_copy(update={"created_steady_ns": 0})
         self.run.pump()
@@ -417,7 +418,7 @@ def test_new_calibration_request_is_rejected_if_core_source_generation_changed(r
         == "accepted"
     )
     rig.run.owner.record = rig.run.owner.record.model_copy(update={"created_steady_ns": 0})
-    rig.run.service._reset_stream()
+    rig.run.service._reset_capture()
     rig.run.pump()
     rig.run.service.proposal = BeginAttempt(
         start_request_id="manual-new",
@@ -504,7 +505,7 @@ def uncached_scan(core, raw, *, avoidance=False):
 
 
 def assert_original_scan_result(core, raw, actual, now, *, avoidance=False):
-    from senior_motion_control.vehicle_speed import limit_velocity as perception_limit_velocity
+    perception_limit_velocity = reference_limit_velocity
     from senior_perception.collision import (
         directional_clearance as perception_directional_clearance,
     )
@@ -742,16 +743,26 @@ def test_async_incomplete_before_submission_retires_target_without_consuming(rig
         "reserve_action",
         lambda session: (reservations.append(session), reserve(session))[1],
     )
-    rig.step(rig.now + 0.05)
-    assert rig.core.startup.state == "sampling"
     action = rig.run.owner.record.action
-    rig.run.service.gap = True
+    assert not action.consumed
+    from senior_perception.learning_wire import MotionObservedThrough
+
+    rig.run.rpc(
+        MotionObservedThrough(
+            session=rig.core._learning_client.session,
+            attempt_id=rig.run.owner.record.attempt_id,
+            segment_id=rig.core.startup.segment_id,
+            through_steady_ns=round(rig.now * 1e9),
+            stationary=True,
+            gap=True,
+        )
+    )
     rig.run.pump()
-    assert rig.run.owner.record.reason == "learning_stream_incomplete"
+    assert rig.run.owner.record.reason == "learning_motion_facts_incomplete"
     for _ in range(3):
         assert rig.step(rig.now + 0.05) == Velocity(0, 0)
         assert not rig.core.startup.active
-        assert rig.core.startup.reason == "learning_stream_incomplete"
+        assert rig.core.startup.reason == "learning_motion_facts_incomplete"
         assert rig.core.target.source == "idle" and rig.core.machine.state.task_id is None
     assert rig.run.owner.record.action == action and not action.consumed
     assert reservations == []
@@ -761,7 +772,18 @@ def test_async_failure_after_submission_preserves_window_then_projects_terminal(
     start = rig.start()
     deadline = rig.core.startup.deadline
     grant = rig.run.owner._reservation
-    rig.run.service.gap = True
+    from senior_perception.learning_wire import MotionObservedThrough
+
+    rig.run.rpc(
+        MotionObservedThrough(
+            session=rig.core._learning_client.session,
+            attempt_id=rig.run.owner.record.attempt_id,
+            segment_id=rig.core.startup.segment_id,
+            through_steady_ns=round(rig.now * 1e9),
+            stationary=True,
+            gap=True,
+        )
+    )
     rig.run.pump()
     assert rig.run.owner.record.phase == "failed"
     while rig.now + 0.05 < deadline:
@@ -769,7 +791,7 @@ def test_async_failure_after_submission_preserves_window_then_projects_terminal(
         assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
         assert rig.run.owner._reservation == grant
     assert rig.step(deadline) == Velocity(0, 0)
-    assert rig.core.startup.reason == "learning_stream_incomplete"
+    assert rig.core.startup.reason == "learning_motion_facts_incomplete"
     assert not rig.core.startup.active and rig.core.target.source == "idle"
     action = rig.run.owner.record.action
     assert action.stage == "window_finished"

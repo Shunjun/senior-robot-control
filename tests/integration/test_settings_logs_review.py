@@ -117,6 +117,8 @@ async def test_directory_log_database_does_not_abort_composed_control(
             }
         if kind == "manual":
             return {"ok": True, "authority_id": "test-authority", "state": "prepared"}
+        if kind == "learning_capability":
+            return {"ok": True, "learning_protocol_version": None}
         assert kind in {"identity", "disable_motion", "exit"}
         return {"ok": True}
 

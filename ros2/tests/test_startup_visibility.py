@@ -191,7 +191,7 @@ def test_file_and_real_node_override_loading_preserve_boolean_settings(
         if isinstance(n, ast.ImportFrom)
         and any(a.name == "configure_startup_learning" for a in n.names)
     )
-    block = ast.Module(body=initialize.body[start : start + 4], type_ignores=[])
+    block = ast.Module(body=initialize.body[start : start + 3], type_ignores=[])
 
     class Node:
         def __init__(self, override):

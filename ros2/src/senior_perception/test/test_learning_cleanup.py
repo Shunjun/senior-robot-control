@@ -211,6 +211,8 @@ async def test_hardware_cleanup_only_once_after_verified_live_agent_under_lock(
         else:
             original(root, claim, **kwargs)
         Path(claim).write_text("current claim retained")
+        # Capture has no consumer; completion must not wait for a camera spawn.
+        stop.set()
 
     monkeypatch.setattr(helper, "IpcServer", Server)
     monkeypatch.setattr("senior_perception.learning_service.LearningService", Server)

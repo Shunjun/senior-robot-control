@@ -120,6 +120,14 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     value._consuming_runtime = False
     value._runtime_subscription = MagicMock(msg_type=object, raw=False)
     value._runtime_subscription.handle.take_message.return_value = None
+    value._output_incarnation = (b"t5", runtime(clock.now).boot_id)
+    value._output_handoff_boot = None
+    value._pending_output_handoff = None
+    value._output_handoff_missing_estop = False
+    value._pending_estop_request = None
+    value._latched_estop_request = None
+    value._latched_estop_revision = 0
+    value._pending_estop_reset = None
     value._motion_runtime = MotionRuntimeReceiver()
     value._motion_runtime.accept(runtime(clock.now), b"t5", clock.now)
     value._arbiter = Arbiter("robot", 300)

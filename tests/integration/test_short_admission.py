@@ -151,6 +151,8 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                 "collected": kind == "navigation.task_settled",
                 "progress": None,
             }
+        if kind == "learning_capability":
+            return {"ok": True, "learning_protocol_version": None}
         assert kind in {"identity", "disable_motion", "exit"}
         return {"ok": True}
 

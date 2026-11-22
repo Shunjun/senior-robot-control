@@ -183,3 +183,8 @@
 ## 2026-11-22 ROS 归属清理后续
 
 本轮已按获批归属迁移旧包及 robot 转发入口，采用分批提交。相机 subscriber 与压缩限帧器现位于 senior_sensor_ingress，感知节点归 senior_perception；共享采集与按需15fps压缩策略保持。实际视频回环和相机 lease/IPC 回归48项通过。当前包清单、干净重建方式见 [ROS 包归属](../../ros2/PACKAGE_OWNERSHIP.md)，验证与现存失败见 [清理测试记录](../testing/2026-11-22-ros-package-cleanup.md)。本机 ROS 原生构建和车端部署仍未验收，PR保持 Draft。
+
+
+## 2026-11-23 收尾完成
+
+感知/估计反向依赖及学习对控制profile的具体类型引用已移除；剩余失败测试按获批新版行为迁移，并修复时钟回退静止观测、提前停止学习的采集水位与配置schema漂移。默认全树2453通过、116环境跳过，追加当前发送失败发零回归通过。完整证据见 [11月23日清理记录](../testing/2026-11-23-dependency-and-test-cleanup.md)。车端部署和Linux ROS原生验收仍未执行，不改变按需采集/15fps压缩策略。

@@ -19,30 +19,30 @@
 
 ## Task1: Capture and classify current failures
 
-- [ ] Run each current test file in a bounded subprocess, preserving output, exit code and timeout status under `/tmp/ros-cleanup-followup/baseline`. Do not mutate product/tests while this baseline runs.
-- [ ] Classify each failure as retired requirement, moved name/fixture, environment, or reproduced product defect. Record exact cases and evidence before changing them.
-- [ ] Read-only candidate review: reuse existing interface/algorithm protections; select necessary current behavior scenarios before implementation. User has already approved completing cleanup; do not add product behaviors.
+- [x] Run each current test file in a bounded subprocess, preserving output, exit code and timeout status under `/tmp/ros-cleanup-followup/baseline`. Do not mutate product/tests while this baseline runs.
+- [x] Classify each failure as retired requirement, moved name/fixture, environment, or reproduced product defect. Record exact cases and evidence before changing them.
+- [x] Read-only candidate review: reuse existing interface/algorithm protections; select necessary current behavior scenarios before implementation. User has already approved completing cleanup; do not add product behaviors.
 
 ## Task2: Finish dependency ownership
 
-- [ ] Move `senior_perception/space_estimator.py` to `senior_motion_estimation/space_estimator.py`; move `senior_perception/vision/rgbd_body_motion.py` to `senior_motion_estimation/rgbd_body_motion.py`; rewrite all live consumers, tests and public docs. No forwarding facades.
-- [ ] Introduce read-only `LearningProfile` protocol in existing perception learning_runtime with length/width and two startup-learning occlusion thresholds. Change only LearningPorts annotation; preserve actual profile object injection and attribute reads.
-- [ ] Declare estimation's actual perception dependency and corresponding shapely runtime dependency. Add an actual Python import-boundary assertion to existing package ownership check, not just manifest DAG.
-- [ ] Run existing pose/space, RGB-D transform, optional motion inputs, learning lifecycle and canonical ownership checks. Review exact move diffs and commit independently.
+- [x] Move `senior_perception/space_estimator.py` to `senior_motion_estimation/space_estimator.py`; move `senior_perception/vision/rgbd_body_motion.py` to `senior_motion_estimation/rgbd_body_motion.py`; rewrite all live consumers, tests and public docs. No forwarding facades.
+- [x] Introduce read-only `LearningProfile` protocol in existing perception learning_runtime with length/width and two startup-learning occlusion thresholds. Change only LearningPorts annotation; preserve actual profile object injection and attribute reads.
+- [x] Declare estimation's actual perception dependency and corresponding shapely runtime dependency. Add an actual Python import-boundary assertion to existing package ownership check, not just manifest DAG.
+- [x] Run existing pose/space, RGB-D transform, optional motion inputs, learning lifecycle and canonical ownership checks. Review exact move diffs and commit independently.
 
 ## Task3: Migrate retired test surfaces and fix real bugs
 
-- [ ] Update resource/fixture/import targets to current owners; preserve valid assertions.
-- [ ] Retire only explicitly superseded sweep/certificate/settling/admission scenarios; retain independent estimation/geometry algorithm tests even when those algorithms are no longer driving gates.
-- [ ] Adapt valid control tests to the current raw-scan/collision/speed pipeline and arbitration owner. Use existing real MotionCoreOutput composition; do not mock away its decisions.
-- [ ] Reproduce each remaining real bug, explain cause and fix at its owner; record targeted before/after regression evidence. Fixes must not expand current behavior.
-- [ ] Resolve collection errors and test resource leaks/timeouts. Preserve process/socket cleanup and exclusivity assertions. Commit coherent groups as they pass.
+- [x] Update resource/fixture/import targets to current owners; preserve valid assertions.
+- [x] Retire only explicitly superseded sweep/certificate/settling/admission scenarios; retain independent estimation/geometry algorithm tests even when those algorithms are no longer driving gates.
+- [x] Adapt valid control tests to the current raw-scan/collision/speed pipeline and arbitration owner. Use existing real MotionCoreOutput composition; do not mock away its decisions.
+- [x] Reproduce each remaining real bug, explain cause and fix at its owner; record targeted before/after regression evidence. Fixes must not expand current behavior.
+- [x] Resolve collection errors and test resource leaks/timeouts. Preserve process/socket cleanup and exclusivity assertions. Commit coherent groups as they pass.
 
 ## Task4: Verify and deliver
 
-- [ ] Rerun affected files and final broad collection/suite with bounded resources. Explicitly report every remaining failure/skip/timeout, including unavailable ROS/native gates.
-- [ ] Build affected wheels and verify imports from isolated installation without source editable paths. Run Ruff/changed-file formatting/diff checks.
-- [ ] Personally review product diffs, retained behavioral coverage and every test deletion. Update current ownership/testing/handoff docs, push feature branch and update Draft PR38, without main merge.
+- [x] Rerun affected files and final broad collection/suite with bounded resources. Explicitly report every remaining failure/skip/timeout, including unavailable ROS/native gates.
+- [x] Build affected wheels and verify imports from isolated installation without source editable paths. Run Ruff/changed-file formatting/diff checks.
+- [x] Personally review product diffs, retained behavioral coverage and every test deletion. Update current ownership/testing/handoff docs, push feature branch and update Draft PR38, without main merge.
 
 ## Selected new/materially rewritten behavioral scenarios
 
@@ -96,3 +96,15 @@ Selection rationale: real current driving/control boundaries and the requested d
 - Current startup raw-scan actual-output journey verifies no independent-motion qualification, zero on missing scan, preserved manual source/no fault, and recovery when scan returns. Navigation overlimit output retains all four original input groups and cap/deadline assertions; removed only scheduler waiting. State reset explicitly matches revision without old motion-evidence qualification; replay cannot revive the former source. Legacy five-sample feedback readiness and automatic feedback replanning tests were retired; explicit task pause/done/resume protections remain.
 - Current unit suite:1059 passed,10 skipped,2 socket-permission failures (both runtime_identity),33.95s. These two are included in the permitted-socket integration rerun, not treated as passes. First permitted-socket integration baseline:1050 passed,38 failed,11 errors,29 skipped. Remaining repairs are fixture ABI fields, IPC learning-capability response, updated capture-wire gap injection and output trace metadata. No blanket skip/xfail was added.
 - Fixed the existing default-collection test_home basename collision by renaming only the e2e file to test_home_persistence; its contents and assertions are unchanged.
+
+
+### Final verification and delivery
+
+- Completed normal-exit default full-tree run (socket permission, existing Docker CLI on PATH for compose config only):2453 passed,116 environment/native-gated skips,1 existing forkpty deprecation warning,113.91s. No failure/collection error/xfail. Final output-failure safety scenario appended after that run:cadence/output file4 passed in0.32s, including all three unchanged timing cases. Product code did not change between these verifications.
+- Initial default-order run hung in test_learning_cleanup:its termination condition waited for eager camera spawn, intentionally removed by demand-driven capture. Ended only the identified pytest PID94412; changed fixture stop condition to completion of its cleanup assertions.16 cleanup cases passed; full rerun exited normally. This was a test harness bug, not a product service hang.
+- Integration snapshot1101 passed/29 skipped includes both socket-identity cases that failed inside the sandbox. Default collection has no import collision after the byte-identical e2e file rename.
+- Reused valid algorithm/process/IPC/identity/lease/estop regressions. Final retirement review list includes71 removed/renamed functions across17 paths; one is the byte-identical e2e rename and two are direct behavior-renamed current tests. Remaining removals correspond to retired control qualification/sweep/stop-certificate/geometry-queue/automatic-learning paths, not independent algorithm protection. The valid failed-output zero/revocation case was explicitly preserved under the current SafetyGate timer and actual core.
+- New/materially rewritten current scenarios conservatively counted14 under the cross-module cap20; three confirmed bug/config regressions use existing tests and are recorded separately. No new hypothetical failure matrix, skip or xfail was introduced. Module/fixture/clock/trace/protocol-shape-only changes retain their behavioral assertions.
+- Five final wheels built offline using existing uv cache:core/contracts/perception/estimation/control. Isolated installed import with `python -I -S` and installed/third-party paths only passed:perception learning import loads neither control nor estimation; new algorithm locations resolve from wheel; old perception algorithm modules absent; shared RecoveryObservation type identity unchanged; no rclpy loaded. Fresh isolated build cache lacked hatchling, so reused pre-existing user cache offline rather than fetching dependencies.
+- Personally reviewed product diff and deletion inventory. Ruff, changed Python formatting and diff whitespace checks passed. No independent worker review claimed (user authorized direct execution). Native ROS/ament/typesupport/installed C++ header and car acceptance remain unavailable, not counted as passes.
+- Delivery uses existing feature branch and Draft PR38, with incremental commits; no main merge, deployment, dev service, simulator or vehicle motion.
