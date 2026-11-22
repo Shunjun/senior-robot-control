@@ -20,27 +20,27 @@
 
 ## Task 1: Interface and native algorithm ownership
 
-- [ ] Capture existing broad test failures before product edits; keep them separate from migration regressions.
-- [ ] Merge 25 motion messages plus Keyframe and five SLAM services into `ros2/src/senior_interfaces/{msg,srv}`. Keep fields intact; rewrite nested type package names and all consumers.
-- [ ] Move sample_time.hpp/sensor_timing.hpp and the installed-header consumer to `senior_sensor_ingress`; export the header target. Retire unused latest_task.hpp only after confirming no callers.
-- [ ] Move the scan matcher headers, sources, replay tool and tests to `senior_motion_estimation`; merge CMake targets, update runtime/package dependencies. Namespace implementation as motion estimation, generated messages as interfaces.
-- [ ] Remove the three old package build manifests; verify package discovery/dependency DAG and standalone native tests.
+- [x] Capture existing broad test failures before product edits; keep them separate from migration regressions.
+- [x] Merge 25 motion messages plus Keyframe and five SLAM services into `ros2/src/senior_interfaces/{msg,srv}`. Keep fields intact; rewrite nested type package names and all consumers.
+- [x] Move sample_time.hpp/sensor_timing.hpp and the installed-header consumer to `senior_sensor_ingress`; export the header target. Retire unused latest_task.hpp only after confirming no callers.
+- [x] Move the scan matcher headers, sources, replay tool and tests to `senior_motion_estimation`; merge CMake targets, update runtime/package dependencies. Namespace implementation as motion estimation, generated messages as interfaces.
+- [x] Remove the three old package build manifests; verify package discovery/dependency DAG and standalone native tests.
 
 ## Task 2: Functional nodes and composition boundary
 
-- [ ] Move generic ROS lifecycle from motion control to sensor ingress; rewrite consumers to that public boundary.
-- [ ] Move MotionFusion to estimation; inject profile loading from a small robot composition entry rather than import control into estimation.
-- [ ] Move perception/depth/semantic/RGB-D nodes and public scripts to perception. Move ROS video/rate limiter to ingress; update manager media binding and camera launch.
-- [ ] Move simulation transport helper and profile to senior_sim; register its Python package and resources.
-- [ ] Rewrite all callers of the 29 import facades by actual symbol owner, including combined historical facades. Remove old camera/OwnedState facades and obsolete simulation forwarding launches. Keep real preflight/service/adapter/whole-vehicle launch composition.
-- [ ] Update package scripts, setup, CI, tools, public README ownership, and affected existing tests without weakening algorithm assertions.
+- [x] Move generic ROS lifecycle from motion control to sensor ingress; rewrite consumers to that public boundary.
+- [x] Move MotionFusion to estimation; inject profile loading from a small robot composition entry rather than import control into estimation.
+- [x] Move perception/depth/semantic/RGB-D nodes and public scripts to perception. Move ROS video/rate limiter to ingress; update manager media binding and camera launch.
+- [x] Move simulation transport helper and profile to senior_sim; register its Python package and resources.
+- [x] Rewrite all callers of the 29 import facades by actual symbol owner, including combined historical facades. Remove old camera/OwnedState facades and obsolete simulation forwarding launches. Keep real preflight/service/adapter/whole-vehicle launch composition.
+- [x] Update package scripts, setup, CI, tools, public README ownership, and affected existing tests without weakening algorithm assertions.
 
 ## Task 3: Verification and delivery
 
-- [ ] Add a small structural migration check: ten packages, no retired references in active source, interface field preservation, valid dependency DAG and node executable targets.
-- [ ] Reuse existing native framing/timing/header, point-index/scan matcher, perception/estimation/control, lifecycle, media and install regressions. Compare broad failures with baseline by node.
-- [ ] Build affected wheels and inspect resources; use isolated install/import checks where possible. Record ROS/ament/DDS tests unavailable on macOS rather than claiming field acceptance.
-- [ ] Personally review full diff/new paths, record candidate selection and observed regressions, commit/push same branch and update Draft PR #38; do not merge.
+- [x] Add a small structural migration check: ten packages, no retired references in active source, interface field preservation, valid dependency DAG and node executable targets.
+- [ ] Native installed-header/ROS scan matcher checks still need Linux; portable regressions and exact broad failure comparison completed, see testing record.
+- [x] Built ten wheels and performed isolated import checks; recorded unavailable ROS/ament/DDS validation explicitly.
+- [ ] Personally reviewed moved source/build registration and actual diffs; incremental commits created. Push and Draft PR #38 update are the remaining delivery actions.
 
 **Order:** Task 1 establishes interface/header names before Task 2 rewrites runtime entrypoints. Native algorithm relocation and facade inventory are independent conceptually, but execute sequentially in this one checkout under the user's direct-execution authorization. No parallel worktrees needed.
 
@@ -89,3 +89,10 @@
 - Updated that existing assertion to validate the actual localization CMake install, executable permission and canonical script import; all 18 localization scenarios now pass. No algorithm assertion removed. All remaining broad failing/error nodes were already in baseline.
 - Isolated final estimation/control wheel reinstall and imports passed with `python -I -S`, installed directory and third-party site-packages only: retired facades absent, canonical module paths, recovery type identity, navigation contracts and read-only preflight verified. ROS installation/assets/typesupport remain unverified.
 - Default whole-tree collection also exposes an unchanged `test_home` basename collision between e2e and manager tests; original comparison roots omit e2e/deploy. Preserve and report it, do not rename unrelated tests.
+
+### Checkpoint 5
+
+- Actual media/camera loopback tests with localhost UDP/Unix socket access: 48 passed in12.29s. No development or vehicle services started.
+- Final same-root collection: 2672 tests collected, exactly the three original collection errors.
+- Current layout/rebuild instructions and test evidence documented; historical B-stage READMEs explicitly marked as historical where they mention removed facades/packages.
+- Final code review removed redundant alias-to-itself checks in install verifier. Scope remains within the announced 280–350 file-path range. No independent worker review claimed; Orca bypass was explicitly authorized.

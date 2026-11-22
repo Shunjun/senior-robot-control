@@ -1,3 +1,5 @@
+> **2026-11-22：** 当前十包清单、入口和干净重建要求见 [ROS 包归属](PACKAGE_OWNERSHIP.md)。下文历次 B 阶段记录保留历史证据；旧消息包、scan matcher 包及 robot 转发路径已退役。
+
 # Humble / Fortress simulation
 
 Current startup and the task roadmap are in the repository root `README.md`. The sensor contract and the watchdog negative control passed on Ubuntu 22.04 aarch64; evidence is `docs/testing/2026-10-27-linux-simulation.md`. That record does not cover the safety gate or the command chain.

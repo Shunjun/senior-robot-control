@@ -1356,7 +1356,6 @@ def verify_route_execution(*, compatible: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="installed-execution-", dir="/tmp") as directory:
         asyncio.run(verify(Path(directory)))
     if compatible:
-        import senior_navigation.route as old_route
         import vehicle_manager.agent.local_adapters as ports
         import vehicle_manager.agent.production as composition
         import vehicle_manager.tasks.execution_bindings as old_effects
@@ -1366,17 +1365,9 @@ def verify_route_execution(*, compatible: bool = False) -> None:
         from vehicle_manager.storage.domain_bindings import TaskStore as LegacyStore
         from vehicle_manager.storage.domain_bindings import WaypointStore
 
-        from vehicle_core.route_plan import RoutePlan as old_adapter_RoutePlan
-
-        for owner in (old_route, route):
-            assert owner.RoutePlan is RoutePlan and owner.RouteRejected is RouteRejected
+        assert route.RoutePlan is RoutePlan and route.RouteRejected is RouteRejected
         assert route.QualifiedRoute.__module__ == "senior_navigation.route"
-        assert (
-            navigation_adapter.RoutePlan
-            is agent_adapter.RoutePlan
-            is old_adapter_RoutePlan
-            is RoutePlan
-        )
+        assert navigation_adapter.RoutePlan is agent_adapter.RoutePlan is RoutePlan
         assert ports.IpcNavigation is composition.IpcNavigation is IpcNavigation
         assert (
             old_executor.TaskExecutor is composition.TaskExecutor is execution_bindings.TaskExecutor
