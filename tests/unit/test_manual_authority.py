@@ -129,7 +129,7 @@ def test_capacity_keeps_closed_tombstones_and_does_not_evict_current() -> None:
     assert owner.accept(context(), sample(second.authority_id), now_steady=100.0)
 
 
-@pytest.mark.parametrize("method", ["release", "stop", "revoke"])
+@pytest.mark.parametrize("method", ["release", "revoke"])
 def test_close_is_permanent_and_old_acquire_returns_closed(method: str) -> None:
     owner = manager()
     receipt = owner.acquire(context(), "r", "p", now_steady=10.0)

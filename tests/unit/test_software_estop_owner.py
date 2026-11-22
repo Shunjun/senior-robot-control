@@ -106,7 +106,7 @@ def test_raw_wheel_imu_reset_without_independent_body_never_restores_old_target(
     reset.gesture = core.machine.state.estop_revision
     assert core.command(reset)
     assert core.machine.state.mode is MotionMode.IDLE
-    assert core.controller.trajectory.velocity == Velocity(0, 0)
+    assert core._output == Velocity(0, 0)
     assert core.target.source == "idle"
     old = barrier("intent", generation=2, request="retired-intent")
     old.sequence, old.steady_deadline = 1, 10.3

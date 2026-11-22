@@ -175,8 +175,8 @@ def capture_inputs(core, packet):
 
 
 def read_inputs(core, now):
-    publish_inputs(core, now)
-    return core._inputs(now)
+    # Only reception owns estimation; the control reader consumes its snapshot.
+    return publish_inputs(core, now)
 
 
 def read_observation(core, now):

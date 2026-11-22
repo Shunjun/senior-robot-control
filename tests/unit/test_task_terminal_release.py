@@ -115,7 +115,7 @@ def test_unconsumed_old_epoch_rejected_and_duplicate_consumed_ack_cannot_clear_s
     old = terminal(rig)
     assert not rig.core.release_terminal(old)
     assert rig.core.release_terminal(second)  # ACK only for the previously consumed identity.
-    assert rig.core._task_identity == (successor, epoch)
+    assert rig.core.arbitration._task_identity == (successor, epoch)
     assert rig.core.machine.state.task_id == successor and rig.core.target.source == "navigation"
 
 
@@ -259,7 +259,7 @@ async def test_real_cancel_route_reducer_core_allows_distinct_next_execution(rig
 
 def test_unknown_retained_task_epoch_cannot_mint_a_release_receipt(rig):
     start(rig, 0.5)
-    rig.core._task_identity = None  # Controlled unknown retained-identity checkpoint.
+    rig.core.arbitration._task_identity = None  # Controlled unknown retained-identity checkpoint.
     close = barrier(rig, "task_revoke")
     assert rig.core.command(close)
     assert rig.core.retirement_epoch(close) is None
@@ -296,7 +296,7 @@ def test_clock_rollback_does_not_ack_an_already_absent_identity_as_fresh_release
 
 def test_full_core_proof_book_still_installs_stop_but_never_issues_unrecorded_ack(rig):
     start(rig, 0.5)
-    rig.core._task_retirements = {
+    rig.core.arbitration._task_retirements = {
         ("command-owner", str(i), i + 1, "old"): (1, rig.clock.steady, 1) for i in range(256)
     }
     close = barrier(rig, "task_revoke")
@@ -310,6 +310,10 @@ def test_full_core_proof_book_still_installs_stop_but_never_issues_unrecorded_ac
 @pytest.mark.parametrize("reason", ["expiry", "fault"])
 def test_original_expiry_or_fault_can_prove_output_retirement_before_cancel(rig, reason):
     start(rig, 0.5)
+    if reason == "fault":
+        from senior_motion_control.contracts import MotionEventKind
+
+        rig.core._event(MotionEventKind.EXECUTION_FAULT, rig.clock.steady)
     close = barrier(rig, reason)
     assert rig.core.command(close)
     revision = rig.core.machine.state.fault_revision

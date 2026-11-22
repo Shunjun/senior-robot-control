@@ -17,7 +17,6 @@ from motion_reference_test_support import ReadySubscription
 from senior_motion_control.contracts import MotionEventKind as K
 from senior_motion_control.contracts import MotionTarget
 from senior_motion_control.state_machine import RecoveryObservation
-from senior_motion_control.trajectory import Trajectory
 from sensor_time_test_support import sample_time
 
 from vehicle_core.motion_state import MotionMode
@@ -104,15 +103,14 @@ def barrier(reason="release", generation=2, request=""):
     )
 
 
-def test_release_installs_local_owner_without_emitting_hard_zero_or_resetting_trajectory(core):
+def test_release_installs_idle_owner_and_clears_previous_output(core):
     core.target = MotionTarget(Velocity(0.4, 0), "manual", "authority:42", 10.2)
-    core.controller.trajectory = Trajectory(Velocity(0.4, 0), Velocity(0.2, 0))
+    core._output = Velocity(0.4, 0)
     message = barrier(request="retire-token")
     assert core.command(message)
     assert core.target.source == "idle" and core.target.source_id == core.boot
     assert core.target.deadline_steady is None
-    assert core.controller.trajectory.velocity.vx == 0.4
-    assert core.controller.trajectory.acceleration.vx == 0.2
+    assert core._output == Velocity(0, 0)
     assert core.node.emitted == []
     sequence = core.event_sequence
     for _ in range(10):
@@ -149,14 +147,14 @@ def test_new_explicit_estop_request_advances_version_and_closed_owner_never_acks
 
 def test_failed_handoff_can_retry_exact_payload_but_cannot_change_it(core, monkeypatch):
     message = barrier(request="retire")
-    actual = core._apply_close
-    monkeypatch.setattr(core, "_apply_close", lambda *_: False)
+    actual = core.arbitration._apply_close
+    monkeypatch.setattr(core.arbitration, "_apply_close", lambda *_: False)
     assert not core.command(message)
     assert not core._barrier_complete
     altered = barrier(request="retire")
     altered.close_reason = "expiry"
     assert not core.command(altered)
-    monkeypatch.setattr(core, "_apply_close", actual)
+    monkeypatch.setattr(core.arbitration, "_apply_close", actual)
     assert core.command(message) and core._barrier_complete
 
 
@@ -170,6 +168,7 @@ def test_missing_real_reference_publishes_strict_unhealthy_state_not_old_drive(c
 
 
 def test_new_physical_fault_after_recovery_is_not_ignored_forever(core):
+    core._event(K.EXECUTION_FAULT, 10.0)
     assert core.command(barrier("fault"))
     first = core.machine.state.fault_revision
     for i in range(5):
@@ -178,26 +177,20 @@ def test_new_physical_fault_after_recovery_is_not_ignored_forever(core):
         )
     core._event(K.FAULT_RECOVER, 10.0, revision=first)
     assert core.machine.state.mode is MotionMode.IDLE
+    core._event(K.EXECUTION_FAULT, 10.0)
     assert core.command(barrier("fault", generation=3))
     assert core.machine.state.fault_revision == first + 1
 
 
-def test_feedback_pause_retains_task_replan_intent_but_source_is_fenced(core):
-    for i in range(5):
-        core.machine.observe(
-            RecoveryObservation("body", i, 9.5 + i * 0.125, 11.0, True, True), 10.0
-        )
+def test_missing_body_feedback_does_not_revoke_navigation_source(core):
     core._event(K.TASK_START, 10.0, "task-1")
-    core.target = MotionTarget(Velocity(0.2, 0), "navigation", "task-1:42", 10.2)
+    target = MotionTarget(Velocity(0.2, 0), "navigation", "task-1:42", 10.2)
+    core.target = target
     core._event(K.FEEDBACK_LOST, 10.0)
-    assert core.target.source == "idle"
-    for i in range(5, 10):
-        core.machine.observe(
-            RecoveryObservation("body", i, 10.1 + (i - 5) * 0.125, 11.5, True, True),
-            10.1 + (i - 5) * 0.125,
-        )
-    core._event(K.FEEDBACK_HEALTHY, 10.6)
-    assert "replan_task" in core.machine.state.allowed_actions
+    assert core.target == target
+    assert core.machine.state.mode is MotionMode.TASK
+    assert core.machine.state.task_id == "task-1"
+    assert "replan_task" not in core.machine.state.allowed_actions
 
 
 def test_control_owner_only_accepts_reception_snapshot_and_has_no_fused_subscription(core):
@@ -206,8 +199,9 @@ def test_control_owner_only_accepts_reception_snapshot_and_has_no_fused_subscrip
     assert hasattr(core.sensors, "input_reference")
     assert read_inputs(core, 10)[1] is None
     core.sensors.__dict__.pop("input_reference")
-    with pytest.raises(ValueError, match="input_snapshot_missing"):
-        core._inputs(10)
+    assert not hasattr(core, "_inputs")
+    core.tick()
+    assert core.node.emitted[-1][0] == Velocity(0, 0)
 
 
 def test_explicit_idle_estop_uses_original_request_without_inventing_authority(core):

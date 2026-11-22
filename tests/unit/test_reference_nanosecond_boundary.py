@@ -31,6 +31,9 @@ def replay(monkeypatch):
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)
     clock = N(steady=CASE["tick"]["sampled_steady"], ros=5.15, ns=5_150_000_000)
     monkeypatch.setattr(module, "time", N(monotonic=lambda: clock.steady))
+    import senior_motion_control.vehicle_arbitration as arbitration
+
+    monkeypatch.setattr(arbitration, "time", N(monotonic=lambda: clock.steady))
     node = Node({"scan": CASE["scan"]["body"]}, clock)
     node.get_clock = lambda: N(now=lambda: N(nanoseconds=clock.ns))
     scan = CASE["scan"]["body"]
@@ -39,7 +42,7 @@ def replay(monkeypatch):
     core = make_core(monkeypatch, node, generic_motion_profile())
     capture_inputs(core, N(data=json.dumps(CASE["packet"])))
     core._startup_motion_unconfirmed = False
-    core.controller._last_now = clock.steady - 0.05
+    core._last_tick = clock.steady - 0.05
     yield N(core=core, clock=clock, node=node)
     core.close()
 
