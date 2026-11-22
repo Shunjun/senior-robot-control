@@ -68,3 +68,10 @@
 - Canonical launch/profile/lifecycle/perception/native framing selection after fixing moved test paths: 69 passed, 38 skipped.
 - Full repository Ruff lint passed. No new collection errors: the same three retired ScanGeometry/full-cycle imports remain from baseline.
 - Docker daemon is unavailable; do not start it. Car reachability query is pending. Broad comparison, install/build proof, dynamic ROS fixture paths, package metadata cleanup and PR update remain in progress.
+
+### Checkpoint 2
+
+- Fixed remaining dynamic ROS test module/executable/config references, including subprocess scripts. MotionFusion fixtures now inject the profile factory through its explicit composition port.
+- Reproduced the moved optional-camera import bug: a missing `senior_sensor_ingress` escaped instead of disabling preview (one regression failed before fix); corrected the exact package guard, regression now passes.
+- Reconciled existing mapping manifest `slam_toolbox 2.6.10` with its CMake `EXACT 2.6.8`; removed duplicate ingress dependency declaration.
+- Verification: Ruff passed; focused ownership, launch, lifecycle, native framing, camera regression: 72 passed, 43 skipped (macOS lacks ROS). Broad suite still waiting in asyncio after its faulthandler timeout; no broad pass claimed.

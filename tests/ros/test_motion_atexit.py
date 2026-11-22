@@ -16,7 +16,7 @@ import os
 import signal
 import sys
 import time
-from senior_robot import safety_node
+from senior_motion_control import safety_node
 
 child = multiprocessing.get_context("spawn").Process(target=time.sleep, args=(30,), daemon=True)
 child.start()

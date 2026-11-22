@@ -130,12 +130,12 @@ def test_factory_cleans_partial_resources_before_reraising_interrupt(monkeypatch
 @pytest.mark.parametrize(
     ("module", "class_name"),
     [
-        ("scan_adapter", "ScanAdapter"),
-        ("safety_node", "SafetyGate"),
-        ("motion_fusion", "MotionFusion"),
-        ("safety_scan_ingress", "SafetyScanIngress"),
-        ("depth_ingress", "DepthIngress"),
-        ("semantic_ingress", "SemanticIngress"),
+        ("senior_perception.scan_adapter", "ScanAdapter"),
+        ("senior_motion_control.safety_node", "SafetyGate"),
+        ("senior_motion_estimation.motion_fusion", "MotionFusion"),
+        ("senior_perception.safety_scan_ingress", "SafetyScanIngress"),
+        ("senior_perception.depth_ingress", "DepthIngress"),
+        ("senior_perception.semantic_ingress", "SemanticIngress"),
     ],
 )
 def test_entrypoint_constructor_does_not_start_worker(module, class_name, monkeypatch):
@@ -146,7 +146,7 @@ def test_entrypoint_constructor_does_not_start_worker(module, class_name, monkey
     from rclpy.parameter import Parameter
 
     values = {}
-    if module == "motion_fusion":
+    if module.endswith(".motion_fusion"):
         values = dict(
             sensor_max_age=0.8,
             alignment_max_gap=0.25,
@@ -160,7 +160,7 @@ def test_entrypoint_constructor_does_not_start_worker(module, class_name, monkey
             lateral_limit=0.04,
             yaw_limit=0.12,
         )
-    elif module == "depth_ingress":
+    elif module.endswith(".depth_ingress"):
         values = dict(min_range_m=0.1, max_range_m=8.0, range_error_m=0.01)
     monkeypatch.setattr(
         multiprocessing.process.BaseProcess,
@@ -170,12 +170,18 @@ def test_entrypoint_constructor_does_not_start_worker(module, class_name, monkey
     rclpy.init()
     node = None
     try:
-        node = getattr(importlib.import_module("senior_robot." + module), class_name)(
-            parameter_overrides=[Parameter(key, value=value) for key, value in values.items()]
+        options = {}
+        if module.endswith(".motion_fusion"):
+            from senior_motion_control.motion_profile import select_motion_profile
+
+            options["profile_factory"] = select_motion_profile
+        node = getattr(importlib.import_module(module), class_name)(
+            **options,
+            parameter_overrides=[Parameter(key, value=value) for key, value in values.items()],
         )
-        if module == "safety_node":
+        if module.endswith(".safety_node"):
             assert node._worker._process is None and node._worker._supervisor is None
-        if module == "semantic_ingress":
+        if module.endswith(".semantic_ingress"):
             worker = node._coordinator._worker
             assert worker._process is None and worker._supervisor is None
     finally:
@@ -197,7 +203,7 @@ import faulthandler
 import signal
 import sys
 from rclpy.node import Node
-from senior_robot import motion_lifecycle as lifecycle
+from senior_sensor_ingress import ros_lifecycle as lifecycle
 
 faulthandler.enable(all_threads=True)
 real_spin = lifecycle.rclpy.spin
@@ -313,7 +319,7 @@ import inspect
 import signal
 import sys
 from rclpy.node import Node
-from senior_robot import motion_lifecycle as lifecycle
+from senior_sensor_ingress import ros_lifecycle as lifecycle
 
 seen = []
 def previous(signum, frame):
@@ -390,7 +396,7 @@ import signal
 import sys
 from rclpy.node import Node
 from rclpy.task import Future, Task
-from senior_robot import motion_lifecycle as lifecycle
+from senior_sensor_ingress import ros_lifecycle as lifecycle
 
 faulthandler.enable(all_threads=True)
 source, start = inspect.getsourcelines(Future.__init__)
@@ -436,7 +442,7 @@ def test_cli_sigint_before_native_init_is_remembered_and_prevents_factory():
 import os
 import signal
 import rclpy
-from senior_robot import motion_lifecycle as lifecycle
+from senior_sensor_ingress import ros_lifecycle as lifecycle
 
 real_init = lifecycle.rclpy.init
 def interrupted_init(**kwargs):
@@ -470,7 +476,7 @@ def test_cli_context_closed_during_init_does_not_construct_executor_or_factory()
     pytest.importorskip("rclpy")
     script = """
 import rclpy
-from senior_robot import motion_lifecycle as lifecycle
+from senior_sensor_ingress import ros_lifecycle as lifecycle
 
 real_init = lifecycle.rclpy.init
 def interrupted_init(**kwargs):
@@ -505,7 +511,7 @@ import sys
 import time
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
-from senior_robot import motion_lifecycle as lifecycle
+from senior_sensor_ingress import ros_lifecycle as lifecycle
 
 sent = getattr(signal, "SIGNAL_NAME")
 def trace(frame, event, arg):
@@ -550,7 +556,7 @@ import os
 import signal
 import rclpy
 from rclpy.node import Node
-from senior_robot import motion_lifecycle as lifecycle
+from senior_sensor_ingress import ros_lifecycle as lifecycle
 
 signum = getattr(signal, "SIGNAL_NAME")
 seen = []
@@ -596,7 +602,7 @@ def test_cli_sigterm_before_native_init_requests_stop():
 import os
 import signal
 import rclpy
-from senior_robot import motion_lifecycle as lifecycle
+from senior_sensor_ingress import ros_lifecycle as lifecycle
 real_init = lifecycle.rclpy.init
 def interrupted_init(**kwargs):
     print("SIGTERM_FIRST", flush=True)
@@ -630,7 +636,7 @@ def test_cli_signal_after_native_install_cleans_owned_node_before_spin(signum):
 import os
 import signal
 from rclpy.node import Node
-from senior_robot import motion_lifecycle as lifecycle
+from senior_sensor_ingress import ros_lifecycle as lifecycle
 
 actual_install = lifecycle.rclpy.signals.install_signal_handlers
 signum = getattr(signal, "SIGNAL_NAME")

@@ -220,3 +220,31 @@ def test_compression_gate_limits_work_to_fifteen_fps_and_keeps_latest_payload():
     assert gate.take(0.98) is None
     assert gate.take(1.04) == b"newest-original-header-and-pixels"
     assert gate.take(1.2) is None
+
+
+def test_preview_without_optional_ros_package_is_disabled(monkeypatch, tmp_path):
+    import builtins
+
+    from vehicle_manager.agent import production
+    from vehicle_manager.agent.config import AgentConfig
+
+    original_import = builtins.__import__
+
+    def without_ros_camera(name, *args, **kwargs):
+        if name == "senior_sensor_ingress.ros_video":
+            raise ModuleNotFoundError("optional ROS package absent", name="senior_sensor_ingress")
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(production, "find_spec", lambda name: object())
+    monkeypatch.setattr(builtins, "__import__", without_ros_camera)
+    binding = production._media_binding(
+        AgentConfig(
+            robot_id="robot-a",
+            cloud_url="wss://example.test",
+            device_token="test-only",
+            database_path=tmp_path / "agent.db",
+            socket_path=tmp_path / "agent.sock",
+            ros_video_topic="/camera/color/image_raw",
+        )
+    )
+    assert binding.session() is None

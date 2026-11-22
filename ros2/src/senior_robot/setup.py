@@ -11,7 +11,6 @@ setup(
             "share/senior_robot/config",
             [
                 "config/self_filter.yaml",
-                # //Compatible: frozen original resources retain the historical share paths.
             ],
         ),
         (

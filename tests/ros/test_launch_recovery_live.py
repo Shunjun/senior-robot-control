@@ -177,7 +177,9 @@ def test_installed_command_guard_core_recovery_keeps_estop_and_retires_old_manua
     monkeypatch.delenv("SENIOR_STARTUP_LEARNING_CLAIM", raising=False)
     # Learning run preservation is checked by the owner/client production-chain
     # test. This live probe starts no learning service and has no physical inputs.
-    executable = Path(get_package_prefix("senior_robot")) / "lib/senior_robot/safety_node"
+    executable = (
+        Path(get_package_prefix("senior_motion_control")) / "lib/senior_motion_control/safety_node"
+    )
     profile = Path(__file__).parents[1] / "fixtures/generic_motion_profile.json"
     command = CommandNode(parameter_overrides=[Parameter("robot_id", value="launch-recovery")])
     probe = isolated_ros.create_node("launch_recovery_output_probe")

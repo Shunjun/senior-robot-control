@@ -8,7 +8,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
-  <depend version_eq="2.6.10">slam_toolbox</depend>
+  <depend version_eq="2.6.8">slam_toolbox</depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <depend>boost</depend>
@@ -16,6 +16,7 @@
   <depend>libssl-dev</depend>
   <depend>rclcpp</depend>
   <depend>senior_interfaces</depend>
+  <depend>senior_sensor_ingress</depend>
 
   <depend>sensor_msgs</depend>
   <depend>tf2_ros</depend>
@@ -23,8 +24,6 @@
   <test_depend>ament_cmake_test</test_depend>
   <test_depend>ament_index_python</test_depend>
   <test_depend>rosgraph_msgs</test_depend>
-  <test_depend>senior_sensor_ingress</test_depend>
 
   <export><build_type>ament_cmake</build_type></export>
-<depend>senior_sensor_ingress</depend>
 </package>

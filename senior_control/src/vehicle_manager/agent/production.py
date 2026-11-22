@@ -108,7 +108,7 @@ def _media_binding(config: AgentConfig) -> MediaBinding:
             try:
                 from senior_sensor_ingress.ros_video import RosCameraSource
             except ModuleNotFoundError as exc:
-                if exc.name != "senior_robot":
+                if exc.name != "senior_sensor_ingress":
                     raise
                 logger.warning("video disabled because the ROS camera feature is unavailable")
                 return None

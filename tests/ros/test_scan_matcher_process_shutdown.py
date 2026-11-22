@@ -20,7 +20,7 @@ def test_scan_matcher_process_shutdown(signal_name, repeat):
     assert binary.is_file(), binary
     config = (
         Path(__file__).resolve().parents[2]
-        / "ros2/src/senior_robot/config"
+        / "ros2/src/senior_sim/config"
         / "simulation_motion.yaml"
     )
     proc = subprocess.Popen(
