@@ -1996,21 +1996,15 @@ def verify_manager_media(*, backend: bool = False) -> None:
 
 def verify_real_preflight() -> None:
     """The existing hardware preflight requires the original SDK safety extra."""
-    import senior_robot.real_runtime as old_preflight
     from senior_robot import real_runtime as preflight
 
-    for name in (
-        "real_parameter_defaults",
-        "load_real_parameters",
-        "validate_real_runtime",
-        "validate_navigation",
-        "REQUIRED_PARAMETERS",
-        "RETIRED_PARAMETERS",
-    ):
-        assert getattr(old_preflight, name) is getattr(preflight, name)
+    defaults = preflight.real_parameter_defaults()
+    assert defaults["scan_receipt"]["scan_topic"] == "/scan"
+    assert defaults["scan_receipt"]["use_sim_time"] is False
+    # Exercise the actual read-only validation port without starting ROS.
+    preflight.validate_navigation(None, None)
     assert "rclpy" not in sys.modules
-
-    print("installed ROS-free real preflight and original public identities: PASS")
+    print("installed ROS-free real preflight policies and validation: PASS")
 
 
 def verify_home_database(*, compatible: bool = False) -> None:

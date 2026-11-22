@@ -75,3 +75,10 @@
 - Reproduced the moved optional-camera import bug: a missing `senior_sensor_ingress` escaped instead of disabling preview (one regression failed before fix); corrected the exact package guard, regression now passes.
 - Reconciled existing mapping manifest `slam_toolbox 2.6.10` with its CMake `EXACT 2.6.8`; removed duplicate ingress dependency declaration.
 - Verification: Ruff passed; focused ownership, launch, lifecycle, native framing, camera regression: 72 passed, 43 skipped (macOS lacks ROS). Broad suite still waiting in asyncio after its faulthandler timeout; no broad pass claimed.
+
+### Checkpoint 3
+
+- Relocated the unchanged RecoveryObservation data value from control to estimation so the estimation producer no longer imports its control consumer. The existing public control import remains the same class (`//Compatible`).
+- Existing raw wheel/IMU/stillness/recovery scenarios: 36 passed. Larger startup/rearm selection: 42 passed, 2 failed, 13 errors; every failure/error node is already present in the pre-migration baseline (retired admission expectations and missing controller attribute), not removed or weakened.
+- Reviewed package build registration and installed-header consumer. Normalized estimation manifest formatting. Ten portable Python wheels built and installed into `/tmp/ros-cleanup/installed`; final wheels must be rebuilt after this checkpoint.
+- Import audit also finds pre-existing perception/estimation references and a perception learning-profile reference to control; the manifest DAG check does not certify complete Python dependency independence. These are separate from removal of retired package/facade names.

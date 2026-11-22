@@ -15,13 +15,13 @@
   <depend>senior_interfaces</depend>
   <depend>senior_sensor_ingress</depend>
 
+  <depend>slam_toolbox</depend>
+  <depend>rclcpp</depend>
+  <depend>diagnostic_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>boost</depend>
+  <depend>libtbb-dev</depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
   <export><build_type>ament_cmake</build_type></export>
-<depend>slam_toolbox</depend>
-<depend>rclcpp</depend>
-<depend>diagnostic_msgs</depend>
-<depend>geometry_msgs</depend>
-<depend>boost</depend>
-<depend>libtbb-dev</depend>
-<test_depend>ament_cmake_gtest</test_depend>
 </package>
