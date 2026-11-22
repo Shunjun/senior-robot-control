@@ -471,7 +471,7 @@ def test_raw_identity_dedup_and_attempt_results_remain_distinct_across_flush():
 
 
 def test_space_positional_api_and_bounded_diagnostic_registrations():
-    from senior_perception.space_estimator import SpaceEstimation, SpaceObservation
+    from senior_motion_estimation.space_estimator import SpaceEstimation, SpaceObservation
     from shapely.geometry import box
 
     from vehicle_core.sensor_policy import default_policy
@@ -533,7 +533,7 @@ def test_captured_scene_uses_local_alignment_without_erasing_velocity_error(repl
 
 
 def test_unknown_space_errors_use_explicit_model_policy_instead_of_zero():
-    from senior_perception.space_estimator import SpaceEstimation, SpaceObservation
+    from senior_motion_estimation.space_estimator import SpaceEstimation, SpaceObservation
     from shapely.geometry import box
 
     owner = SpaceEstimation(software_pose_error_m=0.07)

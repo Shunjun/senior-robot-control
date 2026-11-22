@@ -34,8 +34,8 @@ def planar_body_twist(
     import math
 
     import numpy as np
-    from senior_motion_estimation.kinematics import body_twist_delta
 
+    from senior_motion_estimation.kinematics import body_twist_delta
     from vehicle_core.values import Pose2D
 
     if (

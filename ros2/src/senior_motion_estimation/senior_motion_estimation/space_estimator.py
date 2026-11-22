@@ -7,13 +7,13 @@ which also preserves conflicting same-track occupied extents.
 import math
 from dataclasses import dataclass
 
-from senior_motion_estimation.estimator import Origin, validate_origins
-from senior_motion_estimation.kinematics import compose, inverse
 from shapely.affinity import rotate, translate
 from shapely.geometry import GeometryCollection
 from shapely.geometry.base import BaseGeometry
 from shapely.ops import unary_union
 
+from senior_motion_estimation.estimator import Origin, validate_origins
+from senior_motion_estimation.kinematics import compose, inverse
 from vehicle_core.sensor_policy import default_policy
 from vehicle_core.values import Pose2D
 

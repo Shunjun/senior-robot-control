@@ -56,6 +56,12 @@ def test_ros_packages_have_functional_owners_without_composition_cycles():
                         [item.name for item in node.names] if isinstance(node, ast.Import) else []
                     )
                 )
+                if package == "senior_perception":
+                    assert all(
+                        module.split(".")[0]
+                        not in {"senior_motion_control", "senior_motion_estimation"}
+                        for module in modules
+                    ), path
                 assert all(
                     module.split(".")[0] not in {"senior_robot", "senior_sim", *RETIRED}
                     for module in modules

@@ -3,7 +3,7 @@ import math
 import pytest
 from senior_motion_estimation.estimator import MotionEstimation
 from senior_motion_estimation.pose_estimator import PoseEstimation, PoseObservation
-from senior_perception.space_estimator import SpaceEstimation, SpaceObservation
+from senior_motion_estimation.space_estimator import SpaceEstimation, SpaceObservation
 from shapely.geometry import Point, box
 from test_unified_estimator import observation
 

@@ -10,12 +10,12 @@ import time
 from typing import Any
 
 from senior_perception.vision.raw_capture import capture_from_message
-from senior_perception.vision.rgbd_body_motion import body_pose_increment, planar_body_twist
 from senior_sensor_ingress.native_receipt import received_sample
 
 from senior_motion_estimation.estimator import MotionObservation, Origin
 from senior_motion_estimation.input_config import OptionalMotionInput
 from senior_motion_estimation.motion_observation_adapter import observation_origin, stamp_seconds
+from senior_motion_estimation.rgbd_body_motion import body_pose_increment, planar_body_twist
 from vehicle_core.sample_time import StampInterval
 from vehicle_core.values import Pose2D
 

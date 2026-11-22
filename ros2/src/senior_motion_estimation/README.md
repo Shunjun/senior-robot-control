@@ -1,3 +1,5 @@
+> **2026-11-23 依赖收尾：** 本包新增space_estimator与rgbd_body_motion的唯一归属，消费感知结果；感知不再反向导入估计。
+
 > **2026-11-22 当前状态：** 现拥有原生 scan matcher、回放程序、MotionFusion 和恢复观测值；原 senior_scan_matcher 已删除。 下文 B 阶段记录中的旧包名、转发路径和保留承诺属于当时历史，不作为当前安装说明。当前清单及迁移步骤见 [ROS 包归属](../../PACKAGE_OWNERSHIP.md)。
 
 # 运动估计功能包

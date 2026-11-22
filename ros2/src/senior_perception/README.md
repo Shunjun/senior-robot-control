@@ -1,3 +1,5 @@
+> **2026-11-23 依赖收尾：** 空间估计与RGB-D车体运动解释已迁至senior_motion_estimation；学习端仅依赖四属性只读LearningProfile，不再导入控制包的硬件profile。
+
 > **2026-11-22 当前状态：** 现拥有 scan_adapter、safety_scan_ingress、depth_ingress、semantic_ingress、rgbd_candidate_producer 和 perception_node。 下文 B 阶段记录中的旧包名、转发路径和保留承诺属于当时历史，不作为当前安装说明。当前清单及迁移步骤见 [ROS 包归属](../../PACKAGE_OWNERSHIP.md)。
 
 # 感知功能包
