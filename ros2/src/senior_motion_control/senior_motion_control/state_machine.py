@@ -135,6 +135,8 @@ class MotionStateMachine:
 
     def _advance_clock(self, now: float) -> bool:
         if not math.isfinite(now) or now < self._last_now:
+            # Evidence in the previous clock coordinate cannot establish stillness.
+            self._evidence = None
             self._fault = True
             self._fault_revision += 1
             self._pause_sources()

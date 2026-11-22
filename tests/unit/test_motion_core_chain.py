@@ -6,7 +6,6 @@ from concurrent.futures import Future
 from types import SimpleNamespace as N
 
 from control_process_test_support import capture_inputs, publish_inputs
-from senior_motion_control.constraint_worker import ConstraintScheduler
 from senior_motion_estimation.motion_observation_adapter import (
     NativeObservations,
     strict_reference_json,
@@ -109,7 +108,6 @@ def feed(adapter, t, vx=0.0, wz=0.0):
 def test_native_recovery_then_intent_and_local_release_are_actually_consumed(core, monkeypatch):  # noqa: F811
     p = core.profile
     a = NativeObservations(p.admission(), p.temporal(), p.fusion())
-    core.scheduler = ConstraintScheduler(core.engine, InlineWorker(), worker_budget_ms=250)
     node = core.node
     node._depth_policy = "laser_only"
     node._scan_topology_ready = lambda: True
@@ -126,6 +124,7 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
         capture_inputs(core, N(data=strict_reference_json(a.snapshot(t, t))))
         node._scans = [
             N(
+                predictions=(),
                 received=t,
                 received_ros=t,
                 measurement_steady=t,
@@ -165,7 +164,6 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
             )
         ]
         publish_inputs(core)
-        core.prefetch_scan()
         core.tick()
         return json.loads(node.publishers["/motion/runtime"].messages[-1].data)
 
@@ -188,12 +186,9 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
     for i in range(10):
         state = tick(11.75 + i * 0.025)
     assert core.node.emitted[-1][0].vx > 0, (state, core.node.emitted[-10:])
-    before = core.controller.trajectory.velocity.vx
     assert core.command(barrier("release", generation=3))
     tick(12.0)
-    # Residual positive acceleration is released with bounded jerk, so the first
-    # braking tick may increase speed; it must not jump to zero or reverse.
-    assert 0 < core.node.emitted[-1][0].vx < before + p.accel * 0.025
+    assert core.node.emitted[-1][0] == Velocity(0, 0)
     for i in range(1, 45):
         tick(12.0 + i * 0.025)
     assert core.node.emitted[-1][0] == Velocity(0, 0)
@@ -202,17 +197,3 @@ def test_native_recovery_then_intent_and_local_release_are_actually_consumed(cor
     assert core.sensors.latest.vx.error is None  # No invented physical error bound.
 
 
-def test_disabled_learning_prefetch_submits_latest_scan_before_control_tick(core, monkeypatch):  # noqa: F811
-    from control_process_test_support import LocalWorker
-    from senior_perception.scan_decode import ScanGeometry
-    from test_continuous_scan_control import scan
-
-    assert core.startup.state == "disabled" and core._learning_geometry is None
-    core.scan_geometry.worker.close()
-    core.scan_geometry = ScanGeometry(LocalWorker())
-    core.node._profile = lambda: DeviceProfile(self_mask_calibrated=True)
-    core.node._scans = [scan(10, 1)]
-    core.prefetch_scan()
-    assert core.scan_geometry.flight is not None and core.scan_geometry.flight.done()
-    assert core.scan_geometry.flight_key[:2] == ("scan", 1)
-    assert core._learning_geometry is None

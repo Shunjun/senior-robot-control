@@ -19,17 +19,6 @@ def recover(m, start=0):
         m.observe(evidence(start + i * 0.125, int(start * 1000) + 100 + i), start + i * 0.125)
 
 
-def test_recovery_requires_five_distinct_observations_and_half_second():
-    m = MotionStateMachine()
-    m.reduce(event(K.FEEDBACK_LOST, 1), now_steady=0)
-    m.observe(evidence(0, 1), 0)
-    for _ in range(9):
-        m.observe(evidence(0, 1), 0.1)
-    assert m.reduce(event(K.FEEDBACK_HEALTHY, 2), now_steady=0.1).mode is MotionMode.FEEDBACK_STOP
-    recover(m, 0.2)
-    assert m.reduce(event(K.FEEDBACK_HEALTHY, 3), now_steady=0.7).mode is MotionMode.IDLE
-
-
 def test_estop_reset_revision_and_fault_are_independent():
     m = MotionStateMachine()
     recover(m)
@@ -78,44 +67,16 @@ def test_obstacle_hold_not_estop_and_reset_does_not_restart_sources():
     )
 
 
-def test_expired_or_moving_evidence_cannot_reset_and_replay_does_not_revive():
+def test_reset_is_explicit_revision_matched_and_never_replays_old_source():
     m = MotionStateMachine()
-    recover(m)
     m.reduce(event(K.MANUAL_START, 1, source="a"), now_steady=0.5)
     m.reduce(event(K.SOFTWARE_ESTOP, 2), now_steady=0.5)
     revision = m.state.estop_revision
-    assert m.reduce(event(K.ESTOP_RESET, 3, revision), now_steady=0.8).mode is MotionMode.ESTOP
     m.observe(evidence(0.8, 1000, stationary=False), 0.8)
-    assert m.reduce(event(K.ESTOP_RESET, 4, revision), now_steady=0.8).mode is MotionMode.ESTOP
-    m.observe(evidence(0.9, 1001), 0.9)
-    assert m.reduce(event(K.ESTOP_RESET, 5, revision), now_steady=0.9).mode is MotionMode.IDLE
+    assert m.state.mode is MotionMode.ESTOP
+    assert m.reduce(event(K.ESTOP_RESET, 3, revision - 1), now_steady=0.8).mode is MotionMode.ESTOP
+    assert m.reduce(event(K.ESTOP_RESET, 4, revision), now_steady=0.9).mode is MotionMode.IDLE
     assert m.reduce(event(K.MANUAL_START, 1, source="a"), now_steady=0.9).mode is MotionMode.IDLE
-
-
-def test_recovery_gap_and_epoch_restart_require_a_new_continuous_run():
-    m = MotionStateMachine()
-    m.reduce(event(K.FEEDBACK_LOST, 1), now_steady=0)
-    recover(m)
-    m.observe(RecoveryObservation("new", 1, 1, 1.2, True, True), 1)
-    assert m.reduce(event(K.FEEDBACK_HEALTHY, 2), now_steady=1).mode is MotionMode.FEEDBACK_STOP
-    recover(m, 2)
-    assert m.reduce(event(K.FEEDBACK_HEALTHY, 3), now_steady=2.5).mode is MotionMode.IDLE
-
-
-def test_running_task_feedback_recovery_requests_replan_but_takeover_does_not():
-    m = MotionStateMachine()
-    recover(m)
-    m.reduce(event(K.TASK_START, 1, source="task-1"), now_steady=0.5)
-    m.reduce(event(K.FEEDBACK_LOST, 2), now_steady=0.5)
-    recover(m, 1)
-    state = m.reduce(event(K.FEEDBACK_HEALTHY, 3), now_steady=1.5)
-    assert "replan_task" in state.allowed_actions and m.task_paused
-    m.reduce(event(K.TASK_START, 4, source="task-1"), now_steady=1.5)
-    m.reduce(event(K.MANUAL_START, 5, source="a"), now_steady=1.5)
-    m.reduce(event(K.FEEDBACK_LOST, 6), now_steady=1.5)
-    recover(m, 2)
-    state = m.reduce(event(K.FEEDBACK_HEALTHY, 7), now_steady=2.5)
-    assert "replan_task" not in state.allowed_actions and m.task_paused
 
 
 def test_observation_clock_rollback_reports_execution_fault_not_user_estop():

@@ -255,6 +255,12 @@ class StartupLearning:
         if not self.active:
             if self.state == "validating" and self.deadline is not None and now >= self.deadline:
                 self._finish_action()
+                if self._stationary and (
+                    self.validation_after_steady is None
+                    or self.validation_after_steady < self.deadline
+                ):
+                    # Early withdrawal cannot supply the post-window stop watermark.
+                    self.validation_after_steady = now
             self._observe(now)
             self._phase()
             return

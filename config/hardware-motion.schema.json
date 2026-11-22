@@ -299,13 +299,11 @@
       "type": "number"
     },
     "length": {
-      "default": 0.674,
       "exclusiveMinimum": 0,
       "title": "Length",
       "type": "number"
     },
     "width": {
-      "default": 0.552,
       "exclusiveMinimum": 0,
       "title": "Width",
       "type": "number"
@@ -523,6 +521,8 @@
     "yaw_jerk",
     "lag_ms",
     "degraded_cap",
+    "length",
+    "width",
     "wheel_speed_mps",
     "stationary_linear_mps",
     "stationary_yaw_rps",

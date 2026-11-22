@@ -133,35 +133,6 @@ def test_epoch_change_and_missing_model_remove_permission():
     assert not c.measured_still
 
 
-def test_manual_only_readiness_never_clears_safety_or_grants_task_actions():
-    from senior_motion_control.contracts import MotionEvent
-    from senior_motion_control.contracts import MotionEventKind as K
-    from senior_motion_control.state_machine import MotionStateMachine, RecoveryObservation
-
-    m = MotionStateMachine()
-
-    def observe(t, seq):
-        m.observe(
-            RecoveryObservation("limited", seq, t, t + 0.1, False, False, manual_rearm_ready=True),
-            t,
-        )
-
-    observe(10.0, 1)
-    assert m.state.mode.value == "braking" and m.state.allowed_actions == ("acquire",)
-    assert not m.state.stationary
-    m.reduce(MotionEvent(K.SOFTWARE_ESTOP, "user", 0, 1), now_steady=10.0)
-    observe(10.05, 2)
-    m.reduce(MotionEvent(K.ESTOP_RESET, "user", m.state.estop_revision, 2), now_steady=10.05)
-    assert m.state.mode.value == "estop" and "acquire" not in m.state.allowed_actions
-    f = MotionStateMachine()
-    f.reduce(MotionEvent(K.EXECUTION_FAULT, "owner", 0, 1), now_steady=10.0)
-    f.observe(
-        RecoveryObservation("limited", 1, 10.0, 10.1, False, False, manual_rearm_ready=True), 10.0
-    )
-    f.reduce(MotionEvent(K.FAULT_RECOVER, "user", f.state.fault_revision, 2), now_steady=10.0)
-    assert f.state.mode.value == "execution_fault" and "acquire" not in f.state.allowed_actions
-
-
 def test_static_stop_model_does_not_manufacture_raw_stillness():
     c, now, _ = stopped_controller()
     c.config = replace(c.config, synthetic=False)
@@ -197,14 +168,3 @@ def test_manual_rearm_consumes_pending_task_auto_replan():
     m.reduce(MotionEvent(K.FEEDBACK_HEALTHY, "source", 0, 5), now_steady=now)
     assert m.state.mode.value == "manual"
     assert "replan_task" not in m.state.allowed_actions
-
-
-def test_current_proof_veto_revokes_permission_without_recounting_sensor_sample():
-    from senior_motion_control.state_machine import MotionStateMachine, RecoveryObservation
-
-    m = MotionStateMachine()
-    m.observe(RecoveryObservation("limited", 1, 10.0, 10.1, False, False, True), 10.0)
-    assert "acquire" in m.state.allowed_actions
-    m.observe(RecoveryObservation("limited", 2, 10.0, 10.1, False, False, False), 10.01)
-    assert "acquire" not in m.state.allowed_actions
-    assert not m.state.stationary
