@@ -82,3 +82,10 @@
 - Existing raw wheel/IMU/stillness/recovery scenarios: 36 passed. Larger startup/rearm selection: 42 passed, 2 failed, 13 errors; every failure/error node is already present in the pre-migration baseline (retired admission expectations and missing controller attribute), not removed or weakened.
 - Reviewed package build registration and installed-header consumer. Normalized estimation manifest formatting. Ten portable Python wheels built and installed into `/tmp/ros-cleanup/installed`; final wheels must be rebuilt after this checkpoint.
 - Import audit also finds pre-existing perception/estimation references and a perception learning-profile reference to control; the manifest DAG check does not certify complete Python dependency independence. These are separate from removal of retired package/facade names.
+
+### Checkpoint 4
+
+- Broader portable selection completed: 1217 passed, 116 failed, 104 errors, 11 skipped (962.85 seconds; it required SIGINT to unblock an asyncio wait before finishing). Compared exact failing node names with the original baseline: one new failure, localization script registration still asserted the removed robot setup entry.
+- Updated that existing assertion to validate the actual localization CMake install, executable permission and canonical script import; all 18 localization scenarios now pass. No algorithm assertion removed. All remaining broad failing/error nodes were already in baseline.
+- Isolated final estimation/control wheel reinstall and imports passed with `python -I -S`, installed directory and third-party site-packages only: retired facades absent, canonical module paths, recovery type identity, navigation contracts and read-only preflight verified. ROS installation/assets/typesupport remain unverified.
+- Default whole-tree collection also exposes an unchanged `test_home` basename collision between e2e and manager tests; original comparison roots omit e2e/deploy. Preserve and report it, do not rename unrelated tests.
