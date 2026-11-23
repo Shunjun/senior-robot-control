@@ -5,6 +5,7 @@
   <description>Map persistence, native SLAM runtime and isolated graph diagnostics</description>
   <maintainer email="maintainer@example.com">Senior Robot</maintainer>
   <license>Apache-2.0</license>
+  <license>LGPL-2.1-only</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
@@ -12,6 +13,8 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <depend>boost</depend>
+  <depend>libceres-dev</depend>
+  <depend>pluginlib</depend>
   <depend>libtbb-dev</depend>
   <depend>libssl-dev</depend>
   <depend>rclcpp</depend>

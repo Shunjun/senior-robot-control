@@ -5,7 +5,8 @@
 
 slam_toolbox:
   ros__parameters:
-    solver_plugin: solver_plugins::CeresSolver
+    solver_plugin: senior_mapping/BoundedCeresSolver
+    mapping_solver_threads: 1
     ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
     ceres_preconditioner: SCHUR_JACOBI
     ceres_trust_strategy: LEVENBERG_MARQUARDT

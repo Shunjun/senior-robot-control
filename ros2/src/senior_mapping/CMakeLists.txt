@@ -21,6 +21,16 @@ find_package(slam_toolbox 2.6.10 EXACT REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
+find_package(Ceres REQUIRED)
+find_package(pluginlib REQUIRED)
+
+add_library(senior_mapping_ceres SHARED src/solver/ceres_solver.cpp)
+target_compile_features(senior_mapping_ceres PRIVATE cxx_std_17)
+ament_target_dependencies(senior_mapping_ceres rclcpp slam_toolbox pluginlib)
+target_link_libraries(senior_mapping_ceres Ceres::ceres Boost::thread TBB::tbb)
+pluginlib_export_plugin_description_file(slam_toolbox mapping_solver_plugins.xml)
+install(TARGETS senior_mapping_ceres LIBRARY DESTINATION lib)
+install(DIRECTORY src/solver/ DESTINATION share/${PROJECT_NAME}/solver_source)
 
 # //Compatible: Humble ament uses the exported RViz target and skips the legacy library exports.
 set(slam_toolbox_library_dir "${slam_toolbox_DIR}/../../../lib")
@@ -111,6 +121,12 @@ if(BUILD_TESTING)
   ament_add_test(staged_graph
     COMMAND "$<TARGET_FILE:test_staged_graph>" "${CMAKE_CURRENT_BINARY_DIR}"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
+  ament_add_test(production_session_runtime
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_production_session.py"
+      "$<TARGET_FILE:slam_graph_node>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 90
   )
   ament_add_test(read_graph_runtime
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_read_graph.py"
