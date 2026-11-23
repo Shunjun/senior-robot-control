@@ -214,11 +214,17 @@ class OccupancyMaintainer:
         self._cells: dict[tuple[int, int], _Track] = {}
         self._map_ref: MapRef | None = None
         self._layer_open = False
+        self._last_stamp: float | None = None
 
     def update(self, observation: MappingObservation) -> MapDelta:
         limits = self._limits
         if limits is None or not _observation_usable(observation, limits, self._map_ref):
             return MapDelta((), ())
+        # A repeated delivery is not another independent observation. Clock
+        # resets require a new source/session rather than reusing old evidence.
+        if self._last_stamp is not None and observation.stamp <= self._last_stamp:
+            return MapDelta((), ())
+        self._last_stamp = observation.stamp
         if self._map_ref is None:
             self._map_ref = observation.map_ref
         added: list[CellEvidence] = []
@@ -319,11 +325,18 @@ class OccupancyMaintainer:
         hit_cells: set[tuple[int, int]],
         removed: list[CellEvidence],
     ) -> None:
+        if not self._cells:
+            return
         cleared: set[tuple[int, int]] = set()
         for index, ray in enumerate(observation.rays):
             if observation.dynamic_mask[index] or observation.occlusion_mask[index]:
                 continue
-            cleared.update(self._free_cells(observation.pose, ray))
+            # Unknown free cells have no persistent track to modify. Retain
+            # only existing tracks, rather than materializing the whole scan
+            # footprint in a second, potentially much larger set.
+            cleared.update(
+                cell for cell in self._free_cells(observation.pose, ray) if cell in self._cells
+            )
         cleared.difference_update(hit_cells)
         for key in cleared:
             track = self._cells.get(key)
