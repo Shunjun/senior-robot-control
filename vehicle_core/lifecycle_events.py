@@ -107,3 +107,65 @@ async def observe(fd: int, receive: Callable[[dict[str, Any]], None]) -> None:
             receive(value)
     finally:
         transport.close()
+
+
+class ResourceProcesses:
+    """Owned process roots, with birth identities retained across exit notifications."""
+
+    def __init__(self, module: str, fd: int | None = None) -> None:
+        self.module = module
+        self.fd = fd
+        self.births: dict[int, int] = {}
+
+    def _emit(self, phase: str, pid: int, birth: int) -> None:
+        value = self.fd if self.fd is not None else os.environ.get(WRITE_FD)
+        if value is not None:
+            emit(
+                int(value),
+                "resources",
+                phase,
+                resource_module=self.module,
+                pid=pid,
+                process_start=birth,
+            )
+
+    def started(self, pid: int) -> None:
+        from pathlib import Path
+
+        try:
+            raw = (Path("/proc") / str(pid) / "stat").read_text()
+            birth = int(raw[raw.rfind(")") + 1 :].split()[19])
+        except (OSError, ValueError, IndexError):
+            return
+        self.births[pid] = birth
+        self._emit("resource_started", pid, birth)
+
+    def exited(self, pid: int) -> None:
+        birth = self.births.pop(pid, None)
+        if birth is not None:
+            self._emit("resource_exited", pid, birth)
+
+
+def resource_handlers(module: str, actions: list[Any]) -> list[Any]:
+    """Bind to explicit actions; sibling safety/sensor launches are never attributed."""
+    from launch.actions import RegisterEventHandler
+    from launch.event_handlers import OnProcessExit, OnProcessStart
+
+    owner = ResourceProcesses(module)
+
+    def started(event: Any, context: Any) -> list[Any]:
+        owner.started(event.pid)
+        return []
+
+    def exited(event: Any, context: Any) -> list[Any]:
+        owner.exited(event.pid)
+        return []
+
+    return [
+        handler
+        for action in actions
+        for handler in (
+            RegisterEventHandler(OnProcessStart(target_action=action, on_start=started)),
+            RegisterEventHandler(OnProcessExit(target_action=action, on_exit=exited)),
+        )
+    ]

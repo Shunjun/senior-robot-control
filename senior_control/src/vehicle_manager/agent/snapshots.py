@@ -8,6 +8,7 @@ from senior_contracts.navigation import RouteProgress
 from senior_contracts.wire import (
     HomePayload,
     MapRefPayload,
+    PerformancePayload,
     RobotPosePayload,
     ScanPointPayload,
     SnapshotEnvelope,
@@ -89,6 +90,7 @@ class RobotSnapshot:
     manual_agent_epoch: int | None = None
     # //Compatible: legacy producers omit an independent raster version.
     map_grid_id: str | None = None
+    performance: PerformancePayload | None = None
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -124,6 +126,7 @@ def snapshot_envelope(
         expires_at=expires_at,
         type="snapshot",
         payload=SnapshotPayload(
+            performance=snapshot.performance,
             connected=snapshot.connected,
             localized=snapshot.localized,
             map_ref=_map_payload(snapshot.map_ref),
@@ -185,6 +188,7 @@ def snapshot_from_envelope(
     home = payload.home
     readiness = payload.navigation_ready if "navigation_ready" in payload.model_fields_set else None
     return RobotSnapshot(
+        performance=payload.performance,
         robot_id=envelope.robot_id,
         connected=payload.connected,
         localized=payload.localized,

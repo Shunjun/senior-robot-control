@@ -359,9 +359,37 @@ class RobotPosePayload(ScanPointPayload):
     yaw: float
 
 
+class ModulePerformance(StrictModel):
+    name: Literal["video", "navigation", "mapping"]
+    status: Literal["running", "inactive", "unavailable"]
+    cpu_percent: float | None = Field(default=None, ge=0, le=100)
+    rss_bytes: int | None = Field(default=None, ge=0)
+    process_count: int = Field(ge=0, le=128)
+
+
+class PerformancePayload(StrictModel):
+    """CPU shares use all visible CPUs; RSS sums may count shared pages twice.
+
+    procfs scope is deliberately explicit: container/cgroup quotas are not host
+    CPU capacity and must not be inferred from these counters.
+    """
+
+    sequence: int = Field(ge=1)
+    sampled_at: float
+    interval_s: float | None = Field(default=None, gt=0)
+    scope: Literal["procfs_visible"] = "procfs_visible"
+    cpu_count: int = Field(ge=0)
+    cpu_percent: float | None = Field(default=None, ge=0, le=100)
+    memory_total_bytes: int | None = Field(default=None, gt=0)
+    memory_used_bytes: int | None = Field(default=None, ge=0)
+    modules: list[ModulePerformance] = Field(max_length=3)
+
+
 class SnapshotPayload(StrictModel):
     """The robot's own view of itself, pushed on connect and after each change."""
 
+    # //Compatible: older vehicles omit resource telemetry.
+    performance: PerformancePayload | None = None
     connected: bool
     localized: bool
     map_ref: MapRefPayload | None
@@ -394,7 +422,12 @@ class SnapshotPayload(StrictModel):
     @model_serializer(mode="wrap")
     def serialize(self, handler: Any) -> dict[str, Any]:
         result: dict[str, Any] = handler(self)
-        for optional in ("vehicle_ui", "manual_controller_generation", "manual_agent_epoch"):
+        for optional in (
+            "performance",
+            "vehicle_ui",
+            "manual_controller_generation",
+            "manual_agent_epoch",
+        ):
             if getattr(self, optional) is None:
                 result.pop(optional, None)
         # //Compatible: do not add even a null field to legacy snapshot bytes.

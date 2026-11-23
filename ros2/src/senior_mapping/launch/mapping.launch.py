@@ -14,10 +14,11 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
+from vehicle_core.lifecycle_events import resource_handlers
 from vehicle_core.launch_recovery import restart_prefix
 
 
-def _mapping_nodes(context):
+def _mapping_actions(context):
     share = FindPackageShare("senior_mapping")
     use_sim_time = LaunchConfiguration("use_sim_time")
     params = PathJoinSubstitution([share, "config", "slam.yaml"])
@@ -119,6 +120,12 @@ def _mapping_nodes(context):
             parameters=[{"use_sim_time": use_sim_time, "odom_frame": odom_frame}],
         ),
     ]
+
+
+
+def _mapping_nodes(context):
+    nodes = _mapping_actions(context)
+    return [*resource_handlers("mapping", nodes), *nodes]
 
 
 def generate_launch_description():

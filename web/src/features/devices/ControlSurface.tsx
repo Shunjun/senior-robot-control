@@ -16,6 +16,8 @@ export interface ControlSurfaceProps {
   robotId: string;
   link: RobotLink;
   snapshot: RobotSnapshot;
+  mappingPreview?: ReactElement;
+  performancePreview?: ReactElement;
 }
 
 export type WorkspaceMode = "manual" | "navigation" | "tasks" | "mapping";
@@ -54,7 +56,7 @@ function navigationUnavailableMessage(reason: string | null | undefined): string
 }
 
 /** Drive and map controls for the selected vehicle and its current map reference. */
-export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps): ReactElement {
+export function ControlSurface({ robotId, link, snapshot, mappingPreview, performancePreview }: ControlSurfaceProps): ReactElement {
   const [mapLoad, setMapLoad] = useState(0);
   const [mode, setMode] = useState<WorkspaceMode>("manual");
   const [manualView, setManualView] = useState<PrimaryView>("map");
@@ -153,6 +155,8 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   }
 
   return (
+    <>
+    {performancePreview}
     <div className={styles.workspace} data-mode={mode}>
       <div className={styles.toolbar}>
         <nav className={styles.switches} aria-label="车辆场景">
@@ -203,7 +207,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
           )}
         </div>}
         <div className={styles.operations} data-manual={mode === "manual"}>
-          <DriveView robotId={robotId} link={link} snapshot={snapshot} active={mode === "manual"} compact />
+          {mode === "mapping" && mappingPreview !== undefined ? mappingPreview : <DriveView robotId={robotId} link={link} snapshot={snapshot} active={mode === "manual"} compact />}
           {mode === "navigation" && (
             <>
               <HomeControls
@@ -233,9 +237,10 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
               {note !== null && <p className={styles.quiet} role="status">{note}</p>}
             </>
           )}
-          {mode === "mapping" && <MapManager robotId={robotId} snapshot={snapshot} link={link} />}
+          {mode === "mapping" && mappingPreview === undefined && <MapManager robotId={robotId} snapshot={snapshot} link={link} />}
         </div>
       </div>
     </div>
+    </>
   );
 }

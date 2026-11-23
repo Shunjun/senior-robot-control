@@ -15,6 +15,7 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
+from vehicle_core.lifecycle_events import resource_handlers
 from vehicle_core.launch_recovery import lifecycle_group_command, lifecycle_owner_prefix
 
 
@@ -136,7 +137,7 @@ def _members(context):
     return context.locals.senior_lifecycle_recovery.bind([*servers, *managers, *adapters])
 
 
-def _entry(context):
+def _entry_actions(context):
     if context.get_locals_as_dict().get("senior_lifecycle_recovery") is not None:
         return _members(context)
     external = IfCondition(LaunchConfiguration("external_controller")).evaluate(context)
@@ -158,6 +159,16 @@ def _entry(context):
             sigkill_timeout="1.0",
         )
     ]
+
+
+
+def _entry(context):
+    actions = _entry_actions(context)
+    # The outer lifecycle owner is the registered root; its descendants are
+    # discovered only beneath that birth-verified PID, never by executable name.
+    if context.get_locals_as_dict().get("senior_lifecycle_recovery") is not None:
+        return actions
+    return [*resource_handlers("navigation", actions), *actions]
 
 
 def generate_launch_description():

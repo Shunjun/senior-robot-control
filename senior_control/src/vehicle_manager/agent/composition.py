@@ -20,6 +20,7 @@ from vehicle_manager.agent.logs_wire import AgentLogHandler, CloudLogGrants
 from vehicle_manager.agent.main import Agent
 from vehicle_manager.agent.settings_wire import SettingsRuntime
 from vehicle_manager.observability import APPLICATION_LOG_NAMES
+from vehicle_manager.performance.monitor import PerformanceMonitor
 from vehicle_manager.settings.models import vehicle_settings_profile
 from vehicle_manager.settings.service import RuntimeGate, SettingsService
 from vehicle_manager.settings.store import SettingsStore
@@ -271,11 +272,19 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
                     }
                 )
 
+        performance = PerformanceMonitor()
         event_fd = os.environ.get(ports.read_fd)
 
         async def lifecycle_loop() -> None:
             assert event_fd is not None
-            await ports.observe(int(event_fd), agent.report_runtime_event)
+
+            def receive(event: dict[str, Any]) -> None:
+                if event.get("module") == "resources":
+                    performance.event(event)
+                else:
+                    agent.report_runtime_event(event)
+
+            await ports.observe(int(event_fd), receive)
             # EOF is already recorded by observe; no global shutdown or restart.
 
         async def logs_loop() -> None:
@@ -313,9 +322,11 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             navigation=navigation_actions,
             motion=motion,
             video_session=video_session,
+            performance=performance.read,
             map_root=config.database_path.parent / "map-transfer",
             background={
                 "tasks": task_loop,
+                "performance": performance.run,
                 **({"logs": logs_loop} if logs is not None else {}),
                 **({"observer": lifecycle_loop} if event_fd is not None else {}),
             },

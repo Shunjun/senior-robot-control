@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from vehicle_core.lifecycle_events import ResourceProcesses
 from vehicle_manager.deployment import private_directory
 from vehicle_manager.media.camera_demand import CameraDemand
 from vehicle_manager.platform_ports import ServicePorts
@@ -189,6 +190,8 @@ async def supervise(
             environment["ROS_DOMAIN_ID"] = str(profile.ros_domain)
         events = ports.events() if profile is not None else None
 
+        video_resources = ResourceProcesses("video", events.writer if events else None)
+
         async def start_camera(component: str) -> asyncio.subprocess.Process:
             assert profile is not None and events is not None
             events.report("camera", "starting", component=component)
@@ -203,10 +206,12 @@ async def supervise(
             except (OSError, ValueError) as exc:
                 events.report("camera", "unavailable", str(exc))
                 raise
+            video_resources.started(child.pid)
             return child
 
         async def stop_camera(child: asyncio.subprocess.Process) -> None:
             await ports.terminate_motion_stack(child, group_grace=6, budget=10)
+            video_resources.exited(child.pid)
 
         camera = CameraDemand(start=start_camera, stop=stop_camera, ready=camera_ready)
 

@@ -8,3 +8,6 @@
 .actions button:disabled, .danger:disabled { opacity: .42; cursor: not-allowed; }
 .danger:not(:disabled) { color: #fff; background: var(--red-deep); border-color: var(--red); }
 .warning { padding: var(--space-2); background: var(--amber-wash); border-left: 3px solid var(--amber); }
+.catalog { display: grid; gap: 0; border-top: 1px solid var(--line); }
+.catalogRow { display: flex; gap: 10px; justify-content: space-between; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
+.catalogRow .actions button { min-height: 32px; }

@@ -18,6 +18,7 @@ from senior_contracts.wire import (
     LearningStatusEnvelope,
     ManualIntentEnvelope,
     OperationEnvelope,
+    PerformancePayload,
     RecoveryEnvelope,
     ResponseEnvelope,
     ResponsePayload,
@@ -60,6 +61,7 @@ def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
     pose, route = snapshot.robot_pose, snapshot.route_progress
     return (
         snapshot.localized,
+        None if snapshot.performance is None else snapshot.performance.sequence,
         snapshot.map_ref,
         snapshot.map_generation,
         snapshot.map_grid_id,
@@ -114,10 +116,12 @@ class Agent(Generic[ResultT]):
         state_poll_ms: float = 250,
         metrics: Metrics | None = None,
         clock: Clock | None = None,
+        performance: Callable[[], PerformancePayload | None] = lambda: None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         if not robot_id.strip():
             raise ValueError("robot id is required")
+        self._performance = performance
         self._ports = ports
         self.robot_id = robot_id
         self._settings = settings
@@ -1123,6 +1127,7 @@ class Agent(Generic[ResultT]):
             runnable_task_ids=tuple(i for i in live.runnable_task_ids if i not in deleted),
             execution_status=live.execution_status,
             collected_at=self._wall_clock(),
+            performance=self._performance(),
             tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
             map_generation=live.map_generation,

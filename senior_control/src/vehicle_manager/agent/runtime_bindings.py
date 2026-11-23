@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from senior_contracts.wire import HEARTBEAT_INTERVAL_MS, VideoEnvelope
+from senior_contracts.wire import HEARTBEAT_INTERVAL_MS, PerformancePayload, VideoEnvelope
 
 from vehicle_core.clock import Clock, SystemClock
 from vehicle_core.diagnostics import (
@@ -119,6 +119,7 @@ class Agent(_Agent[OperationResult]):
         state_poll_ms: float = 250,
         metrics: Metrics | None = None,
         clock: Clock | None = None,
+        performance: Callable[[], PerformancePayload | None] = lambda: None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         super().__init__(
@@ -148,6 +149,7 @@ class Agent(_Agent[OperationResult]):
             metrics=metrics,
             clock=clock,
             wall_clock=wall_clock,
+            performance=performance,
             ports=AgentRuntimePorts(
                 error=DomainError,
                 status=OperationStatus,
