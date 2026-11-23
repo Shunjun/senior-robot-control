@@ -38,6 +38,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MatchStationaryScan.srv"
   "srv/ReadGraph.srv"
   "srv/ReadGraphCommit.srv"
+  "srv/MappingGate.srv"
   "srv/ReadLoadedGraph.srv"
   DEPENDENCIES builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs
 )

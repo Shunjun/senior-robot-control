@@ -2,7 +2,7 @@ import { CommandError, type RobotLink } from "./client";
 import type { MapRef, ResponsePayload } from "./protocol";
 import { workspaceRequest } from "./workspace";
 
-export type MapPhase = "idle" | "mapping" | "saving" | "matching" | "pending_calibration" | "unavailable" | "failed";
+export type MapPhase = "idle" | "loading" | "mapping" | "saving" | "matching" | "pending_calibration" | "unavailable" | "failed";
 export type MapCommand = "map.create" | "map.activate" | "map.delete";
 export interface SavedMap {
   map_ref: MapRef;
@@ -19,7 +19,7 @@ export interface MappingCatalog {
   runtime_available: boolean;
   phase: MapPhase;
 }
-const PHASES = new Set<string>(["idle", "mapping", "saving", "matching", "pending_calibration", "unavailable", "failed"]);
+const PHASES = new Set<string>(["idle", "loading", "mapping", "saving", "matching", "pending_calibration", "unavailable", "failed"]);
 const STATES = new Set<string>(["none", "matching", "ready", "pending_calibration"]);
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const count = (value: unknown): value is number => typeof value === "number" && Number.isSafeInteger(value) && value >= 0;

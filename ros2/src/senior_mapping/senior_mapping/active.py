@@ -78,6 +78,11 @@ class ActiveMap:
         return self._store.change_sequence
 
     @property
+    def observation_sequence(self) -> int:
+        progress = self._store.ingest_progress
+        return 0 if progress is None else progress.sequence
+
+    @property
     def map_generation(self) -> str:
         """Reference/localization nonce, independent of raster data IDs."""
         return self._store.map_generation
@@ -142,6 +147,10 @@ class ActiveMap:
         """Canonical waypoint owner updates a binding on its exact current cut."""
         binding = self._require_source(source)
         self._store.commit_waypoints(binding, expected_sequence=expected_sequence, changes=changes)
+
+    def waypoint_bindings(self, source: object) -> tuple[WaypointBinding, ...]:
+        self._require_source(source)
+        return self._store.waypoint_bindings()
 
     async def save_checkpoint(
         self,

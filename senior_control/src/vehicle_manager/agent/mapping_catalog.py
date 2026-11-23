@@ -5,7 +5,13 @@ physical graph/localization effects stay with the registered mapping runtime.
 No directory-only edit is acknowledged as starting a SLAM session.
 """
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from senior_mapping.active import ActiveMap
+    from senior_mapping.runtime import MappingRuntime
+
+    from vehicle_core.values import MapRef, Pose2D
 
 from pydantic import ValidationError
 from senior_contracts.wire import MapCreateBody, MapPhase, MapRuntimeStatus, MapTargetBody
@@ -52,7 +58,14 @@ class MappingRequests:
 
 
 async def mapping_requests(
-    database: Database, reads: Requester, writes: Requester, *, robot_id: str
+    database: Database,
+    reads: Requester,
+    writes: Requester,
+    *,
+    robot_id: str,
+    root: Any = None,
+    waypoints: Any = None,
+    checkpoint_delay_s: float = 10.0,
 ) -> Requester | None:
     try:
         from senior_mapping.catalog import MapCatalog
@@ -67,7 +80,200 @@ async def mapping_requests(
         # //Compatible: installing management without optional mapping keeps original ports.
         return None
     catalog = MapCatalog(database, robot_id=robot_id)
+    if root is not None and waypoints is not None:
+        import uuid
+
+        from senior_mapping.native_session import NativeMappingBackend
+        from senior_mapping.runtime import MappingRuntime
+
+        await catalog.prepare()
+        current = await waypoints.home()
+        home_id = (
+            current.waypoint.id
+            if current is not None
+            else uuid.uuid5(uuid.NAMESPACE_URL, "senior-home:" + robot_id).hex
+        )
+        native = NativeMappingBackend(
+            writes,
+            catalog,
+            root,
+            robot_id=robot_id,
+            home=MappingHome(waypoints, robot_id),
+            home_id=home_id,
+            max_delay_s=checkpoint_delay_s,
+        )
+        native_runtime = MappingRuntime(
+            catalog, native, restore_required=(await catalog.selection()).generation > 0
+        )
+        endpoint = CatalogEndpoint(catalog, robot_id=robot_id, runtime=native_runtime)
+        return ProductionMappingRequests(endpoint, native_runtime, reads, writes)
+    # //Compatible: read-only injected ports retain the original remote lifecycle adapter.
     await catalog.prepare_reader()
     runtime = RemoteMapRuntime(reads, writes)
     endpoint = CatalogEndpoint(catalog, robot_id=robot_id, runtime=runtime)
     return MappingRequests(endpoint, runtime, reads, writes)
+
+
+class ProductionMappingRequests:
+    """Management persistence and ingestion, with ROS over local IPC."""
+
+    def __init__(
+        self, endpoint: Requester, runtime: "MappingRuntime", reads: Requester, writes: Requester
+    ) -> None:
+        self._endpoint, self._runtime = endpoint, runtime
+        self._reads, self._writes = reads, writes
+        self._runtime.phase = "unavailable"
+
+    async def run(self) -> None:
+        import asyncio
+        import logging
+
+        from vehicle_core.errors import DomainError
+
+        # Do not advertise the new lifecycle before the actual ROS adapter is available.
+        self._runtime.phase = "unavailable"
+        while True:
+            try:
+                if await self._runtime.backend.stopped():
+                    reply = await self._writes.request("map.backend.stop")
+                    if reply.get("ok") is True:
+                        break
+            except (IpcError, OSError, DomainError):
+                logging.getLogger(__name__).debug("Mapping adapter not ready", exc_info=True)
+            await asyncio.sleep(1)
+        self._runtime.phase = "idle"
+        try:
+            await self._runtime.restore()
+        except (IpcError, OSError, DomainError) as exc:
+            self._runtime.last_error = exc
+            self._runtime.phase = "failed"
+        checked_at = 0.0
+        while True:
+            try:
+                now = asyncio.get_running_loop().time()
+                if now - checked_at >= 1:
+                    await self._runtime.backend.stopped()
+                    checked_at = now
+                await self._runtime.ingest(None)
+            except (IpcError, OSError, DomainError) as exc:
+                self._runtime.last_error = exc
+                self._runtime.phase = "failed"
+            await asyncio.sleep(0.05)
+
+    async def close(self) -> None:
+        await self._runtime.close()
+
+    async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
+        if kind in {"map.catalog", "map.status", "map.create", "map.activate", "map.delete"}:
+            return await self._endpoint.request(kind, **fields)
+        if kind in {"map.active", "map.manifest", "map.tile"}:
+            from senior_mapping.workspace import WorkspaceMap
+
+            if self._runtime.owns_reference:
+                return WorkspaceMap(self._runtime.grid).read(kind, fields)
+        owner = self._writes if kind in {"map.import", "map.export", "map.clear"} else self._reads
+        return await owner.request(kind, **fields)
+
+    def state_requests(self, client: Requester) -> Requester:
+        owner = self
+
+        class State:
+            async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
+                raw = await client.request(kind, **fields)
+                if kind == "state.get" and owner._runtime.owns_reference:
+                    grid = owner._runtime.grid()
+                    raw.update(
+                        map_id=grid.map_ref.map_id if grid else None,
+                        reference_revision=grid.map_ref.reference_revision if grid else None,
+                        map_grid_id=grid.grid_id if grid else None,
+                        map_generation=None,
+                        localization_generation=None,
+                        localized=False,
+                        navigation_ready=False,
+                        robot_pose=None,
+                        route_progress=None,
+                        navigation_block_reason="active mapping has no qualified navigation raster",
+                    )
+                return raw
+
+        return State()
+
+
+class MappingHome:
+    """Keep one canonical live Home; each checkpoint retains its frozen map binding."""
+
+    def __init__(self, waypoints: Any, robot_id: str) -> None:
+        self.points, self.robot_id = waypoints, robot_id
+        self._revision: int | None = None
+
+    async def restore(self, snapshot: Any, home_id: str) -> None:
+        binding = next(
+            row for row in snapshot.waypoint_bindings if row.waypoint.waypoint_id == home_id
+        )
+        point = binding.waypoint
+        await self.points.save_home(
+            waypoint_id=home_id,
+            pose=point.pose,
+            map_ref=snapshot.map_ref,
+            anchor_id=point.anchor_id,
+            anchor_pose=binding.anchor_pose,
+            source_robot_id=self.robot_id,
+            status="needs_review",
+            adopted=True,
+            latitude=None,
+            longitude=None,
+            expected_revision=await self.points.home_revision(),
+        )
+        self._revision = await self.points.home_revision()
+
+    async def __call__(
+        self,
+        map_ref: "MapRef",
+        home_id: str,
+        active: "ActiveMap",
+        source: object,
+        poses: dict[str, "Pose2D"],
+        *,
+        before: bool,
+    ) -> None:
+        revision = await self.points.home_revision()
+        current = await self.points.home()
+        if before:
+            if self._revision is not None and revision != self._revision and current is not None:
+                point = current.waypoint
+                if (
+                    point.map_ref == map_ref
+                    and point.anchor_id in poses
+                    and point.status == "confirmed"
+                ):
+                    from senior_mapping.references import AnchoredWaypoint, WaypointBinding
+
+                    active.update_waypoints(
+                        source,
+                        expected_sequence=active.observation_sequence,
+                        changes=(
+                            WaypointBinding(
+                                AnchoredWaypoint(home_id, point.pose, point.anchor_id, False),
+                                poses[point.anchor_id],
+                            ),
+                        ),
+                    )
+            return
+        binding = next(
+            row for row in active.waypoint_bindings(source) if row.waypoint.waypoint_id == home_id
+        )
+        point = binding.waypoint
+        await self.points.save_home(
+            waypoint_id=home_id,
+            pose=point.pose,
+            map_ref=map_ref,
+            anchor_id=point.anchor_id,
+            anchor_pose=binding.anchor_pose,
+            source_robot_id=self.robot_id,
+            status="confirmed",
+            adopted=True,
+            latitude=None,
+            longitude=None,
+            expected_revision=revision,
+        )
+        self._revision = await self.points.home_revision()

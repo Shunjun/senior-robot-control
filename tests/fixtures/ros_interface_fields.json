@@ -29,5 +29,6 @@
   "srv/MatchStationaryScan.srv": "03ebe3d83ad9892da51434b625c746814d24d1ba1ff23916c297d9bc790096c9",
   "srv/ReadGraphCommit.srv": "9f4f96bc7f6e8950848b26426dff72356d4b0330d0e0fa148d05b122fb7e52bb",
   "srv/CaptureGraph.srv": "1f51a087fcd1fddd4332c35efdc69a5c9e630770daf4643e4c190f14924e3470",
-  "srv/ReadLoadedGraph.srv": "635967bb93097d2faf01517f16ccddd1c326ee5c3d1c78988fbc4a6098114a57"
+  "srv/ReadLoadedGraph.srv": "635967bb93097d2faf01517f16ccddd1c326ee5c3d1c78988fbc4a6098114a57",
+  "srv/MappingGate.srv": "22644fe599ab18187abfe9fa5e34aa8cbe2069ba526b47731a7dc2e681295758"
 }

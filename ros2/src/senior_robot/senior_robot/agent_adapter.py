@@ -97,6 +97,12 @@ class AdapterCore:
 
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
+        if kind.startswith("map.backend."):
+            if self._mapping is None or self._exiting:
+                return {"ok": False, "error": "unavailable"}
+            return await self._mapping.request(
+                kind, **{key: value for key, value in message.items() if key not in {"v", "type"}}
+            )
         if kind in {"map.status", "map.catalog", "map.create", "map.activate", "map.delete"}:
             if self._mapping is None or self._exiting:
                 return {"ok": False, "error": "unavailable"}
@@ -712,8 +718,22 @@ def main() -> None:
                 query_collection=node.query_terminal_collection,
             )
 
+        from senior_mapping.ros_runtime import RosMappingBackend
+
+        def mapping_stopped():
+            current = node.motion_runtime()
+            route = routes.current if routes is not None else None
+            return (
+                current is not None
+                and current.get("stationary") is True
+                and current.get("mode") not in {"task", "braking"}
+                and (route is None or route.status in {"succeeded", "failed", "canceled"})
+            )
+
+        mapping_backend = RosMappingBackend(node, stopped=mapping_stopped)
         core = AdapterCore(
             robot_id=robot_id,
+            mapping=mapping_backend,
             submit=node.submit,
             disconnect=node.disconnect,
             request_exit=request_exit,
@@ -795,6 +815,7 @@ def main() -> None:
                 if warmer is not None:
                     warmer.cancel()
                     await asyncio.gather(warmer, return_exceptions=True)
+                await mapping_backend.close()
                 if controller is not None:
                     await controller.close()
                 try:

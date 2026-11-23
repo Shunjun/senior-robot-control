@@ -8,7 +8,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
-  <depend version_eq="2.6.8">slam_toolbox</depend>
+  <depend version_eq="2.6.10">slam_toolbox</depend>
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <depend>boost</depend>

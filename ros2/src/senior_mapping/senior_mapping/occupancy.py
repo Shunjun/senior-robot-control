@@ -13,6 +13,8 @@ from senior_mapping.evidence import (
     OccupancyThresholds,
     RangeRay,
 )
+from senior_mapping.references import CellBinding
+from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef, Pose2D
 
 _WRITABLE_HITS: frozenset[HitKind] = frozenset({"static", "unknown_static"})
@@ -215,8 +217,12 @@ class OccupancyMaintainer:
         self._map_ref: MapRef | None = None
         self._layer_open = False
         self._last_stamp: float | None = None
+        self._removed_points: dict[tuple[int, int], tuple[float, float]] = {}
+        self._refreshed: list[CellEvidence] = []
 
     def update(self, observation: MappingObservation) -> MapDelta:
+        self._removed_points.clear()
+        self._refreshed.clear()
         limits = self._limits
         if limits is None or not _observation_usable(observation, limits, self._map_ref):
             return MapDelta((), ())
@@ -239,6 +245,72 @@ class OccupancyMaintainer:
         occupied = tuple(self._record(track) for track in self._cells.values() if track.occupied)
         return OccupancySnapshot(self._map_ref, occupied)
 
+    def restore(
+        self, snapshot: OccupancySnapshot, *, bindings: tuple[CellBinding, ...] = ()
+    ) -> None:
+        """Restore confirmed evidence; a new boot starts a new observation clock."""
+        if self._limits is None:
+            raise ValueError("occupancy restore requires configured thresholds")
+        self._cells.clear()
+        self._map_ref = snapshot.map_ref
+        self._layer_open = snapshot.map_ref is not None
+        self._last_stamp = None
+        points = {b.evidence.cell: (b.world_x, b.world_y) for b in bindings if not b.removed}
+        for item in snapshot.cells:
+            point = points.get(
+                item.cell,
+                (
+                    (item.cell[0] + 0.5) * self._limits.cell_size_m,
+                    (item.cell[1] + 0.5) * self._limits.cell_size_m,
+                ),
+            )
+            self._cells[item.cell] = _Track(
+                *item.cell,
+                item.anchor_id,
+                item.hit_count,
+                item.free_count,
+                item.last_valid_time,
+                item.last_valid_time,
+                None,
+                item.belief,
+                point[0],
+                point[1],
+                True,
+                item.change_source,
+            )
+
+    def bindings(self, delta: MapDelta, poses: dict[str, Pose2D]) -> tuple[CellBinding, ...]:
+        """Bind the exact maintained point, not a differently quantized cell centre."""
+        result = []
+        for removed, items in ((False, (*delta.added, *self._refreshed)), (True, delta.removed)):
+            for item in items:
+                if removed:
+                    x, y = self._removed_points[item.cell]
+                else:
+                    track = self._cells[item.cell]
+                    x, y = track.ref_x, track.ref_y
+                result.append(CellBinding(item, x, y, poses[item.anchor_id], removed))
+        return tuple(result)
+
+    def reproject(self, old: dict[str, Pose2D], new: dict[str, Pose2D]) -> None:
+        """Move pending and confirmed evidence together after graph correction."""
+        staged: dict[tuple[int, int], _Track] = {}
+        for track in self._cells.values():
+            before, after = old.get(track.anchor_id), new.get(track.anchor_id)
+            if before is None or after is None:
+                continue
+            yaw = after.yaw - before.yaw
+            x, y = track.ref_x - before.x, track.ref_y - before.y
+            track.ref_x = after.x + math.cos(yaw) * x - math.sin(yaw) * y
+            track.ref_y = after.y + math.sin(yaw) * x + math.cos(yaw) * y
+            track.ix, track.iy = self._index(track.ref_x, track.ref_y)
+            # Colliding evidence is retained once, never counted as extra observations.
+            key = (track.ix, track.iy)
+            prior = staged.get(key)
+            if prior is None or track.occupied and not prior.occupied:
+                staged[key] = track
+        self._cells = staged
+
     def _integrate_hits(
         self,
         observation: MappingObservation,
@@ -258,6 +330,8 @@ class OccupancyMaintainer:
             if selected is None:
                 continue
             if track is None:
+                if len(self._cells) >= 100000:
+                    raise DomainError(ErrorCode.UNAVAILABLE, "occupancy track budget exhausted")
                 track = _Track(
                     key[0],
                     key[1],
@@ -307,6 +381,7 @@ class OccupancyMaintainer:
         track.last_valid_time = observation.stamp
         track.anchor_id = observation.anchor_id
         if track.occupied:
+            self._refreshed.append(self._record(track))
             return
         spanned = observation.stamp - track.first_hit_time >= limits.confirm_span_s
         confirmed = (
@@ -392,6 +467,7 @@ class OccupancyMaintainer:
             return
         track.source = "observed_free_space"
         removed.append(replace(self._record(track), anchor_id=observation.anchor_id))
+        self._removed_points[key] = (track.ref_x, track.ref_y)
         del self._cells[key]
 
     def _clamp(self, belief: float) -> float:

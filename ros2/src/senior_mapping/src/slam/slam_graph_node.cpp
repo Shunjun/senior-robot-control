@@ -26,6 +26,7 @@
 #include "senior_interfaces/srv/capture_graph.hpp"
 #include "senior_interfaces/srv/match_stationary_scan.hpp"
 #include "senior_interfaces/srv/read_graph.hpp"
+#include "senior_interfaces/srv/mapping_gate.hpp"
 #include "senior_interfaces/srv/read_graph_commit.hpp"
 #include "senior_interfaces/srv/read_loaded_graph.hpp"
 //Compatible: the Humble slam_toolbox 2.6.10 subclass exposes the mapper and its mutex.
@@ -52,6 +53,19 @@ public:
 
   void start()
   {
+    const bool production = declare_parameter<bool>("production_session", false);
+    const auto production_boot = declare_parameter<std::string>("production_boot_id", "");
+    if (production) {
+      if (production_boot.size() != 36) {
+        throw std::invalid_argument("Production owner must supply its new boot identity");
+      }
+      boot_id_ = production_boot;
+    }
+    const auto live_prefix = declare_parameter<std::string>("production_graph_prefix", "");
+    const auto live_digest = declare_parameter<std::string>("production_graph_digest", "");
+    if ((!live_prefix.empty() || !live_digest.empty()) && !production) {
+      throw std::invalid_argument("Production graph requires an explicit session owner");
+    }
     const auto prefix = declare_parameter<std::string>("candidate_graph_prefix", "");
     const auto digest = declare_parameter<std::string>("candidate_graph_digest", "");
     const auto attempt = declare_parameter<std::string>("candidate_load_attempt", "");
@@ -79,6 +93,47 @@ public:
         capture_directory_ = std::make_unique<CaptureDirectory>(capture_root);
       }
       configure();
+      if (production) {
+        if (bounded_topic.empty() || capture_root.empty()) {
+          throw std::invalid_argument("Production mapping requires bounded input and capture");
+        }
+        accepting_ = false;
+        production_ = true;
+        if (!live_prefix.empty()) {
+          const StagedGraph staged(live_prefix, live_digest);
+          auto request = std::make_shared<slam_toolbox::srv::DeserializePoseGraph::Request>();
+          auto response = std::make_shared<slam_toolbox::srv::DeserializePoseGraph::Response>();
+          request->filename = staged.prefix().string();
+          request->match_type = request->START_AT_GIVEN_POSE;
+          const auto seed = declare_parameter<std::vector<double>>("production_seed", std::vector<double>{0., 0., 0.});
+          if (seed.size() != 3 || !std::all_of(seed.begin(), seed.end(),
+              [](double value) {return std::isfinite(value);})) {
+            throw std::invalid_argument("Invalid production map seed");
+          }
+          request->initial_pose.x = seed[0];
+          request->initial_pose.y = seed[1];
+          request->initial_pose.theta = seed[2];
+          //Compatible: use the supported Humble loader before spinning any scan callback.
+          if (!deserializePoseGraphCallback(nullptr, request, response)) {
+            throw std::runtime_error("Could not load production graph");
+          }
+          rclcpp::Time stamp;
+          const auto frames = copy_graph(ReadGraph::Response{}.keyframes.max_size(), stamp);
+          if (!frames || frames->empty()) {
+            throw std::runtime_error("Production graph load returned no vertices");
+          }
+        }
+        mapping_gate_ = create_service<senior_interfaces::srv::MappingGate>("/senior/slam/mapping_gate",
+          [this](const senior_interfaces::srv::MappingGate::Request::SharedPtr request,
+                 senior_interfaces::srv::MappingGate::Response::SharedPtr response) {
+            const std::lock_guard<std::mutex> lock(scan_ingress_mutex_);
+            if (request->boot_id != boot_id_) {return;}
+            accepting_ = request->accepting;
+            input_floor_ = now();
+            response->graph_commit_sequence = graph_commit_.sequence;
+            response->ok = true;
+          });
+      }
       if (!capture_root.empty() || !bounded_topic.empty()) {
         disable_stock_mutations();
       }
@@ -102,11 +157,11 @@ public:
   }
 
 private:
-  using CaptureGraph = srv::CaptureGraph;
-  using ReadGraph = srv::ReadGraph;
-  using ReadGraphCommit = srv::ReadGraphCommit;
-  using ReadLoadedGraph = srv::ReadLoadedGraph;
-  using MatchStationaryScan = srv::MatchStationaryScan;
+  using CaptureGraph = senior_interfaces::srv::CaptureGraph;
+  using ReadGraph = senior_interfaces::srv::ReadGraph;
+  using ReadGraphCommit = senior_interfaces::srv::ReadGraphCommit;
+  using ReadLoadedGraph = senior_interfaces::srv::ReadLoadedGraph;
+  using MatchStationaryScan = senior_interfaces::srv::MatchStationaryScan;
 
   struct GraphCommitWatermark
   {
@@ -200,6 +255,9 @@ private:
         StaticReceipt::ConstSharedPtr static_receipt)
       {
         const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
+        if (production_ && (!accepting_ || rclcpp::Time(scan->header.stamp) <= input_floor_)) {
+          return;
+        }
         // Check the cached mount even if the vendor later throttles this scan.
         const auto cached = lasers_.find(scan->header.frame_id);
         if (cached != lasers_.end() &&
@@ -690,7 +748,7 @@ private:
   {
     keyframes.reserve(frames.size());
     for (const auto & frame : frames) {
-      msg::Keyframe output;
+      senior_interfaces::msg::Keyframe output;
       output.id = frame.id;
       output.x = frame.x;
       output.y = frame.y;
@@ -726,9 +784,13 @@ private:
     return frames;
   }
 
-  const std::string boot_id_{boost::uuids::to_string(boost::uuids::random_generator{}())};
+  std::string boot_id_{boost::uuids::to_string(boost::uuids::random_generator{}())};
   std::uint64_t snapshot_sequence_{0};
   std::mutex scan_ingress_mutex_;
+  bool production_{false};
+  bool accepting_{true};
+  rclcpp::Time input_floor_{0, 0, RCL_ROS_TIME};
+  rclcpp::Service<senior_interfaces::srv::MappingGate>::SharedPtr mapping_gate_;
   GraphCommitWatermark graph_commit_;
   std::optional<InFlightScan> in_flight_;
   std::optional<double> mount_height_;

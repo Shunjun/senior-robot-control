@@ -20,16 +20,16 @@ interface MapCatalogProps {
 export function MapCatalog({ entries, activeId, status, busy, onCreate, onActivate, onDelete }: MapCatalogProps): ReactElement {
   const [name, setName] = useState("");
   const [deleting, setDeleting] = useState<string | null>(null);
-  const labels = { idle: "尚无活动地图", unavailable: "车端建图运行时未就绪", failed: "建图状态异常", mapping: "持续建图 · 自动保存", saving: "正在保存最新地图", matching: "正在匹配车辆位置", pending_calibration: "等待校准车辆位置" };
+  const labels = { loading: "正在切换地图，请等待…", idle: "尚无活动地图", unavailable: "车端建图运行时未就绪", failed: "建图状态异常", mapping: "持续建图 · 自动保存", saving: "正在保存最新地图", matching: "正在匹配车辆位置", pending_calibration: "等待校准车辆位置" };
   return <section className={styles.panel} aria-label="活动地图管理">
     <header><p className={styles.kicker}>ACTIVE MAP</p><h3>地图管理</h3></header>
     <p role="status">{labels[status]}</p>
     <p className={styles.note}>手动驾驶时也会更新地图，切换视频或地图视图不影响建图。</p>
-    {status === "pending_calibration" && <p className={styles.warning}>Home 标记仅作为待校准参考。请在“导航与定位”中校准车辆位置，匹配通过后继续建图与导航。</p>}
+    {status === "pending_calibration" && <p className={styles.warning}>车辆尚未匹配目标地图。Home 仅作为待校准参考，建图与导航尚未恢复。</p>}
     <div className={styles.catalog}>{entries.map(entry => <div className={styles.catalogRow} key={entry.map_id} role="group" aria-label={`${entry.name}地图`}>
-      <div><strong>{entry.name}</strong><p className={styles.note}>{entry.map_id === activeId ? status === "unavailable" ? "上次选择" : "当前地图" : "已保存"} · {entry.saved_at ?? "等待首次保存"}</p></div>
+      <div><strong>{entry.name}</strong><p className={styles.note}>{entry.map_id === activeId ? status === "unavailable" ? "上次选择" : "当前地图" : entry.saved_at === null ? "未完成" : "已保存"} · {entry.saved_at ?? "等待首次保存"}</p></div>
       <div className={styles.actions}>
-        {entry.map_id !== activeId && <button disabled={busy} onClick={() => onActivate(entry.map_id)}>切换</button>}
+        {entry.map_id !== activeId && <button disabled={busy || entry.saved_at === null} onClick={() => onActivate(entry.map_id)}>切换</button>}
         <button disabled={busy} onClick={() => setDeleting(entry.map_id)}>删除</button>
       </div>
     </div>)}</div>

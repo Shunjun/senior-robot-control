@@ -578,6 +578,10 @@ class MapReferenceStore:
     def is_empty(self) -> bool:
         return not self._live and not self._removed and not self._waypoints
 
+    def waypoint_bindings(self) -> tuple[WaypointBinding, ...]:
+        """Immutable current bindings for the canonical waypoint owner."""
+        return tuple(WaypointBinding(item.waypoint, item.anchor_pose) for item in self._waypoints)
+
     def snapshot(
         self,
         pose_graph_prefix: Path,

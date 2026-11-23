@@ -119,3 +119,15 @@ ros2 launch senior_robot mapping.launch.py odom_frame:=odom_combined
 `ros2/src/senior_mapping/src/slam/`，`senior_slam_bridge` 保留消息/服务类型。
 本片只配置已有启动组合，不新增生产 transport 或来源认证，不开放导航/持久写图，
 亦不完成活动地图选择、独立 Home、WS 或网页刷新；没有手动保存步骤。
+
+## 活动建图生产组装（2026-11-23）
+
+当前生产路径为 `vehicle_manager.agent.mapping_catalog` → `senior_mapping.runtime/native_session` → 本地IPC → 共用 `agent_adapter` 的 `RosMappingBackend` → 自有 `slam_graph_node`。不需要在控制页面之外另起一个stock mapping launch；手动诊断launch与此所有者不能同时运行同名SLAM服务。运行入口不在导入时启动进程，只有明确新建或恢复地图才启动SLAM。
+
+切图要求停车、无在途路线，串行进入loading、关闭入口、flush、退出旧图、加载目标、匹配/待校准、再恢复更新。窗口中的扫描丢弃；新进程不消费旧窗口缓存。原生MappingGate是新增ROS服务，需要interfaces和mapping协同clean rebuild，不能仅更新Python wheel就认为原生端已升级。旧接口安装缺少该类型时，现有控制仍可启动，建图报告未就绪。
+
+Parallels Ubuntu 22.04 实际安装 ros-humble-slam-toolbox 2.6.10-1jammy.20260916.165114。CMake与包清单统一固定2.6.10，与存档BACKEND_VERSION及既有适配代码一致；不升级或安装另一个ROS环境。已有标准C++几何/历史测试通过不等于ROS新节点编译通过，隔离colcon验证结果另行记录。
+
+默认checkpoint最长延期10秒，停车优先，只有一个重计算/保存工作在途；100000个占据track、8MB临时图传输与既有16K原生图节点限制均有界。超限明确失败，不静默吞掉已接受的图commit。保存失败保留最后完整checkpoint，并阻止切到下一图；不会因此禁止手动驾驶。这些是实现边界，尚未测得四核设备的性能预算。
+
+图、稳定占据、参考与冻结Home一起保存。当前Home只有WaypointStore这一份实时真值；每图的冻结绑定随checkpoint恢复。加载不匹配进入待校准，Home仅作参考，不发布真实车辆位姿。自动初始化目前为Home附近局部匹配与稳定几何复核；任意位置全局重定位、手动位置提示、完整Home编辑事务和可导航栅格/位姿资格仍是后续工作。当前画布栅格明确display_only，不能用于启用导航。

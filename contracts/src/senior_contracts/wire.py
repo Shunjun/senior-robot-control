@@ -385,7 +385,14 @@ class MapSelectionPayload(StrictModel):
 
 
 MapPhase = Literal[
-    "idle", "mapping", "saving", "matching", "pending_calibration", "unavailable", "failed"
+    "idle",
+    "loading",
+    "mapping",
+    "saving",
+    "matching",
+    "pending_calibration",
+    "unavailable",
+    "failed",
 ]
 
 

@@ -16,6 +16,7 @@ from vehicle_manager.agent.bootstrap_ports import (
     AgentConfiguration,
     LocalClient,
 )
+from vehicle_manager.agent.dispatcher import Deadlines
 from vehicle_manager.agent.logs_wire import AgentLogHandler, CloudLogGrants
 from vehicle_manager.agent.main import Agent
 from vehicle_manager.agent.request_ports import Requester
@@ -106,21 +107,31 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             safety_client=ipc(),
         )
         state_client = ipc()
-        map_client = ipc()
+        map_client = ipc(timeout_ms=30000.0)
         navigation_client = ipc(timeout_ms=3000.0)
         workspace_client = ipc()
         display_client = ipc()
         mapping_protocol_version = None
         map_requests: Requester = map_client
         workspace_requests: Requester = workspace_client
+        mapped = None
         if ports.mapping_requests is not None:
             mapped = await ports.mapping_requests(
-                database, workspace_client, map_client, robot_id=config.robot_id
+                database,
+                workspace_client,
+                map_client,
+                robot_id=config.robot_id,
+                root=config.database_path.parent / "active-mapping",
+                waypoints=waypoints,
             )
             if mapped is not None:
                 map_requests = workspace_requests = mapped
                 mapping_protocol_version = 1
-        state = ports.state(state_client)
+        state = ports.state(
+            mapped.state_requests(state_client)
+            if mapped is not None and hasattr(mapped, "state_requests")
+            else state_client
+        )
         exported_grid = None
         if config.workspace_map_bundle is not None and config.workspace_map_sha256 is not None:
             try:
@@ -136,7 +147,11 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             config.robot_id, tasks, waypoints, workspace_requests, exported_grid=exported_grid
         )
         display = ports.workspace(
-            config.robot_id, tasks, waypoints, display_client, exported_grid=exported_grid
+            config.robot_id,
+            tasks,
+            waypoints,
+            mapped if mapped is not None else display_client,
+            exported_grid=exported_grid,
         )
         home = ports.home(state_client, waypoints, robot_id=config.robot_id)
         agent: Agent[Any]
@@ -247,6 +262,11 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
         video_session = media.session
 
         async def cleanup() -> None:
+            if mapped is not None and hasattr(mapped, "close"):
+                try:
+                    await mapped.close()
+                except Exception:
+                    logger.exception("Mapping shutdown did not save its final cut")
             await asyncio.gather(
                 state_client.close(),
                 map_client.close(),
@@ -339,11 +359,17 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             background={
                 "tasks": task_loop,
                 "performance": performance.run,
+                **(
+                    {"mapping": mapped.run} if mapped is not None and hasattr(mapped, "run") else {}
+                ),
                 **({"logs": logs_loop} if logs is not None else {}),
                 **({"observer": lifecycle_loop} if event_fd is not None else {}),
             },
             background_fault=background_fault,
             cleanup=cleanup,
+            cleanup_timeout_ms=(
+                Deadlines().map * 1000 if mapped is not None and hasattr(mapped, "close") else None
+            ),
             # Accepted tasks are vehicle-owned; only manual authority follows eligibility.
         )
         agent.install_signal_handlers()

@@ -16,9 +16,9 @@
 
 ## 2. 活动地图与一致持久化
 
-- [ ] 新增senior_mapping的session/catalog/checkpoint owner，扩展active公共接口，复用references/store/operations持久边界；不从外部访问私有_store。
+- [x] 新增senior_mapping的session/catalog/checkpoint owner，扩展active公共接口，复用references/store/operations持久边界；不从外部访问私有_store。
 - [ ] 新建、唯一活动会话、可信更新、稳定MapRef与独立grid_id、每图Home。
-- [ ] 完整checkpoint自动落盘、重启恢复和未完成版本处理；数据与状态同代提交。
+- [x] 完整checkpoint自动落盘、重启恢复和未完成版本处理；数据与状态同代提交。
 - [ ] 实现有界重计算、增量更新、合并checkpoint与最长延期；重计算和I/O不阻塞控制/通信，处理旧会话取消与队列容量。具体预算由四核目标设备实测确定。
 - [ ] 独立回放与真实临时数据库/目录验证后，审阅diff并提交。
 
@@ -181,3 +181,41 @@ checkpoint审阅补充：清理旧版本时取消保存任务，不能让新读�
 - 前端`npm run build`与`npm run test -- --run`：构建成功、182 passed。随后仅加强旧地图测试spy对所有请求的断言，定向4 passed及typecheck通过。生产bundle在原/robots/r1页面以mock传输检查性能展示、真实目录请求及运行时未就绪禁用，桌面/手机无页面错误；临时静态调试服务已关闭。
 - contracts/manager/mapping/robot四个wheel离线重建并隔离安装；含已有core的`python -I -S`检查安装来源、当前源文件哈希和ROS-free imports通过。新增目录端点/manager组装定向mypy通过；Ruff检查和格式、CRLF原文件适配的diff空白检查通过。
 - 本批验证对应本次直接接线实现及fixture修正提交，不含部署、服务重启或车辆动作。PR继续Draft，整份建图计划仍未完成。
+
+### 串行切图修订（用户明确批准）
+
+切图不支持行进中执行，不让新旧会话并行。停车后进入loading，先关闭观测入口（期间新数据丢弃），等待已接收数据处理和checkpoint完成，退出旧SLAM进程，再加载目标图并完成自动匹配/待校准初始化。清空输入缓存后重开入口。保留现有完整文件保存、错误保护与必要时间戳校验；不增加跨会话并行/迟到结果协议。
+
+本批使用executing-plans继续当前Codex直接实施，功能主分支不变。预计产品新增5–7/修改8–12、测试新增1–2/修改2–4、配置文档修改3–5，共19–30路径。剩余候选选用：15串行切图的loading/旧图flush/丢弃窗口；16真实文件/DB连续建图与重开；17本地生产后端桥及原生切换接线；18保存失败不加载下一图。复用现有checkpoint、占据、Home及来源保护，最多新增6项，不重做已完成14项。
+
+### 串行生命周期与生产组装实现
+
+- MappingRuntime现已由manager生产factory创建，负责唯一会话、停车检查、loading期间拒绝入口、旧会话flush/退出、新建/恢复及活动/非活动图删除。已知不完整目标在退役当前会话前拒绝，不能因为点击失败创建留下的目录行而中断好地图。
+- NativeSession消费连续的原生graph commit，复用OccupancyMaintainer、ActiveMap、MapCheckpoints与CheckpointWorker。CPU更新、投影、图文件复制和校验移到后台；最多一个建图重任务。每秒缓存停车状态，停车优先保存，行驶时默认最长10秒请求保存；该值是初始配置，不是已经测得的树莓派预算。
+- RosMappingBackend已接入真实与仿真共用agent_adapter入口，拥有唯一原生SLAM子进程和独立静态雷达TF receipt relay；资源登记指向实际子进程。启动不再只是注册空端点。新SDK接口缺失时返回unavailable，不阻断原有控制启动。保存/切图通过MappingGate关闭原生接收并取得最后commit水位，排空已接收切片再保存；重新打开设时间下限，丢弃loading窗口的缓存扫描。
+- NativeGraph通过已验证本地IPC peer和自己启动的原生boot/连续水位消费数据，不接受网页提供的图/路径。大图经单个私有、限8MB的RAM-backed transfer文件传递，控制IPC仍保留8KB上限。捕获校验原生pair digest、精确锚点和commit水位后才保存；加载再次校验文件和实际安装的图。此边界服务于地图持久层，不授予运动或导航资格。
+- 每张checkpoint冻结独立Home绑定；当前Home仍复用唯一WaypointStore行。加载阶段写目标Home的needs_review状态，匹配通过后才confirmed。全量实时Home编辑事务、手动位姿提示接口和导航栅格资格仍未完成，不能把本批接通误报成整份计划结束。当前自动恢复以目标Home为局部种子，并用已有稳定结构复核；不能宣称已具备任意位置全局重定位。
+- 恢复不匹配时保持pending_calibration、原生入口关闭、目标图只读，不伪造车辆位姿。当前地图输出仍display_only，navigation_ready保持false；这是尚未完成导航/定位组装的明确边界，不以SLAM服务ACK或只读栅格冒充可导航。
+- 审阅修复了新组装中的回环绑定偏差：原先把真实维护点换成栅格中心，旋转后两者不同。已观察真实文件链路断言失败，改为保留精确维护点；已有占据快照的最新锚点语义和全部旧断言保留，持久绑定另行增量刷新。取消时等待写线程结束，跟踪原生文件复制，最后才回收进程/目录。
+- 此批选定6个功能场景：串行loading/drop/flush、旧保存失败不启用目标、真实IPC+DB+文件的持续更新和重开、匹配失败Home待核查、回环精确绑定、未完成目标不退役当前图。全项累计20项，未绕过上限。没有新增skip/xfail或删除原保护。此前三项实际bug回归保留；本批新集成问题由上述场景覆盖，不另拆假想异常矩阵。
+- 全量初检仅新增接口基线与模拟ROS组装环境适配失败；原接口字段哈希全部保留并新增MappingGate。最终全量2473 passed / 116原有skip / 1原有forkpty警告，126.86秒，日志/tmp/mapping-runtime-final.log；该全量尚不含随后追加的未完成目标场景。追加保护后的地图/占据定向77 passed，mypy六个核心模块通过。此前ROS/地图/ownership72 passed。C++已有snapshot、graph_commit_history、laser_geometry、static_lidar_tf四个便携程序均编译运行成功，它们不验证新增ROS节点ABI。
+- 前端完整182项及构建通过，随后loading/未完成地图按钮调整后再次执行前端回归/构建。四个wheel离线构建并隔离安装，新运行时源码与安装来源按哈希复核；mapping在最终保护后单独刷新，不能沿用之前旧wheel。
+- 只读实车连接仍失败：wheeltec.local无法解析。本机Docker守护进程未运行；没有为此启动服务。因此新增原生节点/生成接口的Humble clean colcon、ROS通信/实车定位及四核CPU/延迟/内存/落盘负载验收均未完成。没有部署、重启车辆服务或发送运动指令。PR保留Draft。
+
+退出审阅补充：实际复现了通用500ms安全清理预算提前取消最终地图保存（定向测试缩短为20ms，80ms保存被取消，exit先发生）。为生产持久化清理单独使用既有地图操作的120秒有界预算；所有运动撤权/安全动作仍保留原短期限，并先撤权再保存、保存后再退出适配器。该项是实际bug定向回归，不占上述20项功能场景；已观察失败后修复，并运行原Agent回归。模块性能登记当前覆盖原生SLAM与receipt relay，manager内部后台Python计算仍未单独拆分，整机CPU包含其开销。
+
+类型检查范围说明：新建运行时与catalog/composition共6个核心模块定向mypy通过；ROS绑定在缺少生成包的本机使用ignore-missing-imports检查其余逻辑通过。扩查既有Agent/main与runtime_bindings时出现6项历史类型报告（gesture可空比较、learning参数注解及4个转导出声明），已对照HEAD确认对应逻辑未改；没有用ignore或修改保护测试掩盖，也不将其宣称为全仓mypy通过。
+
+删除审阅补充：已实际复现“目录退役成功但完整位姿图仍占磁盘”，新增真实文件定向回归并修复。活动图先flush/退出，非活动图不打断当前会话；目录保留删除墓碑，随后回收该图的checkpoint目录，重复删除不会复活地图。删除路径拒绝符号链接，失败不伪称文件回收成功。此为本批第2项实际bug回归，与退出保存一并单列，不扩充20项功能场景。
+
+### Parallels原生构建与补充排障
+
+用户指定使用现有Parallels ROS虚拟机，不使用Docker构建。Ubuntu Linux 22.04（ARM64，4核）中实际安装slam_toolbox 2.6.10-1jammy.20260916.165114；统一CMake/package.xml为2.6.10 EXACT，与现有存档版本及适配代码一致。修复旧包迁移遗留的C++ msg/srv命名空间引用。源码冻结到/home/toby/senior-audit-20261031/active-mapping-20261123-native-v1，记录source-sha256.json并取得根.vm-test.lock，干净/opt/ros/humble underlay，顺序包构建、最多两编译任务。senior_interfaces、senior_sensor_ingress、senior_mapping三包colcon build成功（7分21秒）；仅sensor_ingress原有显式构造器warning，未改该无关源码。build.log保留于上述目录；本结果不等于实车定位/性能验收。
+
+后续完整便携回归曾因沙箱拒绝Unix socket/本地监听失败，解除对应限制后只剩一条corrected恢复场景失败。定位为synthetic native fixture把next读取实现为不可重读的消费操作，取消丢回执后无法按原水位重取；改为保存各水位的独立快照，保留原序列连续性及地图/绑定断言。另实际暴露NativeGraph无法处理IPC内部错误码internal，错误处理中再次抛ValueError；先以定向回归复现，再将不属于领域枚举的后端错误报告为unavailable。此为本批第3项实际bug定向回归，功能场景仍为20项；不通过延长等待、skip或弱化断言隐藏失败。最终复测结果待下文记录。
+
+Docker说明：未安装Docker或拉取ROS镜像。此前打开已有Docker误触发其已有容器自启动，已停止这六个容器；清理未引用镜像约1.114GB和构建缓存25.43GB，数据卷/容器保留，仍有7个被容器引用的镜像约3.534GB。清理后退出Docker，宿主机df显示约71GiB可用。Docker仅用于用户授权的清理，不作为本任务ROS环境。
+
+最终便携验证：`PATH=/usr/local/bin:$PATH .venv/bin/pytest -q`在允许本地socket/子进程的环境中2477 passed / 116原有skip / 1原有forkpty警告（127.77秒），日志/tmp/mapping-runtime-final-accepted.log。功能场景20项，本批实际bug回归3项（退出最终保存预算、删除回收图文件、内部IPC错误处理）与此前bug回归分别保留；原回归均复用。四个wheel加已有core隔离安装检查当前模块源哈希和ROS-free imports通过。新运行时/catalog/composition六模块以MYPYPATH指向当前源码、follow-imports=silent定向mypy通过，不能据此声称全仓类型检查通过。前端182项及build已验证，本次未再修改前端。
+
+首轮ROS原生测试尚有5项失败（colcon结果同时记录missing_result，不能把其重复计为更多独立场景）：graph_commit_delivery、static_lidar_tf及drift因共用helper默认use_sim_time=true但自身未发/clock；acquire_scan_receipt与candidate_live_scan仍解析旧ROS时间日志。保留原断言并修正helper时钟选择和单调采样新鲜度对比，同时将诊断日志输出为单调纳秒。此为既有场景迁移，不新增功能场景；第二轮隔离测试仍待取得结果，暂不声明ROS回归全通过。

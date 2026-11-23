@@ -50,7 +50,7 @@ export function MapCatalogController({ robotId, link, live }: MapCatalogControll
   const fresh = result?.revision === readRevision.current && readError === null;
   function reload(): void { readRevision.current += 1; setRefresh(value => value + 1); }
   const pending = operation !== null && !FINISHED.has(operation.status);
-  const busy = !live || !fresh || data === null || !data.runtime_available || pending || data.phase === "matching";
+  const busy = !live || !fresh || data === null || !data.runtime_available || pending || (data.phase === "matching" || data.phase === "loading");
 
   async function mutate(kind: MapCommand, fields: Record<string, unknown>): Promise<boolean> {
     if (busy || data === null || inFlight.current !== null) return false;

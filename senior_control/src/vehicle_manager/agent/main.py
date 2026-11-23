@@ -109,6 +109,7 @@ class Agent(Generic[ResultT]):
         map_root: Path = Path("map-transfer"),
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         cleanup: Callable[[], Awaitable[None]] | None = None,
+        cleanup_timeout_ms: float | None = None,
         background_fault: Callable[[str], Awaitable[None]] | None = None,
         heartbeat_ms: float = HEARTBEAT_INTERVAL_MS,
         retry_delay_ms: float = 1000,
@@ -145,6 +146,7 @@ class Agent(Generic[ResultT]):
         self._deadlines = deadlines if deadlines is not None else Deadlines()
         self._background = dict(background or {})
         self._cleanup = cleanup
+        self._cleanup_timeout_ms = cleanup_timeout_ms
         self._background_fault_handler = background_fault
         self.module_faults: dict[str, dict[str, Any]] = {}
         self._failed_modules: set[str] = set()
@@ -336,7 +338,9 @@ class Agent(Generic[ResultT]):
         if link is not None:
             await self._quietly(link.close())
         if self._cleanup is not None:
-            await self._quietly(self._cleanup())
+            await self._quietly(
+                self._cleanup(), context="persistence cleanup", timeout_ms=self._cleanup_timeout_ms
+            )
         await self._quietly(self._motion.exit())
         await self._quietly(self._motion.close())
         loop = asyncio.get_running_loop()
@@ -369,10 +373,20 @@ class Agent(Generic[ResultT]):
         if not task.cancelled():
             task.exception()
 
-    async def _quietly(self, call: Awaitable[Any], *, context: str = "shutdown step") -> None:
+    async def _quietly(
+        self,
+        call: Awaitable[Any],
+        *,
+        context: str = "shutdown step",
+        timeout_ms: float | None = None,
+    ) -> None:
         task = asyncio.ensure_future(call)
+        # //Compatible: ordinary cleanup retains the existing safety deadline.
         try:
-            done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety_ms / 1000)
+            done, _pending = await asyncio.wait(
+                {task},
+                timeout=(self._deadlines.safety_ms if timeout_ms is None else timeout_ms) / 1000,
+            )
         except BaseException:
             task.cancel()
             self._stragglers.add(task)
