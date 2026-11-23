@@ -5,6 +5,7 @@ physical graph/localization effects stay with the registered mapping runtime.
 No directory-only edit is acknowledged as starting a SLAM session.
 """
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -19,7 +20,7 @@ from senior_contracts.wire import MapCreateBody, MapPhase, MapRuntimeStatus, Map
 from vehicle_core.ipc import IpcError
 from vehicle_manager.agent.local_adapters import IpcMapPort
 from vehicle_manager.agent.request_ports import Requester
-from vehicle_manager.storage.database import Database
+from vehicle_manager.storage.home_database import HomeDatabase
 
 
 class RemoteMapRuntime:
@@ -58,7 +59,7 @@ class MappingRequests:
 
 
 async def mapping_requests(
-    database: Database,
+    database: HomeDatabase[Any],
     reads: Requester,
     writes: Requester,
     *,
@@ -98,7 +99,7 @@ async def mapping_requests(
             catalog,
             root,
             robot_id=robot_id,
-            home=MappingHome(waypoints, robot_id),
+            home=MappingHome(waypoints, robot_id, lock=database.home_target_lock(robot_id)),
             home_id=home_id,
             max_delay_s=checkpoint_delay_s,
         )
@@ -106,7 +107,7 @@ async def mapping_requests(
             catalog, native, restore_required=(await catalog.selection()).generation > 0
         )
         endpoint = CatalogEndpoint(catalog, robot_id=robot_id, runtime=native_runtime)
-        return ProductionMappingRequests(endpoint, native_runtime, reads, writes)
+        return ProductionMappingRequests(endpoint, native_runtime, reads, writes, native.home)
     # //Compatible: read-only injected ports retain the original remote lifecycle adapter.
     await catalog.prepare_reader()
     runtime = RemoteMapRuntime(reads, writes)
@@ -118,11 +119,30 @@ class ProductionMappingRequests:
     """Management persistence and ingestion, with ROS over local IPC."""
 
     def __init__(
-        self, endpoint: Requester, runtime: "MappingRuntime", reads: Requester, writes: Requester
+        self,
+        endpoint: Requester,
+        runtime: "MappingRuntime",
+        reads: Requester,
+        writes: Requester,
+        home: "MappingHome",
     ) -> None:
         self._endpoint, self._runtime = endpoint, runtime
         self._reads, self._writes = reads, writes
+        self._home = home
         self._runtime.phase = "unavailable"
+
+    def coordinate_home(self, port: Any) -> Any:
+        coordinator = self._home
+
+        class Home:
+            async def home_revision(self) -> int:
+                return int(await port.home_revision())
+
+            async def set_current(self, expected_revision: int) -> int:
+                async with coordinator.transaction():
+                    return int(await port.set_current(expected_revision))
+
+        return Home()
 
     async def run(self) -> None:
         import asyncio
@@ -202,11 +222,20 @@ class ProductionMappingRequests:
 class MappingHome:
     """Keep one canonical live Home; each checkpoint retains its frozen map binding."""
 
-    def __init__(self, waypoints: Any, robot_id: str) -> None:
+    def __init__(self, waypoints: Any, robot_id: str, *, lock: asyncio.Lock | None = None) -> None:
         self.points, self.robot_id = waypoints, robot_id
         self._revision: int | None = None
+        self._capture_revision: int | None = None
+        self._lock = lock if lock is not None else asyncio.Lock()
+
+    def transaction(self) -> asyncio.Lock:
+        return self._lock
 
     async def restore(self, snapshot: Any, home_id: str) -> None:
+        async with self.transaction():
+            await self._restore(snapshot, home_id)
+
+    async def _restore(self, snapshot: Any, home_id: str) -> None:
         binding = next(
             row for row in snapshot.waypoint_bindings if row.waypoint.waypoint_id == home_id
         )
@@ -225,6 +254,7 @@ class MappingHome:
             expected_revision=await self.points.home_revision(),
         )
         self._revision = await self.points.home_revision()
+        self._capture_revision = self._revision
 
     async def __call__(
         self,
@@ -239,6 +269,7 @@ class MappingHome:
         revision = await self.points.home_revision()
         current = await self.points.home()
         if before:
+            self._capture_revision = revision
             if self._revision is not None and revision != self._revision and current is not None:
                 point = current.waypoint
                 if (
@@ -274,6 +305,7 @@ class MappingHome:
             adopted=True,
             latitude=None,
             longitude=None,
-            expected_revision=revision,
+            expected_revision=self._capture_revision,
         )
         self._revision = await self.points.home_revision()
+        self._capture_revision = self._revision

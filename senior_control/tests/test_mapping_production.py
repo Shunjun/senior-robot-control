@@ -301,3 +301,47 @@ async def test_native_internal_error_is_reported_as_unavailable():
     with pytest.raises(DomainError) as result:
         await graph.request("gate")
     assert result.value.code is ErrorCode.UNAVAILABLE
+
+
+async def test_checkpoint_home_sync_does_not_overwrite_a_later_canonical_edit(tmp_path):
+    from senior_mapping.references import AnchoredWaypoint, WaypointBinding
+    from vehicle_manager.agent.mapping_catalog import MappingHome
+
+    from vehicle_core.errors import DomainError, ErrorCode
+    from vehicle_core.values import MapRef, Pose2D
+
+    ref, origin = MapRef("map-home", 1), Pose2D(0.0, 0.0, 0.0)
+    binding = WaypointBinding(AnchoredWaypoint("home", origin, "0", False), origin)
+
+    class Active:
+        def waypoint_bindings(self, source):
+            return (binding,)
+
+    async with Database(tmp_path / "home.db") as database:
+        points = WaypointStore(database, robot_id="r1")
+        await points.prepare()
+
+        async def save(pose):
+            return await points.save_home(
+                waypoint_id="home",
+                pose=pose,
+                map_ref=ref,
+                anchor_id="0",
+                anchor_pose=origin,
+                source_robot_id="r1",
+                status="confirmed",
+                adopted=True,
+                latitude=None,
+                longitude=None,
+                expected_revision=await points.home_revision(),
+            )
+
+        await save(origin)
+        coordinator = MappingHome(points, "r1")
+        await coordinator(ref, "home", Active(), object(), {"0": origin}, before=True)
+        edited = Pose2D(2.0, 1.0, 0.3)
+        await save(edited)
+        with pytest.raises(DomainError) as result:
+            await coordinator(ref, "home", Active(), object(), {"0": origin}, before=False)
+        assert result.value.code is ErrorCode.CONFLICT
+        assert (await points.home()).waypoint.pose == edited

@@ -153,7 +153,15 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             mapped if mapped is not None else display_client,
             exported_grid=exported_grid,
         )
-        home = ports.home(state_client, waypoints, robot_id=config.robot_id)
+        home = ports.home(
+            mapped.state_requests(state_client)
+            if mapped is not None and hasattr(mapped, "state_requests")
+            else state_client,
+            waypoints,
+            robot_id=config.robot_id,
+        )
+        if mapped is not None and hasattr(mapped, "coordinate_home"):
+            home = mapped.coordinate_home(home)
         agent: Agent[Any]
         navigation = ports.navigation(
             navigation_client,

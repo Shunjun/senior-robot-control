@@ -301,14 +301,15 @@ class NativeSession:
         if not restore:
             await self._save(0)
         else:
-            await self.backend.home(
-                self.entry.map_ref,
-                self.home_id,
-                self.active,
-                self.source,
-                self._poses,
-                before=False,
-            )
+            async with self.backend.home.transaction():
+                await self.backend.home(
+                    self.entry.map_ref,
+                    self.home_id,
+                    self.active,
+                    self.source,
+                    self._poses,
+                    before=False,
+                )
 
     async def activate(self) -> None:
         if self.active is None:
@@ -459,7 +460,7 @@ class NativeSession:
         return total >= 20 and matched / total >= 0.7
 
     async def _save(self, _: int) -> None:
-        async with self._lock:
+        async with self._lock, self.backend.home.transaction():
             assert self.active is not None
             succeeded = False
             barrier = await self.graph.request("gate", boot_id=self.graph.boot, accepting=False)
