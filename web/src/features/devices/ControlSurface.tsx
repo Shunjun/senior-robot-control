@@ -7,6 +7,7 @@ import { HomeControls } from "../map/HomeControls";
 import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
 import { useWorkspaceMap } from "../map/useWorkspaceMap";
 import { PosePicker, type MapGoal, type PoseHint } from "../map/PosePicker";
+import { PerformancePanel } from "./PerformancePanel";
 import { MapManager } from "../mapping/MapManager";
 import { TaskList } from "../tasks/TaskList";
 import { VideoPanel } from "../video/VideoPanel";
@@ -16,8 +17,6 @@ export interface ControlSurfaceProps {
   robotId: string;
   link: RobotLink;
   snapshot: RobotSnapshot;
-  mappingPreview?: ReactElement;
-  performancePreview?: ReactElement;
 }
 
 export type WorkspaceMode = "manual" | "navigation" | "tasks" | "mapping";
@@ -56,7 +55,7 @@ function navigationUnavailableMessage(reason: string | null | undefined): string
 }
 
 /** Drive and map controls for the selected vehicle and its current map reference. */
-export function ControlSurface({ robotId, link, snapshot, mappingPreview, performancePreview }: ControlSurfaceProps): ReactElement {
+export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps): ReactElement {
   const [mapLoad, setMapLoad] = useState(0);
   const [mode, setMode] = useState<WorkspaceMode>("manual");
   const [manualView, setManualView] = useState<PrimaryView>("map");
@@ -156,7 +155,7 @@ export function ControlSurface({ robotId, link, snapshot, mappingPreview, perfor
 
   return (
     <>
-    {performancePreview}
+    <PerformancePanel reading={snapshot.performance} live={snapshot.connected && !snapshot.stale} />
     <div className={styles.workspace} data-mode={mode}>
       <div className={styles.toolbar}>
         <nav className={styles.switches} aria-label="车辆场景">
@@ -207,7 +206,7 @@ export function ControlSurface({ robotId, link, snapshot, mappingPreview, perfor
           )}
         </div>}
         <div className={styles.operations} data-manual={mode === "manual"}>
-          {mode === "mapping" && mappingPreview !== undefined ? mappingPreview : <DriveView robotId={robotId} link={link} snapshot={snapshot} active={mode === "manual"} compact />}
+          <DriveView robotId={robotId} link={link} snapshot={snapshot} active={mode === "manual"} compact />
           {mode === "navigation" && (
             <>
               <HomeControls
@@ -237,7 +236,7 @@ export function ControlSurface({ robotId, link, snapshot, mappingPreview, perfor
               {note !== null && <p className={styles.quiet} role="status">{note}</p>}
             </>
           )}
-          {mode === "mapping" && mappingPreview === undefined && <MapManager robotId={robotId} snapshot={snapshot} link={link} />}
+          {mode === "mapping" && <MapManager robotId={robotId} snapshot={snapshot} link={link} />}
         </div>
       </div>
     </div>

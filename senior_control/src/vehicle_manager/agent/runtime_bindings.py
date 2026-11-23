@@ -120,6 +120,7 @@ class Agent(_Agent[OperationResult]):
         metrics: Metrics | None = None,
         clock: Clock | None = None,
         performance: Callable[[], PerformancePayload | None] = lambda: None,
+        mapping_protocol_version: int | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         super().__init__(
@@ -150,6 +151,7 @@ class Agent(_Agent[OperationResult]):
             clock=clock,
             wall_clock=wall_clock,
             performance=performance,
+            mapping_protocol_version=mapping_protocol_version,
             ports=AgentRuntimePorts(
                 error=DomainError,
                 status=OperationStatus,

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 
 import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
 import type { ResponsePayload, ResponseStatus, RobotSnapshot } from "../../api/protocol";
+import { MapCatalogController } from "./MapCatalogController";
 import { ImportDialog } from "./ImportDialog";
 import styles from "./Mapping.module.css";
 
@@ -79,6 +80,10 @@ export function MapManager({ robotId, snapshot, link }: {
   }
 
   return (
+    <>
+    {snapshot.mapping_protocol_version === 1
+      ? <MapCatalogController robotId={robotId} live={live} link={link} />
+      : <p className={styles.note}>当前车端尚未提供新版地图管理接口。</p>}
     <section className={styles.panel} aria-label="地图生命周期管理">
       <header><p className={styles.kicker}>MAP LIFECYCLE</p><h3>地图包与清理</h3></header>
       <p>当前地图：{snapshot.map_ref === null ? "无" : `${snapshot.map_ref.map_id} · r${snapshot.map_ref.reference_revision}`}</p>
@@ -116,5 +121,6 @@ export function MapManager({ robotId, snapshot, link }: {
       )}
       {operation !== null && <p role="status">操作 {operation.id}：{operation.status ?? "等待车端确认"}</p>}
     </section>
+    </>
   );
 }

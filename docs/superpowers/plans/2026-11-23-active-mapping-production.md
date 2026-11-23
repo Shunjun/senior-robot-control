@@ -31,8 +31,8 @@
 
 ## 4. 线上契约与网页
 
-- [ ] 原位置交互预览：地图列表、新建/切换/删除、自动保存状态、Home与车位编辑分离、待校准流程；确认后正式接线。
-- [ ] contracts、云端路由、manager消息处理、web协议/RobotLink及地图hooks按实际线上消息同步更新。
+- [x] 用户取消预览确认，直接接入现有控制页：性能面板、地图目录及新建/切换/删除请求；未就绪运行时明确禁用。Home/车位定位生产协作仍列于后端阶段。
+- [x] contracts、云端路由、manager消息处理、web协议/RobotLink及目录请求按实际线上消息同步更新。
 - [ ] 对接原地图画布、HomeControls和MapManager，处理更新/切换/失败状态；删除临时预览。
 - [ ] 定向网页测试、类型/构建与实际UI检查；不擅自启动开发服务。
 
@@ -159,3 +159,25 @@ checkpoint审阅补充：清理旧版本时取消保存任务，不能让新读�
 - 找到了实际私钥路径/Users/zhangshunjun/.ssh/wheeltec。只读SSH尝试未成功：wheeltec.local当前无法解析，因此无车端CPU/时延基线。没有改成IP猜测连接、没有启动车辆服务。
 
 公共接口最终定向回归：146 passed，4.97秒。功能场景11项、实际原有bug回归2项已分别列明；保留原Home/地图/事务保护。此批无开发服务或车端服务启动，UI正式接线仍等待原位置预览确认。
+
+
+### 用户更新：直接接线
+
+2026-11-23用户明确“直接对接吧，网页端之后有重构计划”。本轮取消待确认的UI预览步骤，直接在现有页面接实际状态与命令，移除临时预览入口和代码，不启动另一次视觉重构。先把候选20现有网页场景迁移到真实ControlSurface，已观察未接入时失败，再接真实snapshot.performance；仍是原场景，不新增计数。本轮产品预计新增3–5/修改12–18/删除1，测试新增1–2/修改4–7，配置文档1–3，共22–36路径，属于原总范围内。
+
+直接对接候选审核：新增两条功能场景（累计13项）。一条网页目录读→新建/切换/删除→刷新，以及迟到请求隔离；一条共享契约→云转发→管理操作日志→实际本地IPC→目录/生命周期端点→返回，复用既有SQLite/一致图fixture。原有性能场景改为真实ControlSurface消费，不重复增加场景。缺少生产SLAM runtime时目录必须明确报告不可用，禁止把目录行创建成功冒充开始建图；此处不因网页重构计划改变图/定位的验证边界。
+
+对接兼容补记：旧车必须先在快照中明确声明mapping_protocol_version=1，网页才发送新增地图请求，避免未知消息使旧车控制连接被关闭。已有页面性能场景中增加旧协议地图页不发送请求的路径；按独立行为计为第14项功能场景。已观察缺少门控时发送了新请求的失败。另已复现原管理日志将OPERATION_UNKNOWN记作FAILED的问题，修复为NEEDS_REVIEW；以已落库后丢失回执的输入补定向bug回归，不扩展一般异常矩阵。
+
+
+### 现有网页直接对接结果
+
+- ControlSurface直接消费1秒性能快照；MapManager接入有界目录读通道与地图生命周期命令，移除临时MappingPreview及构建开关。不涉及网页视觉重构。manager显式声明mapping_protocol_version=1才开放新增请求，旧车仍能使用原功能。
+- 目录读与栅格共享单在途队列；地图修改沿已有journal/map lane，通过实际IPC委托显式运行时。目录代次、operation_id回执与车辆作用域均校验；未确认结果只查询同一operation_id，不再次发送修改。manager重连目录不会撤销实际建图源租约。
+- 本人审阅实际diff与线上调用：车端AdapterCore.main尚未注册生产SLAM runtime，因此目录正确返回unavailable，禁用新建/切图/删除。真实Home事务、source/graph验证、持续ingest、重定位和实车验收继续待办；测试Runtime明确为synthetic，不当作已完成生产建图。
+- 选定功能场景累计14项（原11项+网页目录生命周期+云/journal/真实IPC链路+旧协议门控），未超过整项20项上限；实际bug回归新增1项：落库后丢失回执，原日志错误写FAILED，现保留NEEDS_REVIEW（原有两项bug回归保留）。原导入/导出/清除、Home/地图/事务及控制回归全部保留。
+- 全量初检2466通过/2失败/116跳过：一项Docker未加入PATH；另一项相机fixture恢复后立即退出，导致有消费者的监管器按设计重新启动。修正fixture令恢复叶子持续存活，同时保留只恢复相机、不重启其余owner的全部断言；更新旧根src路径，不改产品监管逻辑。
+- 最终命令`PATH=/usr/local/bin:$PATH .venv/bin/pytest -q`：2468 passed / 116原有skip / 1原有forkpty警告，131.78秒。日志/tmp/mapping-direct-full-final.log。定向相机/部署/地图IPC/agent配置26 passed / 1原有skip；真实IPC链路使用实际SQLite、UDS及序列化，不代替native源验证。
+- 前端`npm run build`与`npm run test -- --run`：构建成功、182 passed。随后仅加强旧地图测试spy对所有请求的断言，定向4 passed及typecheck通过。生产bundle在原/robots/r1页面以mock传输检查性能展示、真实目录请求及运行时未就绪禁用，桌面/手机无页面错误；临时静态调试服务已关闭。
+- contracts/manager/mapping/robot四个wheel离线重建并隔离安装；含已有core的`python -I -S`检查安装来源、当前源文件哈希和ROS-free imports通过。新增目录端点/manager组装定向mypy通过；Ruff检查和格式、CRLF原文件适配的diff空白检查通过。
+- 本批验证对应本次直接接线实现及fixture修正提交，不含部署、服务重启或车辆动作。PR继续Draft，整份建图计划仍未完成。

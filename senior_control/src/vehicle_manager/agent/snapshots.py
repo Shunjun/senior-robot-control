@@ -91,6 +91,7 @@ class RobotSnapshot:
     # //Compatible: legacy producers omit an independent raster version.
     map_grid_id: str | None = None
     performance: PerformancePayload | None = None
+    mapping_protocol_version: int | None = None
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -127,6 +128,7 @@ def snapshot_envelope(
         type="snapshot",
         payload=SnapshotPayload(
             performance=snapshot.performance,
+            mapping_protocol_version=snapshot.mapping_protocol_version,
             connected=snapshot.connected,
             localized=snapshot.localized,
             map_ref=_map_payload(snapshot.map_ref),
@@ -189,6 +191,7 @@ def snapshot_from_envelope(
     readiness = payload.navigation_ready if "navigation_ready" in payload.model_fields_set else None
     return RobotSnapshot(
         performance=payload.performance,
+        mapping_protocol_version=payload.mapping_protocol_version,
         robot_id=envelope.robot_id,
         connected=payload.connected,
         localized=payload.localized,

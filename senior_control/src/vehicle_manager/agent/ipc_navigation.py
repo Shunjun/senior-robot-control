@@ -1,5 +1,6 @@
 """Existing map/navigation request and acknowledgement rules, without execution authority."""
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +50,22 @@ class IpcMapPort:
             map_id=expected.map_id,
             reference_revision=expected.reference_revision,
         )
+
+    async def manage(self, kind: str, operation_id: str, body: Mapping[str, Any]) -> None:
+        try:
+            reply = await self._client.request(kind, operation_id=operation_id, **body)
+        except (self._ipc_error, OSError) as exc:
+            raise self._error(
+                ErrorCode.OPERATION_UNKNOWN, "map operation acknowledgement lost"
+            ) from exc
+        if reply.get("ok") is not True:
+            try:
+                code = ErrorCode(reply.get("error"))
+            except (ValueError, TypeError):
+                code = ErrorCode.UNAVAILABLE
+            raise self._error(code, "map operation rejected")
+        if reply.get("operation_id") != operation_id:
+            raise self._error(ErrorCode.OPERATION_UNKNOWN, "map acknowledgement identity changed")
 
 
 class IpcNavigation:

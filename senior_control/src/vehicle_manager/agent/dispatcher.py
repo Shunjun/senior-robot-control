@@ -13,7 +13,12 @@ from pathlib import Path
 from typing import Any, Generic, Protocol, TypeVar
 
 from senior_contracts.errors import ErrorCode
-from senior_contracts.wire import OperationEnvelope, TaskExecutionEnvelope
+from senior_contracts.wire import (
+    MapCreateBody,
+    MapTargetBody,
+    OperationEnvelope,
+    TaskExecutionEnvelope,
+)
 
 from vehicle_manager.agent.journal import AgentJournal
 from vehicle_manager.agent.request_ports import HomeServicePort, Metrics, RequestValues, ResultT
@@ -188,7 +193,9 @@ class Dispatcher(Generic[ResultT]):
         try:
             revision = await asyncio.wait_for(guarded(), timeout=deadline)
         except self._values.error as exc:
-            await self._close(envelope, self._values.status.FAILED, exc.code)
+            uncertain = started and exc.code in {ErrorCode.OPERATION_UNKNOWN, ErrorCode.TIMEOUT}
+            status = self._values.status.NEEDS_REVIEW if uncertain else self._values.status.FAILED
+            await self._close(envelope, status, exc.code)
             raise
         except asyncio.TimeoutError:
             # A request that never left the queue changed nothing. One that did is unknown.
@@ -281,6 +288,17 @@ class Dispatcher(Generic[ResultT]):
                 if expected is not None:
                     raise ValueError("navigation takes no expected revision")
                 return "edit", lambda: self._none(navigation(kind, operation_id, body))
+            if kind in {"map.create", "map.activate", "map.delete"}:
+                if expected is not None:
+                    raise ValueError("map lifecycle uses its own generation")
+                command = (MapCreateBody if kind == "map.create" else MapTargetBody).model_validate(
+                    body
+                )
+                # //Compatible: older injected map ports have no lifecycle capability.
+                manage = getattr(self._maps, "manage", None)
+                if manage is None:
+                    raise self._values.error(ErrorCode.UNAVAILABLE, "map lifecycle unavailable")
+                return "map", lambda: self._none(manage(kind, operation_id, command.model_dump()))
             if kind == "map.export":
                 map_ref = _map_ref(body, self._values.map_reference)
                 destination = self._transfer_path(body)

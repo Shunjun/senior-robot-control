@@ -87,6 +87,13 @@ function isPose(value: unknown): value is MapPose {
   return isObject(value) && isNumber(value["x"]) && isNumber(value["y"]) && isNumber(value["yaw"]);
 }
 
+/** Share the cloud's single workspace-read lane with catalog and raster requests. */
+export function workspaceRequest(link: RobotLink, type: WorkspaceRequestType, payload: unknown): Promise<ResponsePayload> {
+  const next = (queuedReads.get(link) ?? Promise.resolve()).then(() => link.request<ResponsePayload>(type, payload));
+  queuedReads.set(link, next.then(() => undefined, () => undefined));
+  return next;
+}
+
 function read(
   link: RobotLink,
   robotId: string,
@@ -94,8 +101,8 @@ function read(
   type: WorkspaceRequestType,
   fields: Record<string, unknown> = {},
 ): Promise<WorkspaceIdentity & Record<string, unknown>> {
-  const next = (queuedReads.get(link) ?? Promise.resolve()).then(async () => {
-    const response = await link.request<ResponsePayload>(type, { map_ref: mapRef, ...fields });
+  const next = (async () => {
+    const response = await workspaceRequest(link, type, { map_ref: mapRef, ...fields });
     const data = response.data;
     valid(isObject(data));
     const ref = data["map_ref"];
@@ -106,8 +113,7 @@ function read(
     const gridId = data["grid_id"];
     valid(isText(gridId) && gridId.length <= 128);
     return { ...data, robot_id: robotId, map_ref: mapRef, grid_id: gridId };
-  });
-  queuedReads.set(link, next.then(() => undefined, () => undefined));
+  })();
   return next;
 }
 

@@ -259,6 +259,9 @@ OPERATION_TYPES = (
     "map.export",
     "map.import",
     "map.clear",
+    "map.create",
+    "map.activate",
+    "map.delete",
     "operation.query",
 )
 
@@ -284,6 +287,9 @@ class OperationEnvelope(EnvelopeBase):
         "map.export",
         "map.import",
         "map.clear",
+        "map.create",
+        "map.activate",
+        "map.delete",
         "operation.query",
     ]
     payload: OperationPayload
@@ -297,7 +303,8 @@ class MapRefPayload(StrictModel):
     reference_revision: int = Field(ge=0)
 
 
-WorkspaceRequest = Literal["task.get", "waypoint.list", "map.manifest", "map.tile"]
+MapReadScope = Literal["task.get", "waypoint.list", "map.manifest", "map.tile"]
+WorkspaceRequest = Literal["task.get", "waypoint.list", "map.manifest", "map.tile", "map.catalog"]
 WORKSPACE_REQUEST_TYPES = frozenset(get_args(WorkspaceRequest))
 
 
@@ -316,7 +323,7 @@ class WorkspacePayload(StrictModel):
 
 
 class WorkspaceEnvelope(EnvelopeBase):
-    type: WorkspaceRequest
+    type: MapReadScope
     payload: WorkspacePayload
 
     @model_validator(mode="after")
@@ -336,6 +343,69 @@ class WorkspaceEnvelope(EnvelopeBase):
         if not valid:
             raise ValueError("invalid workspace read parameters")
         return self
+
+
+class CatalogReadPayload(StrictModel):
+    pass
+
+
+class MapCatalogEnvelope(EnvelopeBase):
+    type: Literal["map.catalog"]
+    payload: CatalogReadPayload
+
+
+class MapCreateBody(StrictModel):
+    name: str = Field(min_length=1, max_length=64)
+    expected_generation: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+
+    @model_validator(mode="after")
+    def nonblank_name(self) -> "MapCreateBody":
+        if not self.name.strip():
+            raise ValueError("map name is blank")
+        return self
+
+
+class MapTargetBody(MapRefPayload):
+    expected_generation: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+
+
+class MapCatalogEntryPayload(StrictModel):
+    map_ref: MapRefPayload
+    name: str = Field(min_length=1, max_length=64)
+    checkpoint_id: ShortText | None
+    home_id: ShortText | None
+    version: int = Field(ge=0)
+    saved_at: float | None
+
+
+class MapSelectionPayload(StrictModel):
+    map_ref: MapRefPayload | None
+    generation: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+    state: Literal["none", "matching", "ready", "pending_calibration"]
+
+
+MapPhase = Literal[
+    "idle", "mapping", "saving", "matching", "pending_calibration", "unavailable", "failed"
+]
+
+
+class MapCatalogPayload(StrictModel):
+    robot_id: ShortText
+    entries: list[MapCatalogEntryPayload] = Field(max_length=64)
+    selection: MapSelectionPayload
+    runtime_available: bool
+    phase: MapPhase
+
+
+class MapCatalogReply(MapCatalogPayload):
+    v: Literal[1] = 1
+    ok: Literal[True] = True
+
+
+class MapRuntimeStatus(StrictModel):
+    v: Literal[1] = 1
+    ok: Literal[True] = True
+    phase: MapPhase
 
 
 class HomePayload(StrictModel):
@@ -390,6 +460,8 @@ class SnapshotPayload(StrictModel):
 
     # //Compatible: older vehicles omit resource telemetry.
     performance: PerformancePayload | None = None
+    # //Compatible: older managers do not understand lifecycle catalog commands.
+    mapping_protocol_version: Literal[1] | None = None
     connected: bool
     localized: bool
     map_ref: MapRefPayload | None
@@ -424,6 +496,7 @@ class SnapshotPayload(StrictModel):
         result: dict[str, Any] = handler(self)
         for optional in (
             "performance",
+            "mapping_protocol_version",
             "vehicle_ui",
             "manual_controller_generation",
             "manual_agent_epoch",
@@ -507,6 +580,9 @@ class ResponsePayload(StrictModel):
         "map.export",
         "map.import",
         "map.clear",
+        "map.create",
+        "map.activate",
+        "map.delete",
         "operation.query",
         "control.acquire",
         "control.release",
@@ -520,6 +596,7 @@ class ResponsePayload(StrictModel):
         "waypoint.list",
         "map.manifest",
         "map.tile",
+        "map.catalog",
     ]
     ok: bool
     error: ErrorCode | None = None
@@ -637,6 +714,7 @@ Envelope = Annotated[
     | RecoveryEnvelope
     | OperationEnvelope
     | WorkspaceEnvelope
+    | MapCatalogEnvelope
     | SnapshotEnvelope
     | ResponseEnvelope,
     Field(discriminator="type"),
@@ -653,6 +731,7 @@ Frame = Annotated[
     | RecoveryEnvelope
     | OperationEnvelope
     | WorkspaceEnvelope
+    | MapCatalogEnvelope
     | SnapshotEnvelope
     | ResponseEnvelope
     | VideoSdpEnvelope

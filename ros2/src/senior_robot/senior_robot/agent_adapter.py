@@ -18,7 +18,7 @@ import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import AsyncExitStack, asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from senior_contracts.wire import SimpleEnvelope, validate_envelope
 from senior_mapping.workspace import WorkspaceMap
@@ -46,6 +46,10 @@ def _spin_ready_callbacks(executor: Any, *, clock: Callable[[], float] = time.mo
             break
 
 
+class MappingRequests(Protocol):
+    async def request(self, kind: str, **fields: Any) -> dict[str, Any]: ...
+
+
 class AdapterCore:
     """Maps IPC requests to the arbiter. After ``disable_motion`` nothing drives."""
 
@@ -57,6 +61,7 @@ class AdapterCore:
         disconnect: Callable[[int], None],
         request_exit: Callable[[], None],
         workspace_map: WorkspaceMap | None = None,
+        mapping: MappingRequests | None = None,
         state_provider: Callable[[], dict[str, Any]] | None = None,
         pose_provider: Callable[[], dict[str, Any]] | None = None,
         routes: "RouteService | None" = None,
@@ -64,6 +69,7 @@ class AdapterCore:
         ros_domain: int | None = None,
         manual: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
+        self._mapping = mapping
         self._robot_id = robot_id
         self._manual = manual
         self._ros_domain = ros_domain
@@ -91,6 +97,12 @@ class AdapterCore:
 
     async def handle(self, message: dict[str, Any]) -> dict[str, Any]:
         kind = message["type"]
+        if kind in {"map.status", "map.catalog", "map.create", "map.activate", "map.delete"}:
+            if self._mapping is None or self._exiting:
+                return {"ok": False, "error": "unavailable"}
+            return await self._mapping.request(
+                kind, **{key: value for key, value in message.items() if key not in {"v", "type"}}
+            )
         if kind in {
             "navigation.task_start",
             "navigation.task_status",

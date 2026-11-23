@@ -18,6 +18,7 @@ from vehicle_manager.agent.bootstrap_ports import (
 )
 from vehicle_manager.agent.logs_wire import AgentLogHandler, CloudLogGrants
 from vehicle_manager.agent.main import Agent
+from vehicle_manager.agent.request_ports import Requester
 from vehicle_manager.agent.settings_wire import SettingsRuntime
 from vehicle_manager.observability import APPLICATION_LOG_NAMES
 from vehicle_manager.performance.monitor import PerformanceMonitor
@@ -109,6 +110,16 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
         navigation_client = ipc(timeout_ms=3000.0)
         workspace_client = ipc()
         display_client = ipc()
+        mapping_protocol_version = None
+        map_requests: Requester = map_client
+        workspace_requests: Requester = workspace_client
+        if ports.mapping_requests is not None:
+            mapped = await ports.mapping_requests(
+                database, workspace_client, map_client, robot_id=config.robot_id
+            )
+            if mapped is not None:
+                map_requests = workspace_requests = mapped
+                mapping_protocol_version = 1
         state = ports.state(state_client)
         exported_grid = None
         if config.workspace_map_bundle is not None and config.workspace_map_sha256 is not None:
@@ -122,7 +133,7 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             except (ports.error, OSError):
                 logger.warning("configured workspace display map is unavailable", exc_info=True)
         workspace = ports.workspace(
-            config.robot_id, tasks, waypoints, workspace_client, exported_grid=exported_grid
+            config.robot_id, tasks, waypoints, workspace_requests, exported_grid=exported_grid
         )
         display = ports.workspace(
             config.robot_id, tasks, waypoints, display_client, exported_grid=exported_grid
@@ -303,7 +314,7 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
                 tasks, robot_id=config.robot_id, verify_workspace=workspace.verify_task_edit
             ),
             home=home,
-            maps=ports.maps(map_client),
+            maps=ports.maps(map_requests),
             state=ports.snapshot_state(
                 state,
                 tasks,
@@ -323,6 +334,7 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             motion=motion,
             video_session=video_session,
             performance=performance.read,
+            mapping_protocol_version=mapping_protocol_version,
             map_root=config.database_path.parent / "map-transfer",
             background={
                 "tasks": task_loop,

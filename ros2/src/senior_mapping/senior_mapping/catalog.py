@@ -64,33 +64,7 @@ class MapCatalog:
         if self._prepared:
             return
         async with self._write() as connection:
-            await connection.execute("""
-                CREATE TABLE IF NOT EXISTS mapping_catalog (
-                    robot_id TEXT NOT NULL,
-                    map_id TEXT NOT NULL,
-                    reference_revision INTEGER NOT NULL,
-                    name TEXT NOT NULL,
-                    checkpoint_id TEXT,
-                    home_id TEXT,
-                    version INTEGER NOT NULL DEFAULT 0,
-                    saved_at REAL,
-                    retired INTEGER NOT NULL DEFAULT 0,
-                    PRIMARY KEY (robot_id, map_id)
-                )
-            """)
-            await connection.execute("""
-                CREATE TABLE IF NOT EXISTS mapping_selection (
-                    robot_id TEXT PRIMARY KEY,
-                    map_id TEXT,
-                    token TEXT,
-                    generation INTEGER NOT NULL DEFAULT 0,
-                    state TEXT NOT NULL DEFAULT 'none',
-                    FOREIGN KEY (robot_id, map_id) REFERENCES mapping_catalog (robot_id, map_id)
-                )
-            """)
-            await connection.execute(
-                "INSERT OR IGNORE INTO mapping_selection (robot_id) VALUES (?)", (self._robot_id,)
-            )
+            await self._prepare_schema(connection)
             # Restart retains the selected map, but never restores an old pose or
             # lets a result from the previous owner complete this boot's match.
             await connection.execute(
@@ -102,6 +76,40 @@ class MapCatalog:
                 (uuid.uuid4().hex, self._robot_id),
             )
         self._prepared = True
+
+    async def prepare_reader(self) -> None:
+        """Ensure metadata exists without revoking the actual runtime's selected session."""
+        async with self._write() as connection:
+            await self._prepare_schema(connection)
+
+    async def _prepare_schema(self, connection: aiosqlite.Connection) -> None:
+        await connection.execute("""
+            CREATE TABLE IF NOT EXISTS mapping_catalog (
+                robot_id TEXT NOT NULL,
+                map_id TEXT NOT NULL,
+                reference_revision INTEGER NOT NULL,
+                name TEXT NOT NULL,
+                checkpoint_id TEXT,
+                home_id TEXT,
+                version INTEGER NOT NULL DEFAULT 0,
+                saved_at REAL,
+                retired INTEGER NOT NULL DEFAULT 0,
+                PRIMARY KEY (robot_id, map_id)
+            )
+        """)
+        await connection.execute("""
+            CREATE TABLE IF NOT EXISTS mapping_selection (
+                robot_id TEXT PRIMARY KEY,
+                map_id TEXT,
+                token TEXT,
+                generation INTEGER NOT NULL DEFAULT 0,
+                state TEXT NOT NULL DEFAULT 'none',
+                FOREIGN KEY (robot_id, map_id) REFERENCES mapping_catalog (robot_id, map_id)
+            )
+        """)
+        await connection.execute(
+            "INSERT OR IGNORE INTO mapping_selection (robot_id) VALUES (?)", (self._robot_id,)
+        )
 
     async def create(self, operation_id: str, name: str) -> CatalogEntry:
         if not 1 <= len(operation_id) <= 128 or not name.strip() or len(name) > 64:
@@ -142,6 +150,18 @@ class MapCatalog:
                 (self._robot_id,),
             ) as cursor:
                 return tuple(_entry(row) for row in await cursor.fetchall())
+
+    async def view(self) -> tuple[tuple[CatalogEntry, ...], MapSelection]:
+        """One short database cut; no graph I/O or runtime calls under this lock."""
+        async with self._write() as connection:
+            async with connection.execute(
+                """SELECT map_id, reference_revision, name, checkpoint_id,
+                          home_id, version, saved_at
+                   FROM mapping_catalog WHERE robot_id = ? AND retired = 0 ORDER BY rowid""",
+                (self._robot_id,),
+            ) as cursor:
+                entries = tuple(_entry(row) for row in await cursor.fetchall())
+            return entries, await self._selection(connection)
 
     async def checkpoint(
         self,

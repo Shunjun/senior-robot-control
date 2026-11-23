@@ -22,6 +22,7 @@ from senior_contracts.wire import (
     LearningStartEnvelope,
     LearningStatusEnvelope,
     ManualIntentEnvelope,
+    MapCatalogEnvelope,
     ResponseEnvelope,
     ResponsePayload,
     SettingsApplyEnvelope,
@@ -235,7 +236,7 @@ class Connection:
 @dataclass
 class _WorkspaceRequest:
     controller: Connection
-    envelope: WorkspaceEnvelope
+    envelope: WorkspaceEnvelope | MapCatalogEnvelope
     deadline: float = field(default_factory=lambda: time.monotonic() + WORKSPACE_REPLY_SECONDS)
 
 
@@ -759,7 +760,7 @@ class Hub:
                     envelope.type,
                 )
             return
-        if isinstance(envelope, WorkspaceEnvelope):
+        if isinstance(envelope, (WorkspaceEnvelope, MapCatalogEnvelope)):
             pending_read = link.workspace_request
             if (
                 envelope.connection_epoch != agent.epoch
@@ -863,7 +864,7 @@ class Hub:
             type="response",
             payload=ResponsePayload(request_type=request_type, ok=False, error=error),
         )
-        if isinstance(envelope, WorkspaceEnvelope):
+        if isinstance(envelope, (WorkspaceEnvelope, MapCatalogEnvelope)):
             connection.outbox.put(serialize_envelope(reply), WORKSPACE)
         elif not connection.outbox.put(serialize_envelope(reply), "response"):
             connection.outbox.close(CLOSE_OVERLOAD)

@@ -17,6 +17,7 @@ from senior_contracts.wire import (
     LearningStartEnvelope,
     LearningStatusEnvelope,
     ManualIntentEnvelope,
+    MapCatalogEnvelope,
     OperationEnvelope,
     PerformancePayload,
     RecoveryEnvelope,
@@ -117,10 +118,12 @@ class Agent(Generic[ResultT]):
         metrics: Metrics | None = None,
         clock: Clock | None = None,
         performance: Callable[[], PerformancePayload | None] = lambda: None,
+        mapping_protocol_version: int | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         if not robot_id.strip():
             raise ValueError("robot id is required")
+        self._mapping_protocol_version = mapping_protocol_version
         self._performance = performance
         self._ports = ports
         self.robot_id = robot_id
@@ -587,7 +590,7 @@ class Agent(Generic[ResultT]):
                 raise ConnectionError("agent command capacity exceeded")
             self._spawn(self._answer_settings(link, envelope))
             return
-        if isinstance(envelope, WorkspaceEnvelope):
+        if isinstance(envelope, (WorkspaceEnvelope, MapCatalogEnvelope)):
             # The relay bounds reads to one in flight. Dropping excess here reserves
             # the ordinary and safety lanes even when the relay violates that limit.
             if self._workspace_request is None or self._workspace_request.done():
@@ -830,7 +833,9 @@ class Agent(Generic[ResultT]):
         else:
             await self._reply(link, envelope, data=data)
 
-    async def _answer_workspace(self, link: Link, envelope: WorkspaceEnvelope) -> None:
+    async def _answer_workspace(
+        self, link: Link, envelope: WorkspaceEnvelope | MapCatalogEnvelope
+    ) -> None:
         try:
             self._admit(envelope)
             if self._workspace is None:
@@ -931,6 +936,7 @@ class Agent(Generic[ResultT]):
                 ResponseEnvelope,
                 SnapshotEnvelope,
                 WorkspaceEnvelope,
+                MapCatalogEnvelope,
                 SettingsGetEnvelope,
                 LearningStartEnvelope,
                 LearningStatusEnvelope,
@@ -1128,6 +1134,7 @@ class Agent(Generic[ResultT]):
             execution_status=live.execution_status,
             collected_at=self._wall_clock(),
             performance=self._performance(),
+            mapping_protocol_version=self._mapping_protocol_version,
             tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
             map_generation=live.map_generation,

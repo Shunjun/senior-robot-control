@@ -27,6 +27,7 @@ from vehicle_manager.agent.local_adapters import (
     IpcState,
     TaskAwareMotion,
 )
+from vehicle_manager.agent.mapping_catalog import mapping_requests
 from vehicle_manager.agent.production_bindings import (
     AgentJournal,
     AgentLogConnection,
@@ -221,6 +222,7 @@ async def run_agent(config: AgentConfig) -> int:
             workspace=_workspace_reader,
             home=IpcHomePort,
             maps=IpcMapPort,
+            mapping_requests=mapping_requests,
             navigation=IpcNavigation,
             build_task_runtime=build_task_runtime,
             settings_runtime=SettingsRuntime,

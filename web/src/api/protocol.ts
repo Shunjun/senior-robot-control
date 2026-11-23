@@ -37,6 +37,9 @@ export const OPERATION_REQUEST_TYPES = [
   "map.export",
   "map.import",
   "map.clear",
+  "map.create",
+  "map.activate",
+  "map.delete",
   "operation.query",
 ] as const;
 
@@ -45,6 +48,7 @@ export const WORKSPACE_REQUEST_TYPES = [
   "waypoint.list",
   "map.manifest",
   "map.tile",
+  "map.catalog",
 ] as const;
 export type WorkspaceRequestType = (typeof WORKSPACE_REQUEST_TYPES)[number];
 
@@ -86,6 +90,7 @@ export const ENVELOPE_FIELDS = [
 
 export const SNAPSHOT_FIELDS = [
   "performance",
+  "mapping_protocol_version",
   "connected",
   "localized",
   "map_ref",
@@ -219,6 +224,8 @@ export interface PerformanceReading {
 export interface SnapshotPayload {
   //Compatible: older vehicles omit resource telemetry.
   performance?: PerformanceReading;
+  //Compatible: absence means the manager cannot accept new catalog/lifecycle frames.
+  mapping_protocol_version?: 1;
 
   //Compatible: legacy map/video snapshots omit the UI extension and never enable intent driving.
   vehicle_ui?: VehicleFrame;
@@ -421,6 +428,7 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   }
   return {
     ...(performance === undefined ? {} : { performance }),
+    ...(value["mapping_protocol_version"] === 1 ? { mapping_protocol_version: 1 as const } : {}),
     ...(vehicle === undefined ? {} : { vehicle_ui: vehicle }),
     ...(mapGeneration === undefined ? {} : { map_generation: mapGeneration }),
     ...(mapGridId === undefined ? {} : { map_grid_id: mapGridId }),

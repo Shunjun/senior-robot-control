@@ -10,7 +10,6 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
-import { MappingPreview } from "./preview/MappingPreview";
 import { App } from "./App";
 import { HttpControlApi, RobotClient } from "./api/client";
 import { createDemoBackend } from "./api/demo";
@@ -24,7 +23,7 @@ if (root === null) throw new Error("#root is missing from index.html");
 createRoot(root).render(
   <StrictMode>
     <BrowserRouter>
-      {import.meta.env.VITE_MAPPING_PREVIEW === "1" ? <MappingPreview /> : <App api={backend.api} link={backend.link} demo={demo} />}
+      <App api={backend.api} link={backend.link} demo={demo} />
     </BrowserRouter>
   </StrictMode>,
 );
