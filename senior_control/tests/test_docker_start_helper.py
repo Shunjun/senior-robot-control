@@ -228,7 +228,7 @@ async def test_camera_leaf_recovers_without_restarting_helper_owners(service_roo
     import senior_robot.service_runtime as helper
 
     profile = real_profile(service_root)
-    monkeypatch.setenv("PYTHONPATH", str(Path("src").resolve()))
+    monkeypatch.setenv("PYTHONPATH", str(Path.cwd()))
     sleeper = """
 import json, os, sys, time
 from pathlib import Path
@@ -249,6 +249,8 @@ with (root / 'camera-attempts').open('a') as file:
     file.write(json.dumps(record) + '\\n')
 if not os.environ.get('SENIOR_LAUNCH_RECOVERED'):
     os.kill(os.getpid(), signal.SIGSEGV)
+# The recovered leaf remains healthy until the owner shuts it down.
+time.sleep(60)
 """
     launcher = """
 import json, os, shlex, subprocess, sys
