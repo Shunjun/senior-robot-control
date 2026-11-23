@@ -20,7 +20,7 @@ from senior_interfaces.msg import BoundedRawLaserScan
 from sensor_msgs.msg import LaserScan
 
 RAW = "/probe_acquire_scan"
-ARMED = "Scan receipt armed "
+ARMED = "Scan receipt armed at steady_ns "
 
 
 @contextmanager
@@ -76,10 +76,14 @@ def probe(executable):
         with candidate([relay, "--ros-args", "-p", f"scan_topic:={RAW}"]):
             bridge_gid = endpoint_gid(node, BOUNDED_TOPIC)
             raw_gid = endpoint_gid(node, RAW)
-            with collector(node, executable) as (process, ready_ros):
+            with collector(node, executable) as (process, ready_steady):
+                # Only sensor stamps use ROS time; admission uses monotonic sample time.
+                ready_ros = node.get_clock().now().nanoseconds - (
+                    time.monotonic_ns() - ready_steady
+                )
                 # A valid relay receipt cannot turn a pre-ready sensor stamp
                 # into a post-ready sample. Send two while still freshly stamped.
-                for offset in (2, 1):
+                for offset in (100_000_000, 50_000_000):
                     raw.publish(scan_in_room(stamp_from_ns(ready_ros - offset), 0.0, 0.37))
                     spin_for(node, 0.06)
                 assert process.poll() is None
@@ -87,7 +91,7 @@ def probe(executable):
                 assert len(stale) == 2
                 assert all(
                     item.capture.stamp == stamp_from_ns(ready_ros - offset)
-                    for item, offset in zip(stale, (2, 1), strict=True)
+                    for item, offset in zip(stale, (100_000_000, 50_000_000), strict=True)
                 )
 
                 # Send held-out values, including exact float32 intensity
@@ -110,7 +114,7 @@ def probe(executable):
                 assert header.bridge_gid == bridge_gid and header.raw_gid == raw_gid
                 assert header.bridge_boot_id and header.source_epoch
                 assert header.capture_generation > 0 and header.sequence > 0
-                assert header.received_steady_ns > 0
+                assert ready_steady < header.sample_steady_ns <= header.received_steady_ns
                 sample_ns = header.stamp.sec * 1_000_000_000 + header.stamp.nanosec
                 receipt_ns = header.received_ros.sec * 1_000_000_000 + header.received_ros.nanosec
                 assert ready_ros < sample_ns <= receipt_ns

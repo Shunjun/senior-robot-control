@@ -99,12 +99,19 @@ def bounded_scan(scan, received_ros, bridge_gid, raw_gid, sequence):
     return result
 
 
-def arguments(executable, capture_directory):
+def arguments(executable, capture_directory, *, use_sim_time=False):
     result = owned_arguments(executable, capture_directory or "")
     if capture_directory is None:
         index = result.index("capture_directory:=")
         del result[index - 1 : index + 1]
-    result.extend(["-p", f"bounded_scan_topic:={BOUNDED_TOPIC}", "-p", "use_sim_time:=true"])
+    result.extend(
+        [
+            "-p",
+            f"bounded_scan_topic:={BOUNDED_TOPIC}",
+            "-p",
+            f"use_sim_time:={str(use_sim_time).lower()}",
+        ]
+    )
     return result
 
 
@@ -147,7 +154,7 @@ def probe(executable, root, combined):
 
         static_tf = StaticTransformBroadcaster(node)
         odom_tf = TransformBroadcaster(node)
-        with candidate(arguments(executable, staging)) as process:
+        with candidate(arguments(executable, staging, use_sim_time=True)) as process:
             end = time.monotonic() + 4
             while clock.get_subscription_count() < 2 and time.monotonic() < end:
                 set_clock(100_000_000_000)

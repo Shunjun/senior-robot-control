@@ -131,3 +131,7 @@ Parallels Ubuntu 22.04 实际安装 ros-humble-slam-toolbox 2.6.10-1jammy.202609
 默认checkpoint最长延期10秒，停车优先，只有一个重计算/保存工作在途；100000个占据track、8MB临时图传输与既有16K原生图节点限制均有界。超限明确失败，不静默吞掉已接受的图commit。保存失败保留最后完整checkpoint，并阻止切到下一图；不会因此禁止手动驾驶。这些是实现边界，尚未测得四核设备的性能预算。
 
 图、稳定占据、参考与冻结Home一起保存。当前Home只有WaypointStore这一份实时真值；每图的冻结绑定随checkpoint恢复。加载不匹配进入待校准，Home仅作参考，不发布真实车辆位姿。自动初始化目前为Home附近局部匹配与稳定几何复核；任意位置全局重定位、手动位置提示、完整Home编辑事务和可导航栅格/位姿资格仍是后续工作。当前画布栅格明确display_only，不能用于启用导航。
+
+Parallels Ubuntu 22.04 / Humble 2.6.10隔离构建现已通过，三个包均成功。senior_mapping的20个原生CTest分轮全部通过，另验证production gate暂停丢帧、图捕获、串行退出/加载和恢复后新commit；日志与源码哈希见/home/toby/senior-audit-20261031/active-mapping-20261123-native-v1。没有部署到车端。
+
+性能限制：2.6.10 Ceres插件内部硬编码options_.num_threads=50，当前VM构建将其截为4，OMP_NUM_THREADS=1不能证明其限为单线程。线程预算和树莓派负载仍待处理；上游依据为https://github.com/SteveMacenski/slam_toolbox/blob/2.6.10/solvers/ceres_solver.cpp#L114。

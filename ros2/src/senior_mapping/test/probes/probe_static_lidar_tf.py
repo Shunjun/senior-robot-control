@@ -87,14 +87,17 @@ def probe(executable, drift, root):
             boot = read_snapshot(node, graph).boot_id
             sequence = 0
 
-            def publish_scan(x=0.0, stamp=None):
+            def publish_scan(x=0.0, stamp=None, sample_steady_ns=None):
                 nonlocal sequence
                 sequence += 1
                 now = node.get_clock().now().to_msg()
                 scan_stamp = now if stamp is None else stamp
                 odom_tf.sendTransform(transform(scan_stamp, ODOM, BASE, x, 0.37))
                 scan = scan_in_room(scan_stamp, x, 0.37)
-                scans.publish(bounded_scan(scan, now, bridge_gid, raw_gid, sequence))
+                message = bounded_scan(scan, now, bridge_gid, raw_gid, sequence)
+                if sample_steady_ns is not None:
+                    message.capture.sample_steady_ns = sample_steady_ns
+                scans.publish(message)
 
             def lookup(commit=1):
                 return request(
@@ -167,6 +170,7 @@ def probe(executable, drift, root):
             witness.publish(receipt)
             spin_for(node, 0.08)
             pre_admission_stamp = node.get_clock().now().to_msg()
+            pre_admission_steady = time.monotonic_ns()
             receipt.admitted = True
             receipt.admitted_from_ros = (
                 node.get_clock().now() + Duration(nanoseconds=250_000_000)
@@ -181,10 +185,12 @@ def probe(executable, drift, root):
             stale.edges[0].translation = [0.8, 0.0, 0.0]
             witness.publish(stale)
             spin_for(node, 0.24)
-            publish_scan(stamp=pre_admission_stamp)
+            publish_scan(stamp=pre_admission_stamp, sample_steady_ns=pre_admission_steady)
             spin_for(node, 0.08)
             unavailable = lookup()
+            # No accepted scan has established the bounded source yet.
             assert unavailable.status == ReadGraphCommit.Response.UNAVAILABLE
+            assert read_snapshot(node, graph).graph_commit_sequence == 0
             check_proof(unavailable)
 
             def commit_next(commit, x):

@@ -219,3 +219,15 @@ Docker说明：未安装Docker或拉取ROS镜像。此前打开已有Docker误�
 最终便携验证：`PATH=/usr/local/bin:$PATH .venv/bin/pytest -q`在允许本地socket/子进程的环境中2477 passed / 116原有skip / 1原有forkpty警告（127.77秒），日志/tmp/mapping-runtime-final-accepted.log。功能场景20项，本批实际bug回归3项（退出最终保存预算、删除回收图文件、内部IPC错误处理）与此前bug回归分别保留；原回归均复用。四个wheel加已有core隔离安装检查当前模块源哈希和ROS-free imports通过。新运行时/catalog/composition六模块以MYPYPATH指向当前源码、follow-imports=silent定向mypy通过，不能据此声称全仓类型检查通过。前端182项及build已验证，本次未再修改前端。
 
 首轮ROS原生测试尚有5项失败（colcon结果同时记录missing_result，不能把其重复计为更多独立场景）：graph_commit_delivery、static_lidar_tf及drift因共用helper默认use_sim_time=true但自身未发/clock；acquire_scan_receipt与candidate_live_scan仍解析旧ROS时间日志。保留原断言并修正helper时钟选择和单调采样新鲜度对比，同时将诊断日志输出为单调纳秒。此为既有场景迁移，不新增功能场景；第二轮隔离测试仍待取得结果，暂不声明ROS回归全通过。
+
+### Parallels原生验收结果
+
+- 干净Humble underlay下三包首轮构建成功；修正诊断日志后的增量构建再次成功，日志build-v3.log（12.2秒）。冻结备份目录使colcon一度重复发现包，修正测试命令显式`--base-paths src`，没有删除历史源码。长脚本通过共享目录传递给`prlctl exec ... --current-user python3`，避免长命令启动失败；没有重启虚拟机。
+- 既有senior_sensor_ingress测试通过；senior_mapping的20个原生CTest中18项在native-test-v3.log通过，静态TF两项在native-test-v5.log定向复测通过。最终colcon汇总74条结果、0 errors/0 failures/0 skipped；包含CTest及ament结果记录，不能当作74个独立新增场景。算法Python测试在本机已有2477项回归覆盖，原生本轮明确排除mapping_algorithms，没有宣称Linux Python全仓回归。
+- 静态TF修正保留原UNAVAILABLE断言、generation/来源/漂移与旧cut保护：显式保留扫描原始单调采样时间，避免用稍后ROS/单调取样推算时跨过准入门槛；另断言graph_commit_sequence=0。排障时对PENDING的假设经定向复测否定并撤回，没有放松状态断言。
+- 原生production_session探针通过（production-serial.log）：初始入口关闭；打开后接收第一条commit；暂停后新扫描不增加水位；捕获实际原生图；退出旧进程且等待服务消失；新UUID会话加载同一图，实际锚点与保存值一致；重新开门后继续产生新commit。此为现有串行/恢复场景的原生复验，不代替完整车辆manager+真实传感器/定位/导航链路或全局重定位。进程使用本机DDS隔离域，无车辆运动。
+- Ceres重载实测警告请求50线程、被当前构建截为4。对照2.6.10上游solvers/ceres_solver.cpp第114行确认是插件内部硬编码，未暴露ROS线程参数；OMP/OPENBLAS=1不能声称已控制其内部线程。这是明确未完成的四核线程预算/负载验收项，不擅自修改上游求解算法或以虚拟机结果冒充树莓派性能。源码：https://github.com/SteveMacenski/slam_toolbox/blob/2.6.10/solvers/ceres_solver.cpp#L114。
+
+本次要求的串行切图、连续摄入和生产入口已组装并取得便携/原生分层证据。整份原计划仍有手动校准、完整Home编辑事务、合格导航位姿/栅格与四核性能工作，地图仍display_only、navigation_ready=false，PR继续Draft。代码主提交6bb9844；原生探针/诊断修正作为后续提交，与上述日志对应。
+
+原生最终源码/清理审计：149个冻结文件与当前工作区逐字节一致，生成source-sha256-final.json；未发现引用本测试工作区的遗留进程。宿主共享临时脚本目录已由runner回收，VM中的构建、初始冻结源码及各轮日志保留。最终核验不是用新一轮全量掩盖中间失败：便携全量对应6bb9844，随后仅原生诊断/探针及文档改动由上述原生构建、18项通过+2项定向复测、production_serial探针及最终逐文件审计覆盖。

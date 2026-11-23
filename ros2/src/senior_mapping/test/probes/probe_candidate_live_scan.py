@@ -123,7 +123,7 @@ def probe(executable, preflight, root):
             ]
             receipt = proof["live_scan_receipt"]
             assert receipt["raw_gid"] == raw_gid and receipt["bridge_gid"] == bridge_gid
-            assert receipt["frame_id"] == LASER and receipt["stamp_ns"] > armed
+            assert receipt["frame_id"] == LASER and receipt["sample_steady_ns"] > armed
             assert re.fullmatch(r"[0-9a-f]{64}", receipt["cdr_sha256"])
             spin_for(node, 0.1)
             (observed,) = [
