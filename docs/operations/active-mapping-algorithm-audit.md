@@ -31,3 +31,11 @@
 已增加共享SQLite目录以及真实目录checkpoint存储。二者尚不是完整生产建图入口：冻结的锚定Home属于SlamSnapshot，当前实时Home仍由原管理存储拥有，后续必须用其事务/修订协调。已验证目录重开、过期会话/保存结果拒绝、图/稳定层与Home绑定文件重开，以及取消清理时不能获取即将删除版本的读取租约。native图提供者尚未接入，本批文件测试的图源为现有标明synthetic的fixture。
 
 恢复后继续ingest还需明确的新绑定边界：旧Store.bind_ingest只接受空的新图，不能用清空保护或伪造boot字符串让已恢复锚点通过。Home绑定的更新也不能直接调用会撤销ingest的旧place_waypoint。流适配必须将确认清除的证据映射到原占据记录的锚定坐标，不能直接把清除观测的当前anchor替换进去。上述是生产组合待实现项，不把不存在的调用链宣称为已经可用。
+
+## 恢复路径追加证据
+
+已复现并修复`MapReferenceStore.replace`未撤销同MapRef旧ingest绑定的问题；旧binding原先仍可在替换后写入，新增回归已观察失败→通过。新的resume_verified只用于已经由上游验证实际图/来源/定位后的新实例，不允许普通bind_ingest重用恢复图。ActiveMap通过公共接口委托一致checkpoint及恢复，无需外部访问私有store。
+
+恢复测试也发现，对未变化的锚点反复投影会重复归一Home朝向并引入浮点漂移；已改为无变化时保留原值。新waypoint更新路径校验同一source绑定和图水位，不撤销连续摄入；仍须由既有Home事务所有者在生产调用链中协调修订，而非把地图内的冻结绑定当实时Home数据库。
+
+实际SSH基线尝试：已有wheeltec私钥，但wheeltec.local无法解析，未连接车端。因此以上纯算法/文件测量仍不构成树莓派负载验收。

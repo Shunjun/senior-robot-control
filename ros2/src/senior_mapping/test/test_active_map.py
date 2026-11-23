@@ -139,3 +139,19 @@ def test_revoked_view_cannot_read_or_write_recreated_same_reference() -> None:
     assert WorkspaceMap(new.grid).read(
         "map.tile", {**asdict(MAP), "grid_id": previous.grid_id, "tile_x": 0, "tile_y": 0}
     ) == {"ok": False, "error": "conflict"}
+
+
+def test_home_binding_update_keeps_the_live_observation_stream_and_reference() -> None:
+    from senior_mapping.references import AnchoredWaypoint, WaypointBinding
+
+    active, source = session()
+    active.commit(source, 1, "kf1", anchors(1), (hit(0, "kf1"),))
+    before = active.grid()
+    generation = active.map_generation
+    home = WaypointBinding(AnchoredWaypoint("home", Pose2D(0.25, 0.25, 0.2), "kf1", False), POSE)
+    active.update_waypoints(source, expected_sequence=1, changes=(home,))
+    active.commit(source, 2, "kf2", anchors(2), ())
+    assert active.grid() is before
+    assert active.map_generation == generation
+    with pytest.raises(DomainError):
+        active.update_waypoints(source, expected_sequence=1, changes=(home,))

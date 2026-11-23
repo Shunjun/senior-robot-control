@@ -21,6 +21,7 @@ from senior_mapping.references import (
 )
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef, Pose2D
+from vehicle_core.workspace_limits import MAX_GRID_CELLS, MAX_GRID_SIDE
 
 _MAX_INGEST_ANCHORS = 16_384
 _MAX_INGEST_CHANGES = 8_192
@@ -168,6 +169,65 @@ class MapReferenceStore:
         self._ingest_binding = binding
         return binding
 
+    @classmethod
+    def resume_verified(
+        cls, snapshot: SlamSnapshot, *, backend_boot: str, source_epoch: str
+    ) -> tuple["MapReferenceStore", OccupancyIngestBinding]:
+        """Build a fresh writer after an independently verified load and localization.
+
+        The production caller must first verify the actual loaded graph, its
+        source/frame generation and localization; serialized boot names and
+        snapshot checksums alone are not that proof. This method validates local
+        structure and grants neither pose nor navigation authority. It never
+        re-enables a revoked store or weakens bind_ingest's empty-map rule.
+        """
+        for identity in (backend_boot, source_epoch):
+            if not _canonical_identity(identity) or len(identity) > 128:
+                raise DomainError(ErrorCode.VALIDATION, "invalid occupancy stream identity")
+        if (
+            snapshot.review_required
+            or len(snapshot.anchors) > _MAX_INGEST_ANCHORS
+            or len(snapshot.bindings) + len(snapshot.waypoint_bindings) > _MAX_INGEST_RECORDS
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "saved reference is not ready to resume")
+        grid = snapshot.grid
+        if (
+            any(
+                type(size) is not int or not 0 <= size <= MAX_GRID_SIDE
+                for size in (grid.width, grid.height)
+            )
+            or grid.width * grid.height > MAX_GRID_CELLS
+            or not all(_finite_number(v) for v in (grid.origin_x, grid.origin_y))
+        ):
+            raise DomainError(ErrorCode.VALIDATION, "saved grid is invalid or exceeds limits")
+        fresh = cls(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
+        poses, incomplete = fresh._usable_poses(snapshot.anchors)
+        if incomplete or any(not _canonical_identity(a.anchor_id) for a in snapshot.anchors):
+            raise DomainError(ErrorCode.CONFLICT, "saved graph anchors are incomplete")
+        for item in snapshot.bindings:
+            fresh._validate_cell_binding(item, poses)
+        for item in snapshot.waypoint_bindings:
+            if (
+                item.waypoint.review_required
+                or not _canonical_identity(item.waypoint.waypoint_id)
+                or item.anchor_pose != poses.get(item.waypoint.anchor_id)
+            ):
+                raise DomainError(ErrorCode.CONFLICT, "saved waypoint anchor is incomplete")
+        if (
+            snapshot.occupancy.map_ref != snapshot.map_ref
+            or snapshot.occupancy.cells
+            != tuple(i.evidence for i in snapshot.bindings if not i.removed)
+            or snapshot.removed != tuple(i.evidence for i in snapshot.bindings if i.removed)
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "saved occupancy cut is inconsistent")
+        fresh.replace(snapshot)
+        if fresh._cells_collide():
+            raise DomainError(ErrorCode.CONFLICT, "saved reference has colliding cells")
+        binding = OccupancyIngestBinding(snapshot.map_ref, backend_boot, source_epoch)
+        fresh._ingest_binding = binding
+        fresh._ingest_fenced = False
+        return fresh, binding
+
     def revoke_ingest(self, binding: OccupancyIngestBinding) -> None:
         """Withdraw this stream when its authenticated source changes or disappears."""
         if binding is not self._ingest_binding:
@@ -217,6 +277,49 @@ class MapReferenceStore:
         self._ingest_progress = progress
         return progress
 
+    def commit_waypoints(
+        self,
+        binding: OccupancyIngestBinding,
+        *,
+        expected_sequence: int,
+        changes: tuple[WaypointBinding, ...],
+    ) -> None:
+        """Update frozen bindings without revoking the live stream.
+
+        The canonical Home/waypoint transaction owner supplies the changes and
+        reconciles its revision; this method does not own that database. The
+        watermark prevents an edit prepared against older corrected anchors
+        from silently following a newer graph cut.
+        """
+        self._require_capture_writable()
+        progress = self._ingest_progress
+        if (
+            binding is not self._ingest_binding
+            or type(expected_sequence) is not int
+            or expected_sequence != (0 if progress is None else progress.sequence)
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "waypoint edit belongs to an old graph cut")
+        if len(changes) > _MAX_INGEST_CHANGES:
+            raise DomainError(ErrorCode.VALIDATION, "waypoint edit exceeds capture limits")
+        staged = {item.waypoint.waypoint_id: item for item in self._waypoints}
+        seen: set[str] = set()
+        for item in changes:
+            waypoint = item.waypoint
+            if (
+                not _canonical_identity(waypoint.waypoint_id)
+                or waypoint.waypoint_id in seen
+                or waypoint.review_required
+                or item.anchor_pose != self._known_anchors.get(waypoint.anchor_id)
+            ):
+                raise DomainError(ErrorCode.VALIDATION, "waypoint edit has no current graph anchor")
+            seen.add(waypoint.waypoint_id)
+            staged[waypoint.waypoint_id] = _Waypoint(waypoint, item.anchor_pose)
+        if len(staged) + len(self._live) + len(self._removed) > _MAX_INGEST_RECORDS:
+            raise DomainError(ErrorCode.VALIDATION, "waypoint edit exceeds reference capacity")
+        if changes:
+            self._waypoints = list(staged.values())
+            self._change_sequence += 1
+
     def _prepare_ingest(
         self, keyframe_id: str, anchors: AnchorSnapshot, changes: tuple[CellBinding, ...]
     ) -> "MapReferenceStore":
@@ -262,26 +365,9 @@ class MapReferenceStore:
         for item in changes:
             evidence = item.evidence
             world = (item.world_x, item.world_y)
-            if (
-                not _canonical_identity(evidence.anchor_id)
-                or not isinstance(evidence.cell, tuple)
-                or len(evidence.cell) != 2
-                or any(type(coordinate) is not int for coordinate in evidence.cell)
-                or evidence.cell in seen
-                or type(item.removed) is not bool
-                or any(
-                    type(count) is not int or count < 0
-                    for count in (evidence.hit_count, evidence.free_count)
-                )
-                or evidence.change_source not in ("geometric_confirmation", "observed_free_space")
-                or not all(
-                    _finite_number(value)
-                    for value in (*world, evidence.last_valid_time, evidence.belief)
-                )
-                or item.anchor_pose != poses.get(evidence.anchor_id)
-                or staged._index(*world) != evidence.cell
-            ):
-                raise DomainError(ErrorCode.VALIDATION, "invalid anchored occupancy change")
+            self._validate_cell_binding(item, poses)
+            if evidence.cell in seen:
+                raise DomainError(ErrorCode.VALIDATION, "duplicate anchored occupancy change")
             seen.add(evidence.cell)
             key = live_keys.get(evidence.cell)
             if item.removed:
@@ -292,6 +378,29 @@ class MapReferenceStore:
                 record = _Record(evidence, *world, item.anchor_pose)
                 staged._put_cell(record, key, removed_keys.get(evidence.cell))
         return staged
+
+    def _validate_cell_binding(self, item: CellBinding, poses: dict[str, Pose2D]) -> None:
+        evidence = item.evidence
+        world = (item.world_x, item.world_y)
+        if (
+            not _canonical_identity(evidence.anchor_id)
+            or not isinstance(evidence.cell, tuple)
+            or len(evidence.cell) != 2
+            or any(type(coordinate) is not int for coordinate in evidence.cell)
+            or type(item.removed) is not bool
+            or any(
+                type(count) is not int or count < 0
+                for count in (evidence.hit_count, evidence.free_count)
+            )
+            or evidence.change_source not in ("geometric_confirmation", "observed_free_space")
+            or not all(
+                _finite_number(value)
+                for value in (*world, evidence.last_valid_time, evidence.belief)
+            )
+            or item.anchor_pose != poses.get(evidence.anchor_id)
+            or self._index(*world) != evidence.cell
+        ):
+            raise DomainError(ErrorCode.VALIDATION, "invalid anchored occupancy change")
 
     def _fence_ingest(self) -> None:
         self._ingest_binding = None
@@ -512,6 +621,7 @@ class MapReferenceStore:
     def replace(self, snapshot: SlamSnapshot) -> None:
         """Switch identity, resolution, odometry owner, and sequence together."""
         self._require_capture_writable()
+        self._fence_ingest()
 
         self._reset_identity(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
         self._advance_generation()
@@ -608,7 +718,7 @@ class MapReferenceStore:
     def _move_records(self, records: dict[int, _Record], poses: dict[str, Pose2D]) -> None:
         for record in records.values():
             pose = poses.get(record.evidence.anchor_id)
-            if pose is None:
+            if pose is None or pose == record.anchor_pose:
                 continue
             world_x, world_y = _reproject(record.anchor_pose, pose, record.world_x, record.world_y)
             record.world_x = world_x
@@ -623,6 +733,12 @@ class MapReferenceStore:
             if pose is None:
                 unresolved = True
                 item.waypoint = replace(item.waypoint, review_required=True)
+                continue
+            if pose == item.anchor_pose:
+                # Unchanged graph vertices must not repeatedly normalize Home
+                # heading or accumulate coordinate roundoff on every new scan.
+                if item.waypoint.review_required:
+                    item.waypoint = replace(item.waypoint, review_required=False)
                 continue
             world_x, world_y = _reproject(
                 item.anchor_pose, pose, item.waypoint.pose.x, item.waypoint.pose.y

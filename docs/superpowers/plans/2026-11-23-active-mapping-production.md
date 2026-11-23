@@ -138,3 +138,24 @@ checkpoint审阅补充：清理旧版本时取消保存任务，不能让新读�
 - 新增3项目录/文件场景（功能场景累计8项）：两图目录重开与迟到令牌、完整图/稳定层/冻结Home重开、取消清理与旧版本读取竞争。最后一项先复现失败再修复。目录/文件fixture用真实SQLite和目录，图提供者复用明确标记的synthetic backend，不能当native或实车链路证据。
 - 最新地图/事务/占据/geometry/遥测相关回归142 passed，4.96秒；随后仅收紧checkpoint任务/读租约边界，目录及checkpoint三项再次通过。前端完整181 passed、production build成功。未新增skip/xfail。
 - 图来源验证、恢复后持续ingest、Home实时事务协调、生产入口/IPC、自动/手动重定位和正式网页接线仍未完成；这些纯库组件尚未在车端启用。UI布局问题仍等待已发出的异步确认。
+
+### 恢复后流绑定
+
+候选4/7/14选一条恢复既有锚点/占据/Home后，在新已验证源上从新boot第一条连续commit继续更新的场景（第9项功能场景）。普通bind_ingest继续拒绝非空图，不能用兼容旁路削弱保护。另已复现实际bug：replace同MapRef快照后旧binding仍可commit；先失败→修复撤销，不占新增功能场景数。
+
+### 活动图公共接口选择
+
+候选1/11/14增加一条Home绑定更新与后续连续观测场景（第10项功能场景）：Home更新必须保留当前流绑定、原MapRef和参考代次，并拒绝旧观测水位。现有place_waypoint仍保留撤销流的旧保护；新路径须显式传当前绑定与水位。此接口只协调地图内冻结绑定，不代替实时Home事务所有者。
+
+候选4/14增加公共ActiveMap→Home绑定→真实checkpoint→已验证恢复的单条文件链路（第11项功能场景），验证调用者无需接触私有_store。source token只是fixture中的上游验证结果，仍不冒充真实ROS来源验证或定位。
+
+### 恢复与公共接口实施结果
+
+- replace同MapRef快照会撤销旧流；已复现旧binding仍能commit的失败，再修复并保留回归。resume_verified只创建新writer并验证本地结构/容量/锚点一致性，必须由上游先验证实际loaded graph、来源代次与定位，不把字符串或校验和当外部证明。
+- 恢复保留原MapRef、占据与Home绑定；新boot按新流第一条连续commit推进。锚点不变时跳过重复坐标/朝向换算，修复了恢复用例中Home朝向因反复归一而漂移的失败。
+- ActiveMap新增窄公共接口：有绑定/水位保护的waypoint更新、dirty watermark、checkpoint委托及已验证恢复。调用者不读取私有_store。已有place_waypoint/bind_ingest保护不放松。通过新增真实目录链路验证Home进入同一快照并可恢复；这不表示实时Home数据库事务已经对接。
+- 此批功能场景累计11项，仍在整项上限20内；实际原有bug回归2项（重复帧误确认、replace后旧源仍可写），另有选定恢复路径覆盖Home无变换时的数值漂移。对恢复、连续摄入及事务的定向测试131 passed；随后公共Home/checkpoint接口增加后再次执行相关地图回归。先前最后一次全量2464 passed / 116 skipped / 1已有警告，124.03秒；不把之后新增两项计入该全量数字。
+- 四个wheel离线构建并隔离安装，哈希比对验证core/contracts/manager/mapping实际源文件，ROS-free import通过；之后公共接口扩展仍需重建mapping wheel再核对，不能沿用旧包结果。
+- 找到了实际私钥路径/Users/zhangshunjun/.ssh/wheeltec。只读SSH尝试未成功：wheeltec.local当前无法解析，因此无车端CPU/时延基线。没有改成IP猜测连接、没有启动车辆服务。
+
+公共接口最终定向回归：146 passed，4.97秒。功能场景11项、实际原有bug回归2项已分别列明；保留原Home/地图/事务保护。此批无开发服务或车端服务启动，UI正式接线仍等待原位置预览确认。
