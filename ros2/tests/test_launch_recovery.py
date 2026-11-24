@@ -310,8 +310,15 @@ while True: time.sleep(.1)
         path.write_text(code)
         path.chmod(0o700)
     environment = dict(os.environ)
+    test_directory = Path(__file__).resolve().parent
+    repository = test_directory.parents[1]
     environment["PYTHONPATH"] = os.pathsep.join(
-        [str(Path("src").resolve()), str(Path("tests/unit").resolve())]
+        [
+            str(repository),
+            str(repository / "tests/unit"),
+            str(repository / "senior_control/tests"),
+            str(test_directory),
+        ]
     )
     environment["SENIOR_TEST_OWNER_ROOT"] = str(tmp_path)
     check = (
