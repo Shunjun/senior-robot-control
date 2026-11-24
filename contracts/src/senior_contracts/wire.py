@@ -15,6 +15,7 @@ from pydantic import (
 
 from senior_contracts.errors import ErrorCode
 from senior_contracts.navigation import RouteProgress
+from senior_contracts.task_names import normalize_task_name
 
 HEARTBEAT_WINDOW_SECONDS = 5.0
 HEARTBEAT_INTERVAL_MS = 1000.0
@@ -452,7 +453,13 @@ class TaskSummaryPayload(StrictModel):
     revision: int = Field(ge=0)
     enabled: bool
     # //Compatible: old producers omit display metadata.
-    name: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+    name: str | None = None
+
+    @model_validator(mode="after")
+    def validate_name(self) -> "TaskSummaryPayload":
+        if "name" in self.model_fields_set:
+            self.name = normalize_task_name(self.name)
+        return self
 
     @model_serializer(mode="wrap")
     def serialize(self, handler: Any) -> dict[str, Any]:

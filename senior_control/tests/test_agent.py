@@ -39,13 +39,14 @@ from agent_fakes import (
 )
 from cloud.snapshots import SnapshotCache
 from pydantic import ValidationError
-from senior_contracts.wire import SnapshotEnvelope
+from senior_contracts.wire import SnapshotEnvelope, TaskSummaryPayload
 from vehicle_manager.agent.dispatcher import Deadlines
 from vehicle_manager.agent.production_bindings import AgentJournal
-from vehicle_manager.agent.request_bindings import StoreTaskPort
+from vehicle_manager.agent.request_bindings import Dispatcher, StoreTaskPort
 from vehicle_manager.agent.runtime_bindings import Agent
 from vehicle_manager.agent.snapshot_decode import snapshot_from_envelope
 from vehicle_manager.agent.snapshots import RobotSnapshot, TaskSummary, snapshot_envelope
+from vehicle_manager.observability import Metrics
 from vehicle_manager.storage.bindings import Database
 from vehicle_manager.storage.domain_bindings import TaskStore
 from vehicle_manager.tasks.models import TaskDefinition
@@ -1586,3 +1587,72 @@ def test_named_summaries_roundtrip_through_cloud_cache() -> None:
     legacy = snapshot_from_envelope(SnapshotEnvelope.model_validate(raw), map_reference=MapRef)
     assert legacy.tasks[0].name is None
     assert "name" not in SnapshotEnvelope.model_validate(raw).model_dump()["payload"]["tasks"][0]
+
+
+async def test_task_name_boundary_whitespace_store_to_wire(tmp_path: Path) -> None:
+    """R1: persisted API output and strict wire share the frontend name boundary."""
+    async with Database(tmp_path / "names.db") as database:
+        store = TaskStore(database, robot_id=ROBOT)
+        await store.prepare()
+        port = StoreTaskPort(store, robot_id=ROBOT)
+        with pytest.raises(DomainError) as rejected:
+            await port.create({**task_body("blank"), "name": "\ufeff"})
+        assert rejected.value.code is ErrorCode.VALIDATION
+        assert await store.get("blank") is None
+
+        await port.create({**task_body(), "name": "\u0085巡 检\u0085"})
+        saved = await store.get("patrol")
+        assert saved is not None and saved.name == "巡 检"
+        summary = TaskSummaryPayload(
+            task_id=saved.task_id,
+            name=saved.name,
+            revision=saved.revision,
+            enabled=saved.enabled,
+        )
+        assert TaskSummaryPayload.model_validate_json(summary.model_dump_json()).name == "巡 检"
+        raw = summary.model_dump()
+        for invalid in ("\ufeff", None):
+            with pytest.raises(ValidationError):
+                TaskSummaryPayload.model_validate({**raw, "name": invalid})
+        assert (
+            TaskSummaryPayload.model_validate({**raw, "name": "\u0085巡 检\u0085"}).name == "巡 检"
+        )
+        del raw["name"]
+        legacy = TaskSummaryPayload.model_validate(raw)
+        assert "name" not in TaskSummaryPayload.model_validate(legacy).model_dump()
+
+
+async def test_missing_update_task_id_is_failed_validation(tmp_path: Path) -> None:
+    """R2: an omitted name must not turn a deterministic rejection into unknown."""
+    async with Database(tmp_path / "invalid-update.db") as database:
+        store = TaskStore(database, robot_id=ROBOT)
+        await store.prepare()
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        dispatcher = Dispatcher(
+            ROBOT,
+            journal=journal,
+            tasks=StoreTaskPort(store, robot_id=ROBOT),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            deadlines=Deadlines(),
+            metrics=Metrics(),
+            map_root=tmp_path,
+            admit=lambda _: None,
+        )
+        body = task_body()
+        del body["task_id"]
+        request = operation("task.update", "invalid-update", body, expected_revision=1)
+        with pytest.raises(DomainError) as rejected:
+            await dispatcher.run(request)
+        assert rejected.value.code is ErrorCode.VALIDATION
+        entry = await journal.get("invalid-update")
+        assert entry is not None and entry.status is OperationStatus.FAILED
+        assert entry.error is ErrorCode.VALIDATION
+        assert await store.list_tasks() == ()
+        with pytest.raises(DomainError) as replayed:
+            await dispatcher.run(request)
+        assert replayed.value.code is ErrorCode.VALIDATION
+        assert replayed.value.status is OperationStatus.FAILED
+        assert await journal.get("invalid-update") == entry
+        assert await store.list_tasks() == ()

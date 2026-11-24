@@ -5,6 +5,8 @@ from datetime import datetime, timezone
 from enum import Enum
 from typing import Literal
 
+from senior_contracts.task_names import normalize_task_name
+
 from vehicle_manager.tasks.ports import MapReference
 from vehicle_manager.tasks.schedule import Schedule
 
@@ -75,9 +77,7 @@ class TaskDefinition:
             raise ValueError("task identity is required")
         # //Compatible: internal direct-navigation definitions may omit display metadata.
         name = self.task_id if self.name is None else self.name
-        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 128:
-            raise ValueError("name must contain 1–128 Unicode characters")
-        object.__setattr__(self, "name", name.strip())
+        object.__setattr__(self, "name", normalize_task_name(name))
         points = tuple(self.waypoint_ids)
         if not points or any(not point.strip() for point in points):
             raise ValueError("waypoint is required")

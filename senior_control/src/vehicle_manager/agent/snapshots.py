@@ -154,11 +154,14 @@ def snapshot_envelope(
             stale=stale,
             last_synced_at=last_synced_at,
             tasks=[
-                TaskSummaryPayload(
-                    task_id=item.task_id,
-                    revision=item.revision,
-                    enabled=item.enabled,
-                    name=item.name,
+                TaskSummaryPayload.model_validate(
+                    {
+                        "task_id": item.task_id,
+                        "revision": item.revision,
+                        "enabled": item.enabled,
+                        # //Compatible: internal summaries may omit display metadata.
+                        **({"name": item.name} if item.name is not None else {}),
+                    }
                 )
                 for item in snapshot.tasks
             ],

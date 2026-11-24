@@ -391,7 +391,11 @@ class StoreTaskPort(Generic[ResultT]):
     async def update(self, body: Mapping[str, Any], expected_revision: int) -> int:
         if "name" not in body:
             # //Compatible: old clients preserve the actual persisted display name.
-            current = await self._store.get(_text(body, "task_id"))
+            try:
+                task_id = _text(body, "task_id")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise self._values.error(ErrorCode.VALIDATION, "invalid task definition") from exc
+            current = await self._store.get(task_id)
             if current is None:
                 raise self._values.error(ErrorCode.CONFLICT, "task does not exist")
             body = {**body, "name": current.name}
