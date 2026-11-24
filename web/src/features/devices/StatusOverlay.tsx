@@ -34,7 +34,7 @@ export function StatusOverlay({ snapshot, port, tab, onTabChange, performanceExp
     const observer = new ResizeObserver(() => instance.resize()); observer.observe(chart.current);
     return () => { observer.disconnect(); instance.dispose(); };
   }, [samples, tab, unit, visible]);
-  const yaw = snapshot.connected && !snapshot.stale ? snapshot.robot_pose?.yaw : undefined;
+  const yaw = snapshot.connected && !snapshot.stale && snapshot.localized && snapshot.map_generation !== undefined ? snapshot.robot_pose?.yaw : undefined;
   return <FloatingCard className={styles.panel} aria-label="车辆状态浮层">
     <SegmentedControl label="状态分类" value={tab} onChange={onTabChange} options={[{ value:'motion',label:'速度与姿态' },{ value:'performance',label:'性能' }]} />
     {tab === 'performance' ? <PerformancePanel reading={snapshot.performance} live={snapshot.connected && !snapshot.stale} sampleExpired={performanceExpired} /> : <>
