@@ -68,10 +68,16 @@ class TaskDefinition:
     enabled: bool
     revision: int
     created_at: datetime
+    name: str | None = None
 
     def __post_init__(self) -> None:
         if not self.task_id.strip() or not self.robot_id.strip():
             raise ValueError("task identity is required")
+        # //Compatible: internal direct-navigation definitions may omit display metadata.
+        name = self.task_id if self.name is None else self.name
+        if not isinstance(name, str) or not 1 <= len(name.strip()) <= 128:
+            raise ValueError("name must contain 1–128 Unicode characters")
+        object.__setattr__(self, "name", name.strip())
         points = tuple(self.waypoint_ids)
         if not points or any(not point.strip() for point in points):
             raise ValueError("waypoint is required")
@@ -92,6 +98,19 @@ class TaskDefinition:
             raise ValueError("interval anchor must be the task creation time")
         object.__setattr__(self, "waypoint_ids", points)
         object.__setattr__(self, "created_at", created)
+
+    def has_same_execution_semantics(self, other: "TaskDefinition") -> bool:
+        """Name and its definition revision do not affect a scheduled occurrence."""
+        return (
+            self.task_id == other.task_id
+            and self.robot_id == other.robot_id
+            and self.map_ref == other.map_ref
+            and self.waypoint_ids == other.waypoint_ids
+            and self.schedule == other.schedule
+            and self.timezone == other.timezone
+            and self.enabled == other.enabled
+            and self.created_at == other.created_at
+        )
 
 
 @dataclass(frozen=True)

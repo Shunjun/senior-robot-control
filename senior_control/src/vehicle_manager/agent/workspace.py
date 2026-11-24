@@ -193,6 +193,7 @@ class WorkspaceReader:
             )
             data = {
                 "task_id": task.task_id,
+                "name": task.name,
                 "waypoint_ids": list(task.waypoint_ids),
                 "schedule": schedule,
                 "timezone": task.timezone,

@@ -1,4 +1,4 @@
-"""Version 3 task definitions, claims, and recorded skip intervals."""
+"""Persistent task definitions, claims, and recorded skip intervals."""
 
 import json
 import sqlite3
@@ -194,7 +194,7 @@ class TaskStore:
             async with self._database.connection.execute(
                 "SELECT task_id, robot_id, map_id, reference_revision, waypoint_ids, "
                 "schedule_kind, every_seconds, cron_expression, timezone, enabled, revision, "
-                "created_at FROM task_definition WHERE robot_id = ? "
+                "created_at, name FROM task_definition WHERE robot_id = ? "
                 "AND task_id NOT IN (SELECT task_id FROM task_direct_route) ORDER BY task_id",
                 (self._robot_id,),
             ) as cursor:
@@ -209,7 +209,7 @@ class TaskStore:
                     """
                     SELECT t.task_id, t.robot_id, t.map_id, t.reference_revision, t.waypoint_ids,
                            t.schedule_kind, t.every_seconds, t.cron_expression, t.timezone,
-                           t.enabled, t.revision, t.created_at, d.task_id
+                           t.enabled, t.revision, t.created_at, t.name, d.task_id
                     FROM task_definition AS t
                     LEFT JOIN agent_deleted_task AS d
                         ON d.task_id = t.task_id AND d.robot_id = t.robot_id
@@ -226,7 +226,7 @@ class TaskStore:
                 raise
             return await self.list_tasks(), frozenset()
         return tuple(self._codec.task(row) for row in rows), frozenset(
-            self._codec.text(row[12]) for row in rows if row[12] is not None
+            self._codec.text(row[13]) for row in rows if row[13] is not None
         )
 
     async def executions_for_scan(
@@ -329,7 +329,7 @@ class TaskStore:
         await connection.execute(
             "INSERT OR IGNORE INTO task_execution_definition SELECT ?, "
             "json_array(task_id,robot_id,map_id,reference_revision,waypoint_ids,schedule_kind,"
-            "every_seconds,cron_expression,timezone,enabled,revision,created_at) "
+            "every_seconds,cron_expression,timezone,enabled,revision,created_at,name) "
             "FROM task_definition WHERE task_id=? AND robot_id=?",
             (execution_id, task_id, self._robot_id),
         )
@@ -389,7 +389,7 @@ class TaskStore:
                     UPDATE task_definition
                     SET map_id = ?, reference_revision = ?, waypoint_ids = ?,
                         schedule_kind = ?, every_seconds = ?, cron_expression = ?,
-                        timezone = ?, enabled = ?, revision = ?
+                        timezone = ?, enabled = ?, revision = ?, name = ?
                     WHERE task_id = ? AND robot_id = ? AND revision = ?
                     """,
                     (
@@ -402,6 +402,7 @@ class TaskStore:
                         task.timezone,
                         int(task.enabled),
                         revision,
+                        task.name,
                         task.task_id,
                         self._robot_id,
                         expected_revision,
@@ -492,7 +493,11 @@ class TaskStore:
             raise self._ports.error(ErrorCode.CONFLICT, "task does not exist")
         if not current.enabled:
             raise self._ports.error(ErrorCode.CONFLICT, "task is disabled")
-        if current != task:
+        # Only a newer presentation-only edit can cross the read/claim boundary.
+        renamed_only = current.revision > task.revision and current.has_same_execution_semantics(
+            task
+        )
+        if current != task and not renamed_only:
             raise self._ports.error(ErrorCode.CONFLICT, "task definition changed")
         if await self._deleted(connection, task.task_id):
             raise self._ports.error(ErrorCode.CONFLICT, "task is deleted")
@@ -832,9 +837,9 @@ class TaskStore:
             INSERT INTO task_definition (
                 task_id, robot_id, map_id, reference_revision, waypoint_ids,
                 schedule_kind, every_seconds, cron_expression, timezone,
-                enabled, revision, created_at
+                enabled, revision, created_at, name
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 task.task_id,
@@ -849,6 +854,7 @@ class TaskStore:
                 int(task.enabled),
                 revision,
                 self._codec.stamp(task.created_at),
+                task.name,
             ),
         )
 
@@ -917,7 +923,7 @@ class TaskStore:
             """
             SELECT task_id, robot_id, map_id, reference_revision, waypoint_ids,
                    schedule_kind, every_seconds, cron_expression, timezone,
-                   enabled, revision, created_at
+                   enabled, revision, created_at, name
             FROM task_definition
             WHERE task_id = ? AND robot_id = ?
             """,

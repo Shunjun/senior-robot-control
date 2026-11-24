@@ -530,3 +530,56 @@ async def test_store_admission_rejects_context_value_instead_of_provider(tmp_pat
             await store.submit(SUBMIT, task, NOW, cast(ContextProvider, CONTEXT))
         assert await store.query("request") is None
         assert await store.tasks.execution_by_id("execution") is None
+
+
+async def test_rename_keeps_accepted_execution_and_fingerprint(tmp_path: Path) -> None:
+    """N3: presentation metadata cannot change acceptance or its frozen route."""
+    from vehicle_core.values import Pose2D
+
+    async with Database(tmp_path / "rename.db") as database:
+        store, task = await setup_store(database)
+        task = await store.tasks.update(replace(task, name="东区巡检"), task.revision)
+        poses = (Pose2D(1, 2, 0), Pose2D(3, 4, 0))
+        accepted = await store.submit(SUBMIT, task, NOW, lambda: CONTEXT, execution_poses=poses)
+        before = await store.load("execution")
+        effects = await store.effects("execution")
+        frozen = await store.tasks.execution_definition("execution")
+        renamed = await store.tasks.update(replace(task, name="夜班巡检"), task.revision)
+        assert renamed == replace(task, name="夜班巡检", revision=task.revision + 1)
+        assert await store.load("execution") == before
+        assert await store.effects("execution") == effects
+        assert await store.tasks.execution_definition("execution") == frozen
+        assert await store.tasks.execution_route("execution") == ((1, 2, 0), (3, 4, 0))
+        replay = await store.submit(SUBMIT, replace(task, name="夜班巡检"), NOW, lambda: CONTEXT)
+        assert replay.receipt == accepted.receipt and replay.effects == ()
+
+        # Project the live catalog name through the real lifecycle view; the
+        # enclosing display task_id continues to identify the accepted instance.
+        from types import SimpleNamespace
+
+        from vehicle_manager.agent.local_state import RuntimeState
+        from vehicle_manager.agent.production import SnapshotState
+        from vehicle_manager.agent.request_bindings import LifecycleNavigationOperations
+        from vehicle_manager.storage.domain_bindings import WaypointStore
+
+        class State:
+            async def read(self):
+                return RuntimeState(True, True, False, task.map_ref, "running")
+
+        async def start():
+            pass
+
+        source = State()
+        executor = SimpleNamespace(
+            lifecycle=SimpleNamespace(start=start, store=store), context=None
+        )
+        waypoints = WaypointStore(database, robot_id="robot")
+        await waypoints.prepare()
+        navigation = LifecycleNavigationOperations(executor, source, None, waypoints)
+        projection = SnapshotState(source, store.tasks, waypoints, navigation=navigation)
+        ui = (await projection.collect()).vehicle_ui
+        assert ui["task"]["task_id"] == "execution"
+        assert ui["task"]["definition_task_id"] == task.task_id
+        assert ui["task"]["name"] == "夜班巡检"
+        assert ui["task"]["version"] == before.version
+        assert "task.names.v1" in ui["capabilities"]

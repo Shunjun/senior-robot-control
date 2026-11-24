@@ -451,6 +451,16 @@ class TaskSummaryPayload(StrictModel):
     task_id: ShortText
     revision: int = Field(ge=0)
     enabled: bool
+    # //Compatible: old producers omit display metadata.
+    name: Annotated[str, Field(min_length=1, max_length=128)] | None = None
+
+    @model_serializer(mode="wrap")
+    def serialize(self, handler: Any) -> dict[str, Any]:
+        result: dict[str, Any] = handler(self)
+        # //Compatible: old frames retain omission rather than acquire a null name.
+        if self.name is None:
+            result.pop("name", None)
+        return result
 
 
 class ScanPointPayload(StrictModel):

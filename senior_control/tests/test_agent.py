@@ -449,6 +449,7 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
         created = datetime(2026, 10, 27, tzinfo=timezone.utc)
         body = {
             "task_id": "patrol",
+            "name": "东区巡检",
             "map_id": MAP.map_id,
             "reference_revision": MAP.reference_revision,
             "waypoint_ids": ["wp-1"],
@@ -460,6 +461,14 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
         await agent.dispatch(operation("task.create", "op-create", body))
         stored = await store.get("patrol")
         assert stored is not None and stored.revision == 1 and stored.enabled is True
+        assert stored.name == "东区巡检"
+        await agent.dispatch(operation("task.create", "op-create", body))
+        assert (await store.get("patrol")).revision == 1
+        with pytest.raises(DomainError) as changed_name:
+            await agent.dispatch(
+                operation("task.create", "op-create", {**body, "name": "夜班巡检"})
+            )
+        assert changed_name.value.code is ErrorCode.CONFLICT
 
         await agent.dispatch(
             operation(
@@ -471,6 +480,7 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
         )
         stored = await store.get("patrol")
         assert stored is not None and stored.revision == 2 and stored.enabled is False
+        assert stored.name == "东区巡检"
 
         with pytest.raises(DomainError) as caught:
             await agent.dispatch(
@@ -706,7 +716,7 @@ async def test_snapshot_keeps_revision_and_tombstones_from_one_task_cut(
     before = await pending
     assert before.execution_status == ("idle" if available else "unavailable")
     assert before.task_revision == 1
-    assert before.tasks == (TaskSummary("patrol", 1, True),)
+    assert before.tasks == (TaskSummary("patrol", 1, True, "patrol"),)
 
     monkeypatch.setattr(store_rig.state, "collect", production.collect)
     after = await agent.publish_snapshot(ROBOT)
@@ -1536,3 +1546,43 @@ async def test_grid_id_round_trips_and_pushes_only_when_changed(snapshot_polls):
     await runtime.tick()
     assert len(runtime.link.snapshots) == 4
     assert '"map_grid_id"' not in cache_frame(runtime.link.snapshots[-1]).model_dump_json()
+
+
+def test_named_summaries_roundtrip_through_cloud_cache() -> None:
+    """N6: the existing strict envelope/cache path preserves Unicode and revisions."""
+    from vehicle_manager.agent.snapshots import snapshot_from_envelope
+
+    from vehicle_core.values import MapRef
+
+    cache = SnapshotCache()
+    snapshot = RobotSnapshot(
+        robot_id=ROBOT,
+        connected=True,
+        localized=False,
+        map_ref=MAP,
+        home=None,
+        task_revision=1,
+        execution_status="idle",
+        collected_at=time.time(),
+        tasks=(TaskSummary("route-01", 1, True, name="东区巡检"),),
+    )
+    for name, revision in (("东区巡检", 1), ("夜班巡检", 2)):
+        current = replace(
+            snapshot,
+            task_revision=revision,
+            tasks=(TaskSummary("route-01", revision, True, name=name),),
+        )
+        wire = cache_frame(current)
+        decoded = SnapshotEnvelope.model_validate_json(wire.model_dump_json())
+        cache.store(decoded)
+        cached = cache.get(ROBOT)
+        assert cached is not None
+        restored = snapshot_from_envelope(
+            decoded.model_copy(update={"payload": cached.snapshot}), map_reference=MapRef
+        )
+        assert restored.tasks == current.tasks
+    raw = cache_frame(snapshot).model_dump()
+    del raw["payload"]["tasks"][0]["name"]
+    legacy = snapshot_from_envelope(SnapshotEnvelope.model_validate(raw), map_reference=MapRef)
+    assert legacy.tasks[0].name is None
+    assert "name" not in SnapshotEnvelope.model_validate(raw).model_dump()["payload"]["tasks"][0]
