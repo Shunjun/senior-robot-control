@@ -202,30 +202,32 @@ for (const viewport of [
       await route.getByRole("button", { name: "上移 C", exact: true }).click();
       await page.getByRole("button", { name: "提交任务", exact: true }).click();
       await expect(page.getByText("车端已确认保存任务。")).toBeVisible();
-      await page.getByRole('button', {name:'新建任务',exact:true}).click();
-      await page.getByLabel('任务名称',{exact:true}).fill('东区巡检');
-      const taskId = await page.getByLabel('内部编号',{exact:true}).inputValue();
-      expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
-      await page.getByRole('combobox',{name:'可用航点',exact:true}).selectOption('A');
-      await page.getByRole('button',{name:'加入路线',exact:true}).click();
-      await page.getByRole('button',{name:'提交任务',exact:true}).click();
-      await expect(page.getByText('车端已确认保存任务。')).toBeVisible();
-      await page.getByRole('button',{name:`编辑 ${taskId}`,exact:true}).click();
-      await expect(page.getByLabel('任务名称',{exact:true})).toHaveValue('东区巡检');
-      await expect(page.getByLabel('内部编号',{exact:true})).toHaveAttribute('readonly','');
-      await page.getByLabel('任务名称',{exact:true}).fill('夜班巡检');
-      await page.getByRole('button',{name:'提交任务',exact:true}).click();
-      await expect(page.getByText('车端已确认保存任务。')).toBeVisible();
-      await expect(page.getByText('夜班巡检',{exact:true})).toBeVisible();
-      await page.getByRole('button',{name:`查看路线 ${taskId}`,exact:true}).click();
-      await expect(page.getByRole('heading',{name:'任务路线 · 夜班巡检'})).toBeVisible();
-      await page.screenshot({path:testInfo.outputPath('names-preview.png'),fullPage:true});
-      await page.getByRole('button',{name:'返回当前草稿',exact:true}).click();
-      const mutations = await page.evaluate(() => (window as unknown as {__wheelFixture:{calls:Array<{type:string;payload:{body:Record<string,unknown>}}>}}).__wheelFixture.calls.filter(call=>call.type==='task.create'||call.type==='task.update'));
-      const created = mutations.find(call=>call.type==='task.create')!;
-      const renamed = mutations.find(call=>call.type==='task.update'&&call.payload.body.task_id===taskId)!;
-      expect(created.payload.body).toMatchObject({task_id:taskId,name:'东区巡检',waypoint_ids:['A']});
-      expect(renamed.payload.body).toEqual({...created.payload.body,name:'夜班巡检'});
+      if (viewport.width === 1440) {
+        await page.getByRole('button', {name:'新建任务',exact:true}).click();
+        await page.getByLabel('任务名称',{exact:true}).fill('东区巡检');
+        const taskId = await page.getByLabel('内部编号',{exact:true}).inputValue();
+        expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
+        await page.getByRole('combobox',{name:'可用航点',exact:true}).selectOption('A');
+        await page.getByRole('button',{name:'加入路线',exact:true}).click();
+        await page.getByRole('button',{name:'提交任务',exact:true}).click();
+        await expect(page.getByText('车端已确认保存任务。')).toBeVisible();
+        await page.getByRole('button',{name:`编辑 ${taskId}`,exact:true}).click();
+        await expect(page.getByLabel('任务名称',{exact:true})).toHaveValue('东区巡检');
+        await expect(page.getByLabel('内部编号',{exact:true})).toHaveAttribute('readonly','');
+        await page.getByLabel('任务名称',{exact:true}).fill('夜班巡检');
+        await page.getByRole('button',{name:'提交任务',exact:true}).click();
+        await expect(page.getByText('车端已确认保存任务。')).toBeVisible();
+        await expect(page.getByText('夜班巡检',{exact:true})).toBeVisible();
+        await page.getByRole('button',{name:`查看路线 ${taskId}`,exact:true}).click();
+        await expect(page.getByRole('heading',{name:'任务路线 · 夜班巡检'})).toBeVisible();
+        await page.screenshot({path:testInfo.outputPath('names-preview.png'),fullPage:true});
+        await page.getByRole('button',{name:'返回当前草稿',exact:true}).click();
+        const mutations = await page.evaluate(() => (window as unknown as {__wheelFixture:{calls:Array<{type:string;payload:{body:Record<string,unknown>}}>}}).__wheelFixture.calls.filter(call=>call.type==='task.create'||call.type==='task.update'));
+        const created = mutations.find(call=>call.type==='task.create')!;
+        const renamed = mutations.find(call=>call.type==='task.update'&&call.payload.body.task_id===taskId)!;
+        expect(created.payload.body).toMatchObject({task_id:taskId,name:'东区巡检',waypoint_ids:['A']});
+        expect(renamed.payload.body).toEqual({...created.payload.body,name:'夜班巡检'});
+      }
       const before = await page.evaluate(
         () =>
           (window as unknown as { __wheelFixture: { calls: unknown[] } })

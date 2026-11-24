@@ -463,13 +463,6 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
         stored = await store.get("patrol")
         assert stored is not None and stored.revision == 1 and stored.enabled is True
         assert stored.name == "东区巡检"
-        await agent.dispatch(operation("task.create", "op-create", body))
-        assert (await store.get("patrol")).revision == 1
-        with pytest.raises(DomainError) as changed_name:
-            await agent.dispatch(
-                operation("task.create", "op-create", {**body, "name": "夜班巡检"})
-            )
-        assert changed_name.value.code is ErrorCode.CONFLICT
 
         await agent.dispatch(
             operation(

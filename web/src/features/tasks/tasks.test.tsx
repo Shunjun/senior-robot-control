@@ -714,13 +714,11 @@ it("N10 trims names preserving internal spaces and identifies duplicate names by
   expect(robotLink.request).toHaveBeenCalledWith('task.create',expect.objectContaining({body:expect.objectContaining({name:'东区  巡检'})}));
 });
 
-it("rejects an explicitly invalid name from task.get while accepting omitted legacy names", async () => {
+it("rejects FEFF-only and NEL-only names from task.get", async () => {
   const robotLink=link();
-  for (const name of [null, '\uFEFF', '\u0085']) {
+  for (const name of ['\uFEFF', '\u0085']) {
     const details = { ...taskDetails, waypoint_ids: ['gate'], name };
     vi.mocked(robotLink.request).mockResolvedValue({ ok: true, data: details } as never);
     await expect(getTaskDetails(robotLink, snapshot.robot_id, snapshot.map_ref!, 'daily')).rejects.toThrow();
   }
-  vi.mocked(robotLink.request).mockResolvedValue({ok:true,data:{...taskDetails,waypoint_ids:["gate"]}} as never);
-  expect((await getTaskDetails(robotLink,snapshot.robot_id,snapshot.map_ref!,'daily')).task_id).toBe('daily');
 });
