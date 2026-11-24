@@ -5,5 +5,5 @@ pre-commit:
       glob:
         - "*.py"
         - "**/*.py"
-      run: uv run --no-sync ruff format -- {staged_files}
+      run: uv run --no-sync ruff check --select I --fix -- {staged_files} && uv run --no-sync ruff format -- {staged_files}
       stage_fixed: true
