@@ -153,3 +153,81 @@ Vitest仍打印少量JSDOM未实现Canvas getContext诊断，未抑制错误或�
 | M | `web/src/features/tasks/tasks.test.tsx` |
 | M | `web/src/features/video/Video.module.css` |
 | M | `web/src/theme.css` |
+
+## 2026-11-24 独立审核返修（F1 / F2 / G1）
+
+本节更正并取代前文有关“同 ID 可恢复所有多点失败”“手机已满足底部三组布局”“fixture 可替代原集成入口”的结论；前文 195 项及两尺寸截图是历史证据，不能当作返修版本通过。初始分支为干净的 `feat/control-workspace`、`547659278be83f0d3e8075cef7170afc64fd3130`；本轮产品/测试提交为 **`91a061746800a61336fbe16a0d3709fc0b4e4b4b`**，后续仅更新本文档。
+
+用户已另行明确需要**独立、可编辑的任务名称字段**，涉及存储、接口及旧任务兼容，等待后续盘点与单独派发。当前界面的“任务名称（编号）”仍是历史 `task_id` 展示，本轮没有完成该新需求，不能把编号命名宣称为最终批准设计。
+
+### 调用关系、依据与前后行为
+
+- 已阅读独立报告 `/tmp/control-workspace-independent-review-2026-11-24.md`、批准设计/计划、原验证文档和 `/tmp/control-workspace-approved/control-demo/index.html`；核对独立复现脚本。工作区及逐级祖先没有可用 AGENTS.md，按派发中明确给出的项目约束执行；没有其他 worker 并行写入，没有派辅助 Agent。
+- F1：`TaskList.submit → RobotLink.request → RobotClient`。client 将 `ok:false` 转为 `CommandError`，只保留 code，不能从 code 得出 journal 终态；车端 `Dispatcher._execute` 初次 action 错误也不保证响应中带状态。`run(operation.query)` 返回对应 journal 状态，`_replay` 只对 SUCCEEDED 回放成功，对 FAILED 永远拒绝，NEEDS_REVIEW/运行中也不会重新创建；因此本轮直接接已有 query，无需改 client、后端协议或存储。
+- 返修前第二点 unavailable 后总复用已失败 ID；现在收到保存异常后查询**相同 operation_id**，只有 `ok:true`、ID 匹配、`status:failed` 才为失败点生成下次显式提交的新 ID，不自动再次创建。`succeeded` 当作已确认，继续后续保存；查询失败、身份不匹配、running、needs_review 均保留原 ID，提示结果未知/需核查。再次提交仅重放原 ID 并查询，绝不将 timeout 或 unavailable 本身当终态依据。成功点移入当前目录且从草稿移除，后续不再创建；草稿、已确认计数及版本冲突锁定继续保留。失效 editor 不再发后续查询或保存。
+- F2：返修前手机地图工具、图例和 dock 分别处于不同高度；现在视图卡片拥有一个底部区，MapCanvas 只将现有工具节点 portal 到该区，不增加地图、连接或几何 owner。桌面三组底边对齐；手机在同一底部区分两行，工具/比例尺与图例入口一行、四模式一行，图例点开后能看见内容。卡片内边距桌面 16px、手机 12px；操作卡片、预览与底部区之间保持 12px 量级间距，手机保留纵向滚动与完整触控目标。小地图保留本地图工具/实际比例尺/适应窗口，交换仍仅由小图专用按钮触发，只有摄像头可关闭。
+- 恢复横屏流程后实际发现 844×390 滚动驾驶时顶部急停离开视口，修正在原 App CSS 中的横屏 sticky header；没有缩小触控目标或恢复零滚动约束。
+- G1：安全 fixture 套件继续独立存在，恢复 `control.integration.spec.ts`。集成套件不安装 fixture，从 `/login` 走真实认证 HTTP 与 WebSocket，验证当前单杆与控制权/松手/释放路径及滚动后急停可达，保留 1440、390、844×390 原入口；真实测试目标必须显式指定为模拟车辆，不自动启动任何服务器。
+- 可读性：整理 ControlSurface、DriveJoystick、TaskList、StatusOverlay 与相关响应式 CSS 为正常多行；提取指针/键盘处理、排序与 journal 查询函数，保留原 owner。StatusOverlay 分离 ECharts 实例生命周期与样本更新，样本/单位变化用 setOption，ResizeObserver 用 resize，隐藏/切分类/卸载时 dispose；未测量性能收益，不声称修复了已证实的卡顿。
+
+### 此次真实 bug 定向回归
+
+原第二点抛普通 Error、第三次无条件成功的用例被替换为按 journal 状态拒绝重放的用例。首次用五分支测试在旧实现上得到 **5 失败 / 22 通过**（`tasks-red.log`，缺 operation.query / 无法恢复）；随后补齐 timeout 与 running 分支，最终覆盖 7 个具体分支：
+
+| 触发 / query 依据 | 断言 |
+|---|---|
+| 第二点 unavailable，query FAILED | 第一次不创建任务；用户再次提交用新 ID 成功；第一点只创建一次，草稿保留到确认 |
+| 第二点 timeout，query FAILED | 即使同为 timeout，也仅凭匹配终态才允许换 ID；恢复后成功 |
+| 丢回执，query SUCCEEDED | 第二点不再创建，直接继续任务保存 |
+| timeout，query NEEDS_REVIEW | 重试保留原 ID，journal 重放仍拒绝，不创建任务 |
+| 客户端 timeout，query RUNNING | 重试原 ID，运行中 conflict 不被误当成目录版本冲突锁死；不创建任务 |
+| timeout，query operation_unknown | 原 ID 与草稿保留，提示核查，不创建任务 |
+| query 返回其他 ID 的 FAILED | 不能作为终态依据；原 ID 保留，不创建任务 |
+
+F2 使用旧 5476592 静态产物时，新手机底部区断言失败（`layout-red.log`）。布局首轮截图发现比例尺与图例入口过紧，随后增加实际矩形不重叠断言，在中间版本复现失败（`spacing-check.log`），最后用手机工具内换行排布比例尺通过，保留按钮 44px 目标。恢复 844×390 场景后急停可见性先失败（`browser-initial.log`），补横屏顶部栏规则后通过。一次临时检查曾因预览产物缺少新增 aria-label 而失败（`spacing-red.log`），该运行是测试与产物不一致，不算独立产品缺陷证据。
+
+### 复用保护、场景数量与未运行入口
+
+- 单元：定向执行原 tasks、client、workspace、PerformancePanel、drive、map 六文件；复用真实 client 的认证 envelope、错误与 query 解析保护，以及地图、控制权/新按压/释放、过期读数、拖序、任务版本冲突与只读预览保护，没有删除或弱化这些用例。
+- 数量：原多点恢复 **1 个场景实质改写为 7 个 journal 分支**（执行实例净增 6），保留原其余 22 个 tasks 用例。安全 fixture 原 1440/390 两个场景实质补强布局/缩放/截图检查，恢复 844×390 一个入口；复用完整主要流程，没有为横屏机械复制新矩阵。集成从原四个重叠入口整理为三个尺寸入口，单杆与允许滚动替代失效双杆/整页零滚动断言，保留急停和实际 HTTP/WS 路径。**三个集成入口本轮均未运行**，只静态/类型检查。
+- fixture 三尺寸均检查三组处于同一底部容器、底边距、工具与图例不重叠；390 检查触控尺寸，1440 继续检查三组底边差 ≤1px。另复用摄像头开关/小图图标交换、普通地图点击不交换、地图与摇杆 DOM owner 不变、缩放真正改变 zoom、小图适应窗口/比例尺、单位、设置 SI 保存、日志文本安全、路线顺序/cron/timezone、未实现入口零请求与急停可达。
+
+集成入口仅在同时设置下列变量后才会连接，默认全部 skip，Playwright 配置没有 webServer：
+
+```sh
+# 指向专门配置的模拟测试部署；本轮没有执行此命令。
+PLAYWRIGHT_CONTROL_INTEGRATION=1 \
+PLAYWRIGHT_INTEGRATION_BASE_URL="$TEST_DEPLOYMENT_URL" \
+SENIOR_CONTROL_PASSWORD="$TEST_ADMIN_PASSWORD" \
+PLAYWRIGHT_INTEGRATION_ROBOT_NAME="$SIMULATED_ROBOT_NAME" \
+npm run test:e2e -- control.integration.spec.ts
+```
+
+### 最终提交上的命令、结果和证据
+
+以下命令都在 `web/`、产品 HEAD `91a0617` 上执行；没有拿旧 5476592 或早期 195 项证据补本轮通过。证据根目录 **`/tmp/control-workspace-repair-2026-11-24/`**，`version.json` 记录产品 SHA，`build-sha256.json` 记录最终 dist 文件校验值。仅更新已批准的 `/tmp/control-workspace-static-preview/` 产物，复用既有 `127.0.0.1:4147` 静态预览，没有启动开发或业务服务。
+
+| 命令 | 结果 / 日志 |
+|---|---|
+| `npm test -- --run src/features/tasks/tasks.test.tsx src/api/client.test.ts src/features/devices/workspace.test.tsx src/features/devices/PerformancePanel.test.tsx src/features/drive/drive.test.tsx src/features/map/map.test.tsx` | **6 文件 / 86 项通过**，`unit-final.log`；其中 tasks 29 项（22 原保护 + 7 journal 分支） |
+| `npm run typecheck` | 通过，`typecheck-final.log` |
+| `npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --strict --skipLibCheck --types node e2e/control.spec.ts e2e/control.integration.spec.ts` | 通过，`e2e-typecheck-final.log`；集成入口仅为类型检查 |
+| `npm run build` | 通过，`build-final.log`；原 Vite 大包提示仍在，未改构建配置 |
+| `PLAYWRIGHT_BASE_URL=http://127.0.0.1:4147 PLAYWRIGHT_CHANNEL=chrome npm run test:e2e -- control.spec.ts --output=/tmp/control-workspace-repair-2026-11-24/browser-final` | **1440 / 390 / 844×390 安全 fixture 3 项通过**，`browser-final.log` |
+| `git diff --check` | 通过；最终文档提交后再次检查 |
+
+每个 `browser-final/control-<尺寸>...-chromium/` 下有 `drive.png`、`mini-map.png`、`estop-scrolled.png`、`tasks.png`（共 12 张）。已实际查看最终桌面/手机驾驶底部、手机任务底部、手机小地图工具、横屏滚动急停截图；同时以 DOM 矩形断言避免只靠截图判断。驾驶截图是在已手动适配过小地图并关闭摄像头之后拍摄，主地图保留同一 viewport 的缩放，因此图形比首次加载时小，不表示使用虚构地图或重新创建 owner。
+
+不重复无关全仓/车端测试；前文 195 项只作为历史结果，本轮不宣称全 201 项运行通过。未连接真实车、ROS、配对兑换、真实 WebRTC/TURN 或运动服务；fixture 通过不证明这些链路。真实服务集成没有部署可用且禁止本轮连接，因此**未运行**，不能声明通过。显式 footprint 缺失仍为箭头 fallback + 尺寸不可用；run-now/FIFO/证据层仍提示暂未实现。独立可编辑任务名称待后续派发。
+
+### 实际范围与交付状态
+
+实际 **12 路径：产品 8、测试 3、文档 1、配置/构建/依赖 0；新增 1、修改 11、删除 0**，在预报 11–16 范围内。较最初内部 7 产品文件估计多出的 App CSS 仅处理恢复横屏入口实际发现的急停可达缺口；未扩大架构或改后端。
+
+| 分类 | 路径 |
+|---|---|
+| 产品（8，修改） | `web/src/App.module.css`、`web/src/features/devices/ControlSurface.tsx`、`OperatorWorkspace.module.css`、`StatusOverlay.tsx`、`web/src/features/drive/DriveJoystick.tsx`、`web/src/features/map/MapCanvas.tsx`、`Map.module.css`、`web/src/features/tasks/TaskList.tsx` |
+| 测试（3，新增1/修改2） | `web/src/features/tasks/tasks.test.tsx`、`web/e2e/control.spec.ts`、新增 `web/e2e/control.integration.spec.ts` |
+| 文档（1，修改） | 本验证记录 |
+
+产品提交后只修改本文档；文档提交与最终远端/PR/清洁状态另记在证据目录 `delivery-report.md`。保持原分支、原工作区、原 PR #40 Draft，不创建第二 PR、不合并 main。自审实际 diff 后等待负责人亲审，本 worker 自审不冒充独立复核。
