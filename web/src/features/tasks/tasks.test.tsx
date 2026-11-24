@@ -646,7 +646,9 @@ it("N7 creates an independent stable ID then renames without changing the accept
     return {ok:true,status:'succeeded'} as never;
   });
   const page=render(<TaskList snapshot={snapshot} link={robotLink} workspace={workspace} />);
-  fireEvent.change(screen.getByLabelText('任务名称'),{target:{value:'  东区巡检  '}});
+  fireEvent.change(screen.getByLabelText('任务名称'), {
+    target: { value: ' \u0085东区巡检\u0085 ' },
+  });
   const id=(screen.getByLabelText('内部编号') as HTMLInputElement).value;
   expect(id).toMatch(/^[0-9a-f-]{36}$/);
   fireEvent.change(screen.getByLabelText('计划类型'),{target:{value:'interval'}});
@@ -658,7 +660,9 @@ it("N7 creates an independent stable ID then renames without changing the accept
   page.rerender(<TaskList snapshot={{...snapshot,tasks:[{task_id:id,name:'东区巡检',revision:1,enabled:true}]}} link={robotLink} workspace={workspace} />);
   fireEvent.click(screen.getByRole('button',{name:`编辑 ${id}`}));
   await waitFor(()=>expect(screen.getByLabelText('任务名称')).toHaveProperty('value','东区巡检'));
-  fireEvent.change(screen.getByLabelText('任务名称'),{target:{value:'夜班巡检'}});
+  fireEvent.change(screen.getByLabelText('任务名称'), {
+    target: { value: ' \u0085夜班巡检\uFEFF ' },
+  });
   fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
   await screen.findByText('车端已确认保存任务。');
   expect(stored).toEqual({...original,name:'夜班巡检'});
@@ -700,8 +704,10 @@ it("N10 trims names preserving internal spaces and identifies duplicate names by
   await screen.findByText('车端已确认任务变更。');
   expect(robotLink.request).toHaveBeenCalledWith('task.delete',expect.objectContaining({body:{task_id:'two'}}));
   fireEvent.keyDown(screen.getByRole('button',{name:'添加地图航点 gate'}),{key:'Enter'});
-  fireEvent.change(screen.getByLabelText('任务名称'),{target:{value:'   '}});
-  expect(screen.getByRole('button',{name:'提交任务'})).toHaveProperty('disabled',true);
+  for (const value of ['   ', '\uFEFF', '\u0085']) {
+    fireEvent.change(screen.getByLabelText('任务名称'), { target: { value } });
+    expect(screen.getByRole('button', { name: '提交任务' })).toHaveProperty('disabled', true);
+  }
   fireEvent.change(screen.getByLabelText('任务名称'),{target:{value:'  东区  巡检  '}});
   fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
   await screen.findByText('车端已确认保存任务。');
@@ -710,9 +716,11 @@ it("N10 trims names preserving internal spaces and identifies duplicate names by
 
 it("rejects an explicitly invalid name from task.get while accepting omitted legacy names", async () => {
   const robotLink=link();
-  const details={...taskDetails, waypoint_ids:["gate"], name:null};
-  vi.mocked(robotLink.request).mockResolvedValue({ok:true,data:details} as never);
-  await expect(getTaskDetails(robotLink,snapshot.robot_id,snapshot.map_ref!,'daily')).rejects.toThrow();
+  for (const name of [null, '\uFEFF', '\u0085']) {
+    const details = { ...taskDetails, waypoint_ids: ['gate'], name };
+    vi.mocked(robotLink.request).mockResolvedValue({ ok: true, data: details } as never);
+    await expect(getTaskDetails(robotLink, snapshot.robot_id, snapshot.map_ref!, 'daily')).rejects.toThrow();
+  }
   vi.mocked(robotLink.request).mockResolvedValue({ok:true,data:{...taskDetails,waypoint_ids:["gate"]}} as never);
   expect((await getTaskDetails(robotLink,snapshot.robot_id,snapshot.map_ref!,'daily')).task_id).toBe('daily');
 });

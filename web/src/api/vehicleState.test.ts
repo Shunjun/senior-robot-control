@@ -1,6 +1,6 @@
 import { parseInbound } from "./protocol";
 import { describe, expect, it } from 'vitest';
-import { decodeVehicleFrame, VehicleTransport } from './vehicleState';
+import { decodeVehicleFrame, isTaskName, normalizeTaskName, VehicleTransport } from './vehicleState';
 
 export const frame = {
   manual_authority: null,
@@ -109,12 +109,36 @@ it('strictly accepts named execution metadata while rejecting malformed and extr
   const task={task_id:'exec-88',definition_task_id:'route-01',name:'东区巡检',version:3,phase:'running',completed:1,total:3,stopped_for:null,allowed_actions:['pause']};
   const named={...frame,capabilities:[...frame.capabilities,'task.names.v1'],task};
   expect(decodeVehicleFrame(named).task).toMatchObject(task);
-  for(const patch of [{name:null},{name:'   '},{name:42},{definition_task_id:null},{extra:true}]) expect(()=>decodeVehicleFrame({...named,task:{...task,...patch}})).toThrow();
+  for (const patch of [
+    { name: null },
+    { name: '   ' },
+    { name: '\u0085' },
+    { name: '\uFEFF' },
+    { name: 42 },
+    { definition_task_id: null },
+    { extra: true },
+  ]) {
+    expect(() => decodeVehicleFrame({ ...named, task: { ...task, ...patch } })).toThrow();
+  }
   expect(decodeVehicleFrame({...named,task:{...task,name:'😀'.repeat(128)}}).task?.name).toHaveLength(256);
 });
 
-it('preserves task summary names through the snapshot decoder and rejects explicit null', () => {
+it('preserves task summary names through the snapshot decoder and rejects explicit invalid names', () => {
   const envelope={v:1,robot_id:'robot',session_id:'cloud',connection_epoch:1,request_id:'snapshot',seq:1,expires_at:2000,type:'snapshot',payload:{connected:true,localized:true,map_ref:null,home:null,home_revision:0,task_revision:1,runnable_task_ids:[],execution_status:'idle',collected_at:1000,stale:false,last_synced_at:1000,tasks:[{task_id:'route-01',name:'东区巡检',revision:1,enabled:true}]}};
   expect(parseInbound(JSON.stringify(envelope))).toMatchObject({payload:{tasks:[{task_id:'route-01',name:'东区巡检'}]}});
-  expect(parseInbound(JSON.stringify({...envelope,payload:{...envelope.payload,tasks:[{...envelope.payload.tasks[0],name:null}]}}))).toBeNull();
+  for (const name of [null, '\u0085', '\uFEFF']) {
+    expect(parseInbound(JSON.stringify({
+      ...envelope,
+      payload: { ...envelope.payload, tasks: [{ ...envelope.payload.tasks[0], name }] },
+    }))).toBeNull();
+  }
+});
+
+it('uses the agreed boundary whitespace for name validation without filtering internal characters', () => {
+  expect(normalizeTaskName(' \u0085东区 \u0085\uFEFF 巡检\uFEFF ')).toBe('东区 \u0085\uFEFF 巡检');
+  expect(isTaskName('\u0085')).toBe(false);
+  expect(isTaskName('\uFEFF')).toBe(false);
+  expect(isTaskName(null)).toBe(false);
+  expect(isTaskName(' \u0085' + '😀'.repeat(128) + '\uFEFF ')).toBe(true);
+  expect(isTaskName('😀'.repeat(129))).toBe(false);
 });

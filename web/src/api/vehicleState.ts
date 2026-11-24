@@ -310,9 +310,19 @@ function body(value: unknown): BodyReference {
     stale: boolean(r.stale)
   };
 }
-/** Unicode character count matches the task store's Python validation. */
+/** Explicit boundary whitespace shared with the task model and wire contract. */
+export function normalizeTaskName(value: string): string {
+  return value.replace(
+    /^[\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]+|[\u0009-\u000D\u001C-\u0020\u0085\u00A0\u1680\u2000-\u200A\u2028\u2029\u202F\u205F\u3000\uFEFF]+$/gu,
+    '',
+  );
+}
+
+/** Count Unicode code points after the same normalization used by task submits. */
 export function isTaskName(value: unknown): value is string {
-  return typeof value === 'string' && value.trim().length > 0 && Array.from(value).length <= 128;
+  if (typeof value !== 'string') return false;
+  const length = Array.from(normalizeTaskName(value)).length;
+  return length >= 1 && length <= 128;
 }
 function nonemptyId(value: unknown): string {
   const id = text(value);

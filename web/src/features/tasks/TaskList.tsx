@@ -1,4 +1,4 @@
-import { isTaskName } from "../../api/vehicleState";
+import { isTaskName, normalizeTaskName } from "../../api/vehicleState";
 import {
   useEffect,
   useRef,
@@ -169,12 +169,13 @@ function TaskEditor({
   const routeMissing = preview === null ? missingWaypoint : previewMissing;
   const mapRoute = routeBlocked || routeMissing ? [] : (previewPoints ?? route);
   const schedule = draftSchedule(draft);
+  const normalizedName = normalizeTaskName(draft.name);
   const canSubmit =
     live &&
     workspace !== undefined &&
     schedule !== null &&
     draft.task_id.trim() !== "" &&
-    (namesSupported ? isTaskName(draft.name.trim()) : editing !== null) &&
+    (namesSupported ? isTaskName(normalizedName) : editing !== null) &&
     route.length > 0 &&
     !missingWaypoint &&
     !pending &&
@@ -402,7 +403,7 @@ function TaskEditor({
       ...snapshot.map_ref,
       grid_id: workspace.grid_id,
       task_id: draft.task_id,
-      ...(namesSupported ? { name: draft.name.trim() } : {}),
+      ...(namesSupported ? { name: normalizedName } : {}),
       created_at: editing?.created_at ?? new Date().toISOString(),
       timezone: draft.timezone.trim() || NEW_TASK.timezone,
       schedule,
