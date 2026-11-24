@@ -11,37 +11,37 @@
 - [x] 核对ActiveMap、WorkspaceMap、MapOperations、SlamAdapter、Relocalizer、agent_adapter和网页MapManager的实际调用。
 - [x] 精读并复用senior_mapping/test中的引用、占据、归档、事务、active-map及ros2/tests/test_map_operations.py与地图工作区集成测试。
 - [ ] 先审查现有算法的定位/环境变化区分、动态障碍更新、图栅格一致性与恢复正确性，并评估线程、算法复杂度、内存和I/O；不能默认算法无问题。
-- [ ] 核对后端live观测/图捕获/重定位接口、配置、Home唯一存储和operation_id链路；固定线上契约，记录所有状态/坐标/时间/版本语义。
-- [ ] 对下面候选逐项审核并确定实际场景后，才编写测试和实现。原有效回归保留。
+- [x] 核对后端live观测/图捕获/重定位接口、配置、Home唯一存储和operation_id链路；固定线上契约，记录所有状态/坐标/时间/版本语义。
+- [x] 对下面候选逐项审核并确定实际场景后，才编写测试和实现。原有效回归保留。
 
 ## 2. 活动地图与一致持久化
 
 - [x] 新增senior_mapping的session/catalog/checkpoint owner，扩展active公共接口，复用references/store/operations持久边界；不从外部访问私有_store。
-- [ ] 新建、唯一活动会话、可信更新、稳定MapRef与独立grid_id、每图Home。
+- [x] 新建、唯一活动会话、可信更新、稳定MapRef与独立grid_id、每图Home。
 - [x] 完整checkpoint自动落盘、重启恢复和未完成版本处理；数据与状态同代提交。
 - [ ] 实现有界重计算、增量更新、合并checkpoint与最长延期；重计算和I/O不阻塞控制/通信，处理旧会话取消与队列容量。具体预算由四核目标设备实测确定。
-- [ ] 独立回放与真实临时数据库/目录验证后，审阅diff并提交。
+- [x] 独立回放与真实临时数据库/目录验证后，审阅diff并提交。
 
 ## 3. 后端/定位/生产入口
 
-- [ ] 复用native SLAM capture/graph/scan-match适配及必要ROS接口；消费已验证来源，不以无身份/map topic代替。
-- [ ] 切图与删除生命周期、旧会话异步结果退役；自动匹配、Home待校准标记、手动位姿局部微调。
-- [ ] 建图进程与本地IPC、real/sim组合及配置；接入agent_adapter、WorkspaceReader、任务地图引用与定位/导航资格。
-- [ ] 实际服务边界/串行化测试、原生可用环境检查及安装验证；审阅并提交。
+- [x] 复用native SLAM capture/graph/scan-match适配及必要ROS接口；消费已验证来源，不以无身份/map topic代替。
+- [x] 切图与删除生命周期、旧会话异步结果退役；自动匹配、Home待校准标记、手动位姿局部微调。
+- [x] 建图进程与本地IPC、real/sim组合及配置；接入agent_adapter、WorkspaceReader、任务地图引用与定位/导航资格。
+- [x] 实际服务边界/串行化测试、原生可用环境检查及安装验证；审阅并提交。
 
 ## 4. 线上契约与网页
 
-- [x] 用户取消预览确认，直接接入现有控制页：性能面板、地图目录及新建/切换/删除请求；未就绪运行时明确禁用。Home/车位定位生产协作仍列于后端阶段。
+- [x] 用户取消预览确认，直接接入现有控制页：性能面板、地图目录及新建/切换/删除请求；未就绪运行时明确禁用。Home/车位定位生产协作已在后续批次接通，验证限制见文末。
 - [x] contracts、云端路由、manager消息处理、web协议/RobotLink及目录请求按实际线上消息同步更新。
-- [ ] 对接原地图画布、HomeControls和MapManager，处理更新/切换/失败状态；删除临时预览。
+- [x] 对接原地图画布、HomeControls和MapManager，处理更新/切换/失败状态；删除临时预览。
 - [ ] 定向网页测试、类型/构建与实际UI检查；不擅自启动开发服务。
 
 ## 5. 低频性能遥测
 
 - [x] 只读盘点现有Metrics、状态快照/心跳、真实/仿真进程登记及云端状态转发，复用可用数据，明确宿主/容器与CPU归一口径。
-- [ ] 实现独立低频采样器与缓存，默认1秒；整机CPU/内存、视频/导航/建图归属、身份重启识别及有界开销。不通过top/ps子进程高频采集。
-- [ ] 沿现有连接更新实际线上摘要契约、云端转发、网页状态；旧端缺失指标不影响控制，必要兼容明确标注//Compatible。
-- [ ] 在原控制页面先提供性能面板交互预览，再接入真实数据；区分未启动/不可用/过期，进程内存不伪装成独立线程内存。
+- [x] 实现独立低频采样器与缓存，默认1秒；整机CPU/内存、视频/导航/建图归属、身份重启识别及有界开销。不通过top/ps子进程高频采集。
+- [x] 沿现有连接更新实际线上摘要契约、云端转发、网页状态；旧端缺失指标不影响控制，必要兼容明确标注//Compatible。
+- [x] 按用户要求直接在原控制页面接入性能面板；区分未启动/不可用/过期，进程内存不伪装成独立线程内存。
 - [ ] 验证整机/模块统计、重启归属及端到端展示；测量监控自身开销与控制/心跳影响，和建图负载验证共用采集证据。
 
 ## 6. 整链路与交付
@@ -243,3 +243,31 @@ Docker说明：未安装Docker或拉取ROS镜像。此前打开已有Docker误�
 Home覆盖回归先失败（保存后覆盖新值、未报告冲突），修复后通过；78项生产组装/Agent配置/Home现有回归通过，3个相关模块定向mypy通过。checkpoint前记录的Home revision用于后段CAS，不再重新读新revision授权覆盖旧绑定；保存/恢复/实际home.set端共用数据库的Home target锁，运动撤权与控制不等待此锁。线程缺陷原生回归先复现BoundedCeresSolver不存在；独立插件只改变2.6.10上游命名空间与options.num_threads，保存原始hash/修改日期及LGPL许可证，动态库和可重建源码随包安装。尚待实际编译/线程报告复验，不预告性能达标。
 
 线程预算原生证据：独立插件三包增量构建通过（17.5秒），production_session_runtime通过。随后同一场景改为两节点/一约束的非空图重载：实际Ceres报告6参数、3残差、Threads Given=1/Used=1、收敛；偏移种子加载后继续产生新commit。日志solver-budget-nonempty.log；未修改上游优化数学，原始source hash、修改日期与许可证随动态库源码安装。此证据证明求解器线程配置生效，不代表大图、视频并行及树莓派控制时延已经验收。继续后续校准与导航任务，不结束本轮执行。
+
+
+### 2026-11-24 手动校准/Home/导航参考实现与审阅
+
+实现`map.calibrate`和`map.home`，由共享契约、既有operation journal、生产runtime与原控制页位姿选择器串联；protocol=2才发送新增操作。校准通过停车后串行重开原生会话传递seed，匹配实际扫描后才能恢复资格，失败保持待校准；Home坐标与实际车辆位姿独立。Home编辑共享事务与revision CAS，checkpoint重开保留绑定。另修复真实SQLite回归：编辑后的Home遇到锚点旋转时原先错误地绑定到新锚点，现按原锚点重投影精确坐标，失败证据及回归保留。
+
+原生增加同boot/commit的有界导航栅格、带原始receipt的新鲜odom读取；图commit附带当时原始odom。物理适配器唯一发布获准的/map与map→odom，子进程地图私有化且停止原生TF定时发布。参考generation与grid_id分开，缓存raster最多按闲时1秒/行驶5秒合并，仍逐条处理已接受图cut；来源/时效失效撤销位姿，切图后不回退旧图。只接受原生明确free，不把unknown改成free；长期占据/删除证据不从原生栅格回填。原有接收侧路线与安全、碰撞门保留，尚未配置Nav2参数的车辆仍不宣称可导航。
+
+负责人审阅实际diff发现并复现：NativeNavigationBridge每次安装同参考栅格都无条件清空位姿（mapping-reference-refresh-red.log），导致正常刷新期间localized=false。修复为同MapRef/同generation保留原始新鲜receipt；参考更换仍撤销资格。定向生产/Home/Agent配置/导航已有回归93 passed，包含新增该实际bug回归，mapping-reference-refresh-green.log。未删除或弱化已有保护。
+
+生产profile原来将navigation参数与静态reference强制配对，且无reference时丢弃参数；当前动态建图初始化不依赖预置静态图，此组装缺口已用原提交函数对同一实际参数文件复现ValueError（mapping-dynamic-navigation-profile-red.log）。已允许独立配置Nav2参数，仍检查绝对路径、必需节点及真实时钟；只有静态reference不带参数仍拒绝。对应原有生产启动回归扩展，不新增无关场景。
+
+测试场景台账：原功能18项加获选的手动校准、Home编辑/重开两条路径，共20项；保留所有原回归。新增实际bug回归单列：Home捕获后覆盖新编辑、Home编辑锚点重基、Ceres错误线程预算、正常地图刷新误撤销新鲜位姿、动态建图参数被旧静态reference门限拒绝。退出保存预算、删除文件回收、内部IPC错误、精确点变栅格中心、未完成目标退役旧图等先前实际bug回归继续保留。没有扩大一般功能参数矩阵。
+
+验证：完整本机2479 passed / 116原有skip / 1原有forkpty警告（126.47秒，mapping-production-complete-suite.log）；此全量在最后“刷新撤销”修复前，修复后93项相关回归通过。网页182项及build通过，最后修复不涉及前端。六个改动核心模块定向mypy及Ruff通过；不能据此声称全仓类型检查无错误。contracts/manager/mapping/robot/localization五个wheel离线重建，连同已有core隔离导入、源码hash和ROS-free导入通过。原生最终三包构建通过，21项mapping CTest和sensor_ingress回归全部通过，colcon汇总94条结果0错误/失败/跳过（不是94条新增场景）。测试包装脚本误把“100% tests passed”中的“0% tests passed”当失败而提前退出；实际构建与测试均通过，未重跑掩盖，后续单独核验冻结源码和清理。
+
+实车连接只读复查：wheeltec.local无法解析，未连接/部署或发送运动。树莓派四核并行视频、大图增长、重计算、控制周期时延/RSS/保存耗时仍没有现场证据；PR保持Draft，不能称整份计划已全部验收。实现与获批计划同提交，不单独提交计划。
+
+
+### 最终收尾验证（2026-11-24）
+
+补充实际原生栅格/静态来源/原始odom→Python NativeNavigationBridge→LiveMappingReference的ROS链路复验，正常刷新保持新鲜位姿，来源撤销后位姿不可用；pipeline通过。初次包装脚本frame仍用probe_map而生产桥要求map，统一诊断fixture帧后继续；随后复现proof字节不等但全部typed字段相等（STATIC_PROOF_SEMANTIC_EQUAL=True，差异位于CDR填充字节）。既有静态proof探针现按全部typed字段比较，包括来源、代次、原始时钟和所有变换值，不把未定义填充当身份，也没有删字段/弱化来源断言。实际静态证明与drift两个既有原生场景均复验通过。
+
+最终全量首次为2479 passed / 1 failed / 116原有skip，相机恢复已成功，失败在退出时8秒测试期限短于相机既有10秒关闭预算。只调整该测试等待到覆盖关闭预算的20秒，所有恢复次数、进程归属、无重复启动、全部退出断言保留，未改相机生产启停策略；该项单独4.92秒通过。此前预报相机收尾可能扩大到产品文件，实际无需新增产品改动，仍在原文件数量范围内。
+
+修正后最终命令`python3 /tmp/wheel-final-verify.py`：本机2480 passed / 116原有skip / 1原有forkpty警告，126.68秒，日志/tmp/mapping-final-all-accepted-v2.log；LOCAL_EXIT=0/NATIVE_EXIT=0。VM实际桥复验通过，原生21项此前全通过，断言修正后的静态两项通过；最终160个冻结源码hash与当前checkout一致，未发现引用本次VM工作区的遗留测试进程。五个wheel隔离hash/import验证、六核心模块定向mypy、Ruff、保留CRLF文件的diff空白检查均通过；网页182项与build通过且此后未改前端。完整浏览器人工交互和真实Nav2路线/四核并行视频性能没有现场验收，不能以分层验证代替整车运行证据。保持既有功能主分支及Draft PR，不合main。
+
+自动权限审核中有请求被更新请求取代，另一次审核超时而未执行；按提示重试后完成VM验证。这些是工具执行过程，不是以重跑掩盖测试失败；原始失败日志保留，实际断言问题与修正已分别记录。

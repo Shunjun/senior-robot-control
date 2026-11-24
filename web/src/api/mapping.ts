@@ -3,7 +3,7 @@ import type { MapRef, ResponsePayload } from "./protocol";
 import { workspaceRequest } from "./workspace";
 
 export type MapPhase = "idle" | "loading" | "mapping" | "saving" | "matching" | "pending_calibration" | "unavailable" | "failed";
-export type MapCommand = "map.create" | "map.activate" | "map.delete";
+export type MapCommand = "map.create" | "map.activate" | "map.delete" | "map.calibrate" | "map.home";
 export interface SavedMap {
   map_ref: MapRef;
   name: string;

@@ -27,8 +27,10 @@
   "msg/Keyframe.msg": "a0d250a75d3100184202c1572b123929169624a1afc80be03e6b3473919f8cfd",
   "srv/ReadGraph.srv": "a4ec3bfed128b6eaf730dadccd6cf90142c2636e275ab6fef75852ed8506ffce",
   "srv/MatchStationaryScan.srv": "03ebe3d83ad9892da51434b625c746814d24d1ba1ff23916c297d9bc790096c9",
-  "srv/ReadGraphCommit.srv": "9f4f96bc7f6e8950848b26426dff72356d4b0330d0e0fa148d05b122fb7e52bb",
+  "srv/ReadGraphCommit.srv": "cebf92140139c27acab52031a956128f4beef1951ee7051767ba77dfbbcac4b0",
   "srv/CaptureGraph.srv": "1f51a087fcd1fddd4332c35efdc69a5c9e630770daf4643e4c190f14924e3470",
   "srv/ReadLoadedGraph.srv": "635967bb93097d2faf01517f16ccddd1c326ee5c3d1c78988fbc4a6098114a57",
-  "srv/MappingGate.srv": "22644fe599ab18187abfe9fa5e34aa8cbe2069ba526b47731a7dc2e681295758"
+  "srv/MappingGate.srv": "22644fe599ab18187abfe9fa5e34aa8cbe2069ba526b47731a7dc2e681295758",
+  "srv/ReadMappingGrid.srv": "c1a11b080257527f22b919cba08f89c306fd0b518e487012a0708906d474b785",
+  "srv/ReadMappingPose.srv": "6c17f43a1018dd354838e8d45b0bb1550fe97c290a4b408b94bf309e96fb378c"
 }

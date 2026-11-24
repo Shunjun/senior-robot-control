@@ -262,6 +262,8 @@ OPERATION_TYPES = (
     "map.create",
     "map.activate",
     "map.delete",
+    "map.calibrate",
+    "map.home",
     "operation.query",
 )
 
@@ -290,6 +292,8 @@ class OperationEnvelope(EnvelopeBase):
         "map.create",
         "map.activate",
         "map.delete",
+        "map.calibrate",
+        "map.home",
         "operation.query",
     ]
     payload: OperationPayload
@@ -367,6 +371,28 @@ class MapCreateBody(StrictModel):
 
 class MapTargetBody(MapRefPayload):
     expected_generation: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+
+
+class MapCalibrationBody(MapTargetBody):
+    x: float = Field(ge=-1_000_000, le=1_000_000)
+    y: float = Field(ge=-1_000_000, le=1_000_000)
+    yaw: float = Field(ge=-6.2831853072, le=6.2831853072)
+
+
+class MapHomeBody(MapCalibrationBody):
+    expected_home_revision: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+
+
+def parse_mapping_body(kind: str, body: Any) -> MapCreateBody | MapTargetBody:
+    if kind == "map.create":
+        return MapCreateBody.model_validate(body)
+    if kind == "map.calibrate":
+        return MapCalibrationBody.model_validate(body)
+    if kind == "map.home":
+        return MapHomeBody.model_validate(body)
+    if kind in {"map.activate", "map.delete"}:
+        return MapTargetBody.model_validate(body)
+    raise ValueError("unsupported map command")
 
 
 class MapCatalogEntryPayload(StrictModel):
@@ -468,7 +494,7 @@ class SnapshotPayload(StrictModel):
     # //Compatible: older vehicles omit resource telemetry.
     performance: PerformancePayload | None = None
     # //Compatible: older managers do not understand lifecycle catalog commands.
-    mapping_protocol_version: Literal[1] | None = None
+    mapping_protocol_version: Literal[1, 2] | None = None
     connected: bool
     localized: bool
     map_ref: MapRefPayload | None
@@ -590,6 +616,8 @@ class ResponsePayload(StrictModel):
         "map.create",
         "map.activate",
         "map.delete",
+        "map.calibrate",
+        "map.home",
         "operation.query",
         "control.acquire",
         "control.release",

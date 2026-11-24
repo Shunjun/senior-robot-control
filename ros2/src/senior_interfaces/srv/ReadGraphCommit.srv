@@ -34,3 +34,7 @@ bool static_lidar_tf_receipt_valid
 senior_interfaces/BoundedStaticTf static_lidar_tf_receipt
 # All corrected vertices at this commit cut, sorted by ID.
 Keyframe[<=16384] keyframes
+# Original odom->base at this exact keyframe, before any archive reprocessing.
+float64 original_odom_x
+float64 original_odom_y
+float64 original_odom_yaw

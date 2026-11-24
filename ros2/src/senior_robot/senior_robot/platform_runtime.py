@@ -84,10 +84,13 @@ def _adapter_command(profile: RuntimeProfile, robot_id: str) -> list[str]:
             [
                 "-p",
                 f"hardware_navigation_reference:={profile.navigation_reference}",
-                "-p",
-                f"navigation_controller_params:={profile.navigation_parameters}",
             ]
             if profile.navigation_reference is not None
+            else []
+        ),
+        *(
+            ["-p", f"navigation_controller_params:={profile.navigation_parameters}"]
+            if profile.navigation_parameters is not None
             else []
         ),
         "-p",

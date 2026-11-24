@@ -81,7 +81,7 @@ export function MapManager({ robotId, snapshot, link }: {
 
   return (
     <>
-    {snapshot.mapping_protocol_version === 1
+    {(snapshot.mapping_protocol_version ?? 0) >= 1
       ? <MapCatalogController robotId={robotId} live={live} link={link} />
       : <p className={styles.note}>当前车端尚未提供新版地图管理接口。</p>}
     <section className={styles.panel} aria-label="地图生命周期管理">

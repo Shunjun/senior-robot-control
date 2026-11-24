@@ -1,0 +1,9 @@
+# An exact native map cut from the owned production boot.
+string<=36 boot_id
+uint64 graph_commit_sequence
+---
+bool ok
+string<=36 boot_id
+uint64 graph_commit_sequence
+# Producer bounds dimensions before allocating (default <=1,048,576 cells).
+nav_msgs/OccupancyGrid grid

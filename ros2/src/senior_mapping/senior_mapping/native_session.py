@@ -5,6 +5,7 @@ catalog/database and never runs ROS spin or graph work on a motion callback.
 """
 
 import asyncio
+import base64
 import hashlib
 import json
 import math
@@ -193,10 +194,12 @@ class NativeMappingBackend:
         # The lifecycle has already retired the target and joined its reader/writer.
         await asyncio.to_thread(remove)
 
-    async def open(self, entry: CatalogEntry, *, restore: bool) -> "NativeSession":
+    async def open(
+        self, entry: CatalogEntry, *, restore: bool, seed: Pose2D | None = None
+    ) -> "NativeSession":
         session = NativeSession(self, entry)
         try:
-            await session.open(restore=restore)
+            await session.open(restore=restore, seed=seed)
             return session
         except BaseException:
             await session.abort()
@@ -232,11 +235,16 @@ class NativeSession:
         )
         self._durable_sequence = 0
         self._poses: dict[str, Pose2D] = {}
+        self._activated = False
+        self._navigation_grid: WorkspaceGrid | None = None
+        self._navigation_generation: str | None = None
+        self._navigation_sequence = 0
+        self._navigation_at = float("-inf")
         self.occupancy = OccupancyMaintainer(
             OccupancyThresholds(0.05, 3, 1.0, 3, 1.0, 0.1, 1.0, 1.0, 2.0, -1.0, -5.0, 5.0, 2.0, 0.5)
         )
 
-    async def open(self, *, restore: bool) -> None:
+    async def open(self, *, restore: bool, seed: Pose2D | None = None) -> None:
         fields: dict[str, Any] = {
             "capture_root": str(self.backend.root / "live" / uuid.uuid4().hex)
         }
@@ -254,7 +262,9 @@ class NativeSession:
                 fields.update(
                     prefix=str(loaded.graph_directory / "graph"),
                     pair_digest=proof["pair_digest"],
-                    seed=[waypoint.pose.x, waypoint.pose.y, waypoint.pose.yaw],
+                    seed=[waypoint.pose.x, waypoint.pose.y, waypoint.pose.yaw]
+                    if seed is None
+                    else [seed.x, seed.y, seed.yaw],
                 )
                 reply = await self.graph.request("start", **fields)
                 self.graph.boot = reply["boot_id"]
@@ -314,12 +324,18 @@ class NativeSession:
     async def activate(self) -> None:
         if self.active is None:
             return
+        self._activated = True
+        await self._publish_reference()
         self._task = asyncio.create_task(self._worker.run())
         if self.active.change_sequence > self._durable_sequence:
             self._worker.changed(self.active.change_sequence)
 
     def grid(self) -> WorkspaceGrid | None:
-        return self._pending_grid if self.active is None else self.active.grid()
+        if self.active is None:
+            return self._pending_grid
+        if self._navigation_generation == self.active.map_generation:
+            return self._navigation_grid
+        return self.active.grid()
 
     async def ingest(self, observation: Any) -> None:
         async with self._lock:
@@ -330,9 +346,84 @@ class NativeSession:
                 return
             cut = await transferred(reply)
             await self._apply_cut(cut)
+            await self._refresh_navigation()
             if self._task is not None:
                 assert self.active is not None
                 self._worker.changed(self.active.change_sequence)
+
+    @property
+    def map_generation(self) -> str | None:
+        return self.active.map_generation if self.active is not None and self.localized else None
+
+    async def _refresh_navigation(self) -> None:
+        if self.active is None or not self.localized:
+            return
+        generation = self.active.map_generation
+        if self._navigation_generation != generation:
+            if self._activated:
+                await self.graph.request("reference", boot_id=self.graph.boot, active=False)
+            self._navigation_grid = None
+            self._navigation_generation = None
+        now = asyncio.get_running_loop().time()
+        interval = 1.0 if self.backend.idle else 5.0
+        if self._navigation_grid is None or now - self._navigation_at >= interval:
+            reply = await self.graph.request(
+                "grid", boot_id=self.graph.boot, sequence=self.graph.sequence
+            )
+            self._navigation_at = now
+            if not reply.get("pending"):
+                cut = await transferred(reply)
+                if cut["boot_id"] != self.graph.boot or cut["sequence"] != self.graph.sequence:
+                    raise DomainError(ErrorCode.CONFLICT, "native raster identity changed")
+                cells = base64.b64decode(cut["cells_b64"], validate=True)
+                self._navigation_grid = WorkspaceGrid(
+                    self.entry.map_ref,
+                    cut["grid_id"],
+                    cut["width"],
+                    cut["height"],
+                    cut["resolution"],
+                    Pose2D(*cut["origin"]),
+                    cells,
+                    waypoint_writes=True,
+                )
+                self._navigation_generation = generation
+                self._navigation_sequence = self.graph.sequence
+        await self._publish_reference()
+
+    async def _publish_reference(self) -> None:
+        if not self._activated or self.active is None:
+            return
+        if (
+            self._navigation_generation != self.active.map_generation
+            or self._navigation_grid is None
+        ):
+            await self.graph.request("reference", boot_id=self.graph.boot, active=False)
+            return
+        await self.graph.request(
+            "reference",
+            boot_id=self.graph.boot,
+            active=True,
+            sequence=self.graph.sequence,
+            grid_sequence=self._navigation_sequence,
+            map_id=self.entry.map_ref.map_id,
+            reference_revision=self.entry.map_ref.reference_revision,
+            generation=self.active.map_generation,
+        )
+
+    async def edit_home(self, pose: Pose2D, expected_revision: int) -> None:
+        async with self._lock, self.backend.home.transaction():
+            if self.active is None or not self.localized:
+                raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "Home needs a localized map")
+            await self.backend.home.edit(
+                self.entry.map_ref,
+                self.home_id,
+                self.active,
+                self.source,
+                self._poses,
+                pose,
+                expected_revision,
+            )
+        await self._save(0)
 
     async def _apply_cut(self, cut: dict[str, Any]) -> None:
         # Cancellation must not release the session lock while its writer still runs.
@@ -472,6 +563,7 @@ class NativeSession:
                 )
                 await self._apply_cut(cut)
             try:
+                await self._refresh_navigation()
                 await self.backend.home(
                     self.entry.map_ref,
                     self.home_id,
@@ -514,6 +606,8 @@ class NativeSession:
         if self.active is None:
             return
         self._paused = True
+        self._activated = False
+        await self.graph.request("reference", boot_id=self.graph.boot, active=False)
         await self.graph.request("gate", boot_id=self.graph.boot, accepting=False)
         if self._task is not None:
             await self._worker.flush()

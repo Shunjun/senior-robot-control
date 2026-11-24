@@ -589,6 +589,9 @@ def main() -> None:
             from senior_localization.hardware_reference import HardwareReference
 
             reference = HardwareReference(node, Path(hardware_reference))
+        from senior_localization.live_mapping_reference import LiveMappingReference
+
+        reference = LiveMappingReference(node, reference)
         exiting = False
 
         def state() -> dict[str, Any]:
@@ -695,7 +698,7 @@ def main() -> None:
                 if grid is None:
                     previous_failure = "map or localization unavailable"
                     return False
-                return qualified(grid.map_ref, grid.grid_id, continuing=False)
+                return qualified(grid.map_ref, reference.map_generation, continuing=False)
 
             navigation_ready = can_navigate
             routes = RouteService(
@@ -730,7 +733,7 @@ def main() -> None:
                 and (route is None or route.status in {"succeeded", "failed", "canceled"})
             )
 
-        mapping_backend = RosMappingBackend(node, stopped=mapping_stopped)
+        mapping_backend = RosMappingBackend(node, stopped=mapping_stopped, reference=reference)
         core = AdapterCore(
             robot_id=robot_id,
             mapping=mapping_backend,

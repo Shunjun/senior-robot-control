@@ -26,10 +26,11 @@ export interface PosePickerProps {
   onDraftChange: (pose: Pose | null) => void;
   onGoal: (goal: MapGoal) => void;
   onHint: (hint: PoseHint) => void;
+  onHome?: (goal: MapGoal) => void;
   pending?: boolean;
 }
 
-type Mode = "goal" | "hint";
+type Mode = "goal" | "hint" | "home";
 
 interface Fields {
   x: string;
@@ -82,7 +83,7 @@ function samePose(a: Pose, b: Pose): boolean {
 
 /** Why nothing may be sent for this mode, or null when it may. */
 function blockReason(snapshot: RobotSnapshot, map: OccupancySnapshot, mode: Mode): string | null {
-  const what = mode === "goal" ? "下达目标" : "提交定位提示";
+  const what = mode === "home" ? "更新 Home" : mode === "goal" ? "下达目标" : "提交定位提示";
   if (snapshot.stale || !snapshot.connected) {
     return `缓存地图，不能${what}。车端恢复实时前不要据此操作。`;
   }
@@ -92,6 +93,7 @@ function blockReason(snapshot: RobotSnapshot, map: OccupancySnapshot, mode: Mode
   if (!sameRef(snapshot.map_ref, map.map_ref)) {
     return `地图版本与车端不一致，不能${what}。`;
   }
+  if (mode === "home" && !snapshot.localized) return "车辆定位完成后才可编辑本地图 Home。";
   if (mode === "goal" && !snapshot.localized) {
     return "定位未完成，不能下达目标。先用重定位提示完成定位。";
   }
@@ -105,6 +107,7 @@ export function PosePicker({
   onDraftChange,
   onGoal,
   onHint,
+  onHome,
   pending = false,
 }: PosePickerProps): ReactElement {
   const [mode, setMode] = useState<Mode>("goal");
@@ -133,7 +136,8 @@ export function PosePicker({
 
   function submit(): void {
     if (blocked || pose === null || mapRef === null) return;
-    if (mode === "goal") onGoal({ map_ref: mapRef, pose });
+    if (mode === "home") onHome?.({ map_ref: mapRef, pose });
+    else if (mode === "goal") onGoal({ map_ref: mapRef, pose });
     else onHint({ map_ref: mapRef, pose, source: "manual" });
   }
 
@@ -149,6 +153,10 @@ export function PosePicker({
           <input type="radio" name="pose-mode" checked={mode === "hint"} onChange={() => setMode("hint")} />
           <span>重定位提示</span>
         </label>
+        {onHome !== undefined && <label className={styles.choice}>
+          <input type="radio" name="pose-mode" checked={mode === "home"} onChange={() => setMode("home")} />
+          <span>Home 坐标</span>
+        </label>}
       </fieldset>
 
       <div className={styles.fields}>
@@ -198,8 +206,9 @@ export function PosePicker({
         <p className={styles.quiet}>提示只是扫描匹配的起点，提交后不代表已经定位。</p>
       )}
 
+      {mode === "home" && <p className={styles.quiet}>更新本地图 Home 的位置和朝向，车辆定位保持独立。</p>}
       <button type="button" className={styles.primary} disabled={blocked} onClick={submit}>
-        {mode === "goal" ? "确认目标" : "提交定位提示"}
+        {mode === "home" ? "更新 Home 坐标" : mode === "goal" ? "确认目标" : "提交定位提示"}
       </button>
     </section>
   );

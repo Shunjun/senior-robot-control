@@ -51,7 +51,14 @@ class MappingRequests:
         self._reads, self._writes = reads, writes
 
     async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
-        if kind in {"map.catalog", "map.create", "map.activate", "map.delete"}:
+        if kind in {
+            "map.catalog",
+            "map.create",
+            "map.activate",
+            "map.delete",
+            "map.calibrate",
+            "map.home",
+        }:
             await self._runtime.refresh()
             return await self._endpoint.request(kind, **fields)
         owner = self._writes if kind in {"map.import", "map.export", "map.clear"} else self._reads
@@ -184,7 +191,15 @@ class ProductionMappingRequests:
         await self._runtime.close()
 
     async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
-        if kind in {"map.catalog", "map.status", "map.create", "map.activate", "map.delete"}:
+        if kind in {
+            "map.catalog",
+            "map.status",
+            "map.create",
+            "map.activate",
+            "map.delete",
+            "map.calibrate",
+            "map.home",
+        }:
             return await self._endpoint.request(kind, **fields)
         if kind in {"map.active", "map.manifest", "map.tile"}:
             from senior_mapping.workspace import WorkspaceMap
@@ -202,6 +217,21 @@ class ProductionMappingRequests:
                 raw = await client.request(kind, **fields)
                 if kind == "state.get" and owner._runtime.owns_reference:
                     grid = owner._runtime.grid()
+                    ref, generation = (
+                        (None if grid is None else grid.map_ref),
+                        owner._runtime.map_generation,
+                    )
+                    if (
+                        grid is not None
+                        and ref is not None
+                        and generation is not None
+                        and raw.get("ok") is True
+                        and raw.get("map_id") == ref.map_id
+                        and raw.get("reference_revision") == ref.reference_revision
+                        and raw.get("map_generation") == generation
+                    ):
+                        raw["map_grid_id"] = grid.grid_id
+                        return raw
                     raw.update(
                         map_id=grid.map_ref.map_id if grid else None,
                         reference_revision=grid.map_ref.reference_revision if grid else None,
@@ -214,6 +244,16 @@ class ProductionMappingRequests:
                         route_progress=None,
                         navigation_block_reason="active mapping has no qualified navigation raster",
                     )
+                if kind == "pose.get" and owner._runtime.owns_reference:
+                    grid = owner._runtime.grid()
+                    if (
+                        grid is None
+                        or owner._runtime.map_generation is None
+                        or raw.get("map_id") != grid.map_ref.map_id
+                        or raw.get("reference_revision") != grid.map_ref.reference_revision
+                        or raw.get("map_generation") != owner._runtime.map_generation
+                    ):
+                        return {"ok": False, "error": "unavailable"}
                 return raw
 
         return State()
@@ -256,6 +296,51 @@ class MappingHome:
         self._revision = await self.points.home_revision()
         self._capture_revision = self._revision
 
+    async def edit(
+        self,
+        map_ref: "MapRef",
+        home_id: str,
+        active: "ActiveMap",
+        source: object,
+        poses: dict[str, "Pose2D"],
+        pose: "Pose2D",
+        expected_revision: int,
+    ) -> None:
+        from senior_mapping.references import AnchoredWaypoint, WaypointBinding
+
+        from vehicle_core.errors import DomainError, ErrorCode
+
+        if await self.points.home_revision() != expected_revision:
+            raise DomainError(ErrorCode.CONFLICT, "Home revision changed")
+        current = await self.points.home()
+        if current is None or current.waypoint.map_ref != map_ref:
+            raise DomainError(ErrorCode.CONFLICT, "Home map changed")
+        anchor = min(
+            poses, key=lambda key: (poses[key].x - pose.x) ** 2 + (poses[key].y - pose.y) ** 2
+        )
+        await self.points.save_home(
+            waypoint_id=home_id,
+            pose=pose,
+            map_ref=map_ref,
+            anchor_id=anchor,
+            anchor_pose=poses[anchor],
+            source_robot_id=self.robot_id,
+            status="confirmed",
+            adopted=True,
+            latitude=None,
+            longitude=None,
+            expected_revision=expected_revision,
+        )
+        active.update_waypoints(
+            source,
+            expected_sequence=active.observation_sequence,
+            changes=(
+                WaypointBinding(AnchoredWaypoint(home_id, pose, anchor, False), poses[anchor]),
+            ),
+        )
+        self._revision = await self.points.home_revision()
+        self._capture_revision = self._revision
+
     async def __call__(
         self,
         map_ref: "MapRef",
@@ -277,14 +362,25 @@ class MappingHome:
                     and point.anchor_id in poses
                     and point.status == "confirmed"
                 ):
-                    from senior_mapping.references import AnchoredWaypoint, WaypointBinding
+                    from senior_mapping.references import (
+                        AnchoredWaypoint,
+                        WaypointBinding,
+                        rebase_pose,
+                    )
 
                     active.update_waypoints(
                         source,
                         expected_sequence=active.observation_sequence,
                         changes=(
                             WaypointBinding(
-                                AnchoredWaypoint(home_id, point.pose, point.anchor_id, False),
+                                AnchoredWaypoint(
+                                    home_id,
+                                    rebase_pose(
+                                        point.pose, current.anchor_pose, poses[point.anchor_id]
+                                    ),
+                                    point.anchor_id,
+                                    False,
+                                ),
                                 poses[point.anchor_id],
                             ),
                         ),
@@ -294,6 +390,18 @@ class MappingHome:
             row for row in active.waypoint_bindings(source) if row.waypoint.waypoint_id == home_id
         )
         point = binding.waypoint
+        if (
+            current is not None
+            and current.waypoint.id == home_id
+            and current.waypoint.map_ref == map_ref
+            and current.waypoint.pose == point.pose
+            and current.waypoint.anchor_id == point.anchor_id
+            and current.anchor_pose == binding.anchor_pose
+            and current.waypoint.status == "confirmed"
+        ):
+            self._revision = revision
+            self._capture_revision = revision
+            return
         await self.points.save_home(
             waypoint_id=home_id,
             pose=point.pose,

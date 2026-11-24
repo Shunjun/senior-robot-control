@@ -22,6 +22,7 @@
   <depend>senior_sensor_ingress</depend>
 
   <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>tf2_ros</depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_cmake_test</test_depend>

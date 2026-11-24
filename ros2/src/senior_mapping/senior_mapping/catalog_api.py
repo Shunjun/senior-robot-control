@@ -13,12 +13,13 @@ from senior_contracts.wire import (
     MapRuntimeStatus,
     MapSelectionPayload,
     MapTargetBody,
+    parse_mapping_body,
 )
 
 from senior_mapping.catalog import MapCatalog
 from vehicle_core.errors import DomainError, ErrorCode
 
-MapCommand = Literal["map.create", "map.activate", "map.delete"]
+MapCommand = Literal["map.create", "map.activate", "map.delete", "map.calibrate", "map.home"]
 
 
 class MapRuntime(Protocol):
@@ -66,12 +67,19 @@ class CatalogEndpoint:
                     runtime_available=available,
                     phase=phase,
                 ).model_dump()
-            if kind not in {"map.create", "map.activate", "map.delete"}:
+            if kind not in {
+                "map.create",
+                "map.activate",
+                "map.delete",
+                "map.calibrate",
+                "map.home",
+            }:
                 raise DomainError(ErrorCode.VALIDATION, "unsupported map command")
             operation_id = fields.pop("operation_id", None)
             if not isinstance(operation_id, str) or not 1 <= len(operation_id) <= 128:
                 raise DomainError(ErrorCode.VALIDATION, "map operation identity is required")
-            body = (MapCreateBody if kind == "map.create" else MapTargetBody).model_validate(fields)
+
+            body = parse_mapping_body(kind, fields)
             if not available or self.runtime is None:
                 raise DomainError(ErrorCode.UNAVAILABLE, "production mapping runtime unavailable")
             async with self._commands:
@@ -79,6 +87,8 @@ class CatalogEndpoint:
                 if selected.generation != body.expected_generation:
                     raise DomainError(ErrorCode.CONFLICT, "map selection changed")
                 await self.runtime.execute(cast(MapCommand, kind), operation_id, body)
+                if kind == "map.calibrate" and self.runtime.phase != "mapping":
+                    raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "local match failed")
             return {"ok": True, "operation_id": operation_id}
         except ValidationError:
             return {"ok": False, "error": ErrorCode.VALIDATION.value}

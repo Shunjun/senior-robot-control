@@ -40,6 +40,8 @@ export const OPERATION_REQUEST_TYPES = [
   "map.create",
   "map.activate",
   "map.delete",
+  "map.calibrate",
+  "map.home",
   "operation.query",
 ] as const;
 
@@ -225,7 +227,7 @@ export interface SnapshotPayload {
   //Compatible: older vehicles omit resource telemetry.
   performance?: PerformanceReading;
   //Compatible: absence means the manager cannot accept new catalog/lifecycle frames.
-  mapping_protocol_version?: 1;
+  mapping_protocol_version?: 1 | 2;
 
   //Compatible: legacy map/video snapshots omit the UI extension and never enable intent driving.
   vehicle_ui?: VehicleFrame;
@@ -428,7 +430,8 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   }
   return {
     ...(performance === undefined ? {} : { performance }),
-    ...(value["mapping_protocol_version"] === 1 ? { mapping_protocol_version: 1 as const } : {}),
+    ...((value["mapping_protocol_version"] === 1 || value["mapping_protocol_version"] === 2)
+      ? { mapping_protocol_version: value["mapping_protocol_version"] as 1 | 2 } : {}),
     ...(vehicle === undefined ? {} : { vehicle_ui: vehicle }),
     ...(mapGeneration === undefined ? {} : { map_generation: mapGeneration }),
     ...(mapGridId === undefined ? {} : { map_grid_id: mapGridId }),

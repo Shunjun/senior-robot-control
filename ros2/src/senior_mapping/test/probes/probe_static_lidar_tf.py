@@ -4,6 +4,7 @@ import os
 import secrets
 import sys
 import time
+import uuid
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -32,9 +33,16 @@ from probe_read_graph import (
 )
 from rclpy.duration import Duration
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
-from rclpy.serialization import serialize_message
+from rclpy.serialization import deserialize_message, serialize_message
 from senior_interfaces.msg import BoundedRawLaserScan, BoundedStaticTf, StaticTransformEdge
-from senior_interfaces.srv import CaptureGraph, ReadGraph, ReadGraphCommit
+from senior_interfaces.srv import (
+    CaptureGraph,
+    MappingGate,
+    ReadGraph,
+    ReadGraphCommit,
+    ReadMappingGrid,
+    ReadMappingPose,
+)
 from sensor_msgs.msg import LaserScan
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
@@ -43,8 +51,12 @@ TF_RECEIPT = "/senior/slam/static_lidar_tf_receipt"
 
 def check_proof(response, receipt=None):
     assert response.static_lidar_tf_receipt_valid == (receipt is not None)
-    expected = receipt if receipt is not None else serialize_message(BoundedStaticTf())
-    assert serialize_message(response.static_lidar_tf_receipt) == expected
+    # CDR alignment padding is not stable across serialization allocations.
+    # Compare every typed field, including the original source and receipt clocks.
+    expected = (
+        BoundedStaticTf() if receipt is None else deserialize_message(receipt, BoundedStaticTf)
+    )
+    assert response.static_lidar_tf_receipt == expected
 
 
 def probe(executable, drift, root):
@@ -74,6 +86,17 @@ def probe(executable, drift, root):
         args = arguments(executable, None if drift else root)
         args.extend(["-p", f"verified_static_lidar_tf_topic:={TF_RECEIPT}"])
         args.extend(["-p", f"verified_static_lidar_frame:={LASER}"])
+        if not drift:
+            args.extend(
+                [
+                    "-p",
+                    "production_session:=true",
+                    "-p",
+                    "production_boot_id:=" + str(uuid.uuid4()),
+                    "-p",
+                    "solver_plugin:=senior_mapping/BoundedCeresSolver",
+                ]
+            )
         with candidate(args) as process:
             assert graph.wait_for_service(timeout_sec=8)
             assert commits.wait_for_service(timeout_sec=4)
@@ -85,6 +108,12 @@ def probe(executable, drift, root):
             raw_gid, bridge_gid = endpoint_gid(node, SCAN), endpoint_gid(node, BOUNDED_TOPIC)
             tf_gid, relay_gid = endpoint_gid(node, "/tf_static"), endpoint_gid(node, TF_RECEIPT)
             boot = read_snapshot(node, graph).boot_id
+            if not drift:
+                gate = node.create_client(MappingGate, "/senior/slam/mapping_gate")
+                assert gate.wait_for_service(timeout_sec=4)
+                assert request(node, gate, MappingGate.Request(boot_id=boot, accepting=True)).ok
+                position = node.create_client(ReadMappingPose, "/senior/slam/read_mapping_pose")
+                raster = node.create_client(ReadMappingGrid, "/senior/slam/read_mapping_grid")
             sequence = 0
 
             def publish_scan(x=0.0, stamp=None, sample_steady_ns=None):
@@ -239,6 +268,21 @@ def probe(executable, drift, root):
                 check_proof(historical, first_receipt)
                 assert historical.scan == first.scan
 
+                # Same production boot: native observed free space and fresh original odometry.
+                navigation = request(
+                    node,
+                    raster,
+                    ReadMappingGrid.Request(boot_id=boot, graph_commit_sequence=last_commit),
+                )
+                assert navigation.ok and navigation.boot_id == boot
+                assert 0 in navigation.grid.data
+                publish_scan(x=0.35)
+                spin_for(node, 0.08)
+                live = request(node, position, ReadMappingPose.Request(boot_id=boot))
+                assert live.ok and live.boot_id == boot and live.static_lidar_tf_receipt_valid
+                assert abs(live.odom_x - 0.35) < 1e-6
+                assert live.capture.sample_steady_ns > 0
+                assert abs(second.original_odom_x - 0.35) < 1e-6
                 captured = request(node, capture, CaptureGraph.Request())
                 prefix = check_capture(captured, root, boot)
                 assert captured.graph_commit_sequence == second.graph_commit_sequence

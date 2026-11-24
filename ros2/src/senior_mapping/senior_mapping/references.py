@@ -1,6 +1,7 @@
 """Map identity, pose-graph anchors, and the saved localization/occupancy split."""
 
 import json
+import math
 import os
 import shutil
 from dataclasses import dataclass
@@ -9,6 +10,22 @@ from pathlib import Path
 from senior_mapping.evidence import CellEvidence, OccupancySnapshot
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef, Pose2D
+
+
+def rebase_pose(pose: Pose2D, old_anchor: Pose2D, new_anchor: Pose2D) -> Pose2D:
+    """Keep a physical pose attached to its original anchor through a graph correction."""
+    if old_anchor == new_anchor:
+        return pose
+    dx, dy = pose.x - old_anchor.x, pose.y - old_anchor.y
+    c, s = math.cos(old_anchor.yaw), math.sin(old_anchor.yaw)
+    local_x, local_y = c * dx + s * dy, -s * dx + c * dy
+    c, s = math.cos(new_anchor.yaw), math.sin(new_anchor.yaw)
+    return Pose2D(
+        new_anchor.x + c * local_x - s * local_y,
+        new_anchor.y + s * local_x + c * local_y,
+        math.remainder(pose.yaw + new_anchor.yaw - old_anchor.yaw, math.tau),
+    )
+
 
 FORMAT_VERSION = 1
 # Humble 2.6.10 graph_visualization publishes node spheres in this namespace.

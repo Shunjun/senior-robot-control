@@ -14,10 +14,9 @@ from typing import Any, Generic, Protocol, TypeVar
 
 from senior_contracts.errors import ErrorCode
 from senior_contracts.wire import (
-    MapCreateBody,
-    MapTargetBody,
     OperationEnvelope,
     TaskExecutionEnvelope,
+    parse_mapping_body,
 )
 
 from vehicle_manager.agent.journal import AgentJournal
@@ -288,12 +287,11 @@ class Dispatcher(Generic[ResultT]):
                 if expected is not None:
                     raise ValueError("navigation takes no expected revision")
                 return "edit", lambda: self._none(navigation(kind, operation_id, body))
-            if kind in {"map.create", "map.activate", "map.delete"}:
+            if kind in {"map.create", "map.activate", "map.delete", "map.calibrate", "map.home"}:
                 if expected is not None:
                     raise ValueError("map lifecycle uses its own generation")
-                command = (MapCreateBody if kind == "map.create" else MapTargetBody).model_validate(
-                    body
-                )
+
+                command = parse_mapping_body(kind, body)
                 # //Compatible: older injected map ports have no lifecycle capability.
                 manage = getattr(self._maps, "manage", None)
                 if manage is None:

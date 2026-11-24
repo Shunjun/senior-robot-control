@@ -2,6 +2,8 @@
 #include "candidate_stationary_match.hpp"
 #include "graph_commit_history.hpp"
 #include "native_capture.hpp"
+#include "mapping_navigation.hpp"
+#include <tbb/global_control.h>
 #include "snapshot.hpp"
 #include "staged_graph.hpp"
 #include "static_lidar_tf_ingress.hpp"
@@ -60,6 +62,10 @@ public:
         throw std::invalid_argument("Production owner must supply its new boot identity");
       }
       boot_id_ = production_boot;
+      const auto threads = declare_parameter<int>("mapping_worker_threads", 1);
+      if (threads < 1 || threads > 4) {throw std::invalid_argument("Invalid mapping thread budget");}
+      compute_budget_ = std::make_unique<tbb::global_control>(
+        tbb::global_control::max_allowed_parallelism, threads);
     }
     const auto live_prefix = declare_parameter<std::string>("production_graph_prefix", "");
     const auto live_digest = declare_parameter<std::string>("production_graph_digest", "");
@@ -154,6 +160,20 @@ public:
       load_candidate(prefix, digest, attempt, stationary_diagnostic);
     }
     start_graph_service();
+    if (production_) {
+      const auto maximum = declare_parameter<int>("mapping_max_grid_cells", 1048576);
+      if (maximum < 1 || maximum > 1048576) {throw std::invalid_argument("Invalid map raster budget");}
+      navigation_ = std::make_unique<MappingNavigation>(*this, boot_id_,
+        [this] {return graph_commit_.sequence > 0 && bounded_ingress_->source_active();},
+        [this, maximum](std::uint64_t sequence) -> std::optional<nav_msgs::msg::OccupancyGrid> {
+          const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
+          boost::mutex::scoped_lock lock(smapper_mutex_);
+          if (sequence != graph_commit_.sequence) {return std::nullopt;}
+          auto grid = bounded_native_raster(*smapper_->getMapper(), resolution_, maximum);
+          if (grid) {grid->header.frame_id = map_frame_; grid->header.stamp = now();}
+          return grid;
+        });
+    }
   }
 
 private:
@@ -193,6 +213,7 @@ private:
     BoundedScanIngress::BoundedScan::ConstSharedPtr scan;
     StaticReceipt::ConstSharedPtr static_receipt;
     std::vector<Keyframe> keyframes;
+    NativeLaserOffset original_odom;
   };
 
   template<typename Response>
@@ -269,6 +290,11 @@ private:
         in_flight_ = InFlightScan{std::move(original), mount, std::move(static_receipt)};
         try {
           AsynchronousSlamToolbox::laserCallback(std::move(scan));
+          karto::Pose2 odometry;
+          if (navigation_ && pose_helper_->getOdomPose(odometry, in_flight_->scan->capture.stamp)) {
+            navigation_->observe(in_flight_->scan->capture, odometry,
+              in_flight_->static_receipt != nullptr);
+          }
         } catch (...) {
           in_flight_.reset();
           throw;
@@ -368,7 +394,7 @@ private:
       if (in_flight_) {
         last_committed_ingress_ =
           CommittedIngressReceipt{in_flight_->scan->capture, in_flight_->static_receipt};
-        record_graph_commit(*committed, laser, ray_angle_sign);
+        record_graph_commit(*committed, laser, ray_angle_sign, odom_pose);
       }
     }
     return committed;
@@ -376,7 +402,7 @@ private:
 
   void record_graph_commit(
     const karto::LocalizedRangeScan & committed, karto::LaserRangeFinder * laser,
-    std::int8_t ray_angle_sign)
+    std::int8_t ray_angle_sign, const karto::Pose2 & original_odom)
   {
     // The bounded ingress already owns the outer lock. The vendor released its
     // mapper lock after applying the scan and any loop correction.
@@ -404,7 +430,8 @@ private:
       CommittedScanCut{
         graph_commit_.last_keyframe_id, now(),
         {sensor.GetX(), sensor.GetY(), sensor.GetHeading()}, ray_angle_sign,
-        in_flight_->scan, in_flight_->static_receipt, std::move(*frames)});
+        in_flight_->scan, in_flight_->static_receipt, std::move(*frames),
+        {original_odom.GetX(), original_odom.GetY(), original_odom.GetHeading()}});
   }
 
   void start_graph_commit_service()
@@ -442,6 +469,9 @@ private:
         result.corrected_sensor_y = cut->corrected_sensor.y;
         result.corrected_sensor_yaw = cut->corrected_sensor.yaw;
         result.raw_ray_angle_sign = cut->raw_ray_angle_sign;
+        result.original_odom_x = cut->original_odom.x;
+        result.original_odom_y = cut->original_odom.y;
+        result.original_odom_yaw = cut->original_odom.yaw;
         result.scan = *cut->scan;
         if (cut->static_receipt) {
           result.static_lidar_tf_receipt = *cut->static_receipt;
@@ -787,6 +817,8 @@ private:
   std::string boot_id_{boost::uuids::to_string(boost::uuids::random_generator{}())};
   std::uint64_t snapshot_sequence_{0};
   std::mutex scan_ingress_mutex_;
+  std::unique_ptr<tbb::global_control> compute_budget_;
+  std::unique_ptr<MappingNavigation> navigation_;
   bool production_{false};
   bool accepting_{true};
   rclcpp::Time input_floor_{0, 0, RCL_ROS_TIME};

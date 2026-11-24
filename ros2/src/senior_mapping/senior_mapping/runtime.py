@@ -3,12 +3,19 @@
 import asyncio
 from typing import Any, Protocol, cast
 
-from senior_contracts.wire import MapCreateBody, MapPhase, MapTargetBody
+from senior_contracts.wire import (
+    MapCalibrationBody,
+    MapCreateBody,
+    MapHomeBody,
+    MapPhase,
+    MapTargetBody,
+)
 
 from senior_mapping.catalog import CatalogEntry, MapCatalog
 from senior_mapping.catalog_api import MapCommand
 from senior_mapping.workspace import WorkspaceGrid
 from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.values import Pose2D
 
 
 class MappingSession(Protocol):
@@ -19,13 +26,16 @@ class MappingSession(Protocol):
     async def flush(self) -> None: ...
     async def close(self) -> None: ...
     async def ingest(self, observation: Any) -> None: ...
+    async def edit_home(self, pose: Pose2D, expected_revision: int) -> None: ...
     def grid(self) -> WorkspaceGrid | None: ...
 
 
 class MappingBackend(Protocol):
     async def stopped(self) -> bool: ...
     async def delete(self, entry: CatalogEntry) -> None: ...
-    async def open(self, entry: CatalogEntry, *, restore: bool) -> MappingSession: ...
+    async def open(
+        self, entry: CatalogEntry, *, restore: bool, seed: Pose2D | None = None
+    ) -> MappingSession: ...
 
 
 class MappingRuntime:
@@ -51,6 +61,10 @@ class MappingRuntime:
             if self.phase in {"mapping", "saving", "pending_calibration"} and self._session
             else None
         )
+
+    @property
+    def map_generation(self) -> str | None:
+        return getattr(self._session, "map_generation", None) if self.phase == "mapping" else None
 
     async def ingest(self, observation: Any) -> bool:
         # Do not queue loading-window data behind the switch barrier.
@@ -92,7 +106,33 @@ class MappingRuntime:
             )
             if kind != "map.create" and target is None:
                 raise DomainError(ErrorCode.CONFLICT, "map no longer exists")
-            if kind == "map.activate" and target is not None and target.checkpoint_id is None:
+            if kind == "map.home":
+                if (
+                    self.phase != "mapping"
+                    or target is None
+                    or target.map_ref != selected.map_ref
+                    or self._session is None
+                ):
+                    raise DomainError(
+                        ErrorCode.CONFLICT, "Home editing needs the active localized map"
+                    )
+                edit = cast(MapHomeBody, body)
+                async with self._updates:
+                    await self._session.edit_home(
+                        Pose2D(edit.x, edit.y, edit.yaw), edit.expected_home_revision
+                    )
+                return
+            if kind == "map.calibrate" and (
+                target is None
+                or target.map_ref != selected.map_ref
+                or self.phase not in {"mapping", "pending_calibration"}
+            ):
+                raise DomainError(ErrorCode.CONFLICT, "calibration needs the selected map")
+            if (
+                kind in {"map.activate", "map.calibrate"}
+                and target is not None
+                and target.checkpoint_id is None
+            ):
                 raise DomainError(ErrorCode.CONFLICT, "target map has no complete checkpoint")
             if kind == "map.delete" and target is not None and target.map_ref != selected.map_ref:
                 await self.catalog.delete_inactive(target.map_ref)
@@ -118,7 +158,20 @@ class MappingRuntime:
                             operation_id, cast(MapCreateBody, body).name
                         )
                     assert target is not None
-                    session = await self.backend.open(target, restore=kind != "map.create")
+                    if kind != "map.create":
+                        # Retiring the selected map may publish a newer complete checkpoint.
+                        target = next(
+                            row
+                            for row in await self.catalog.list()
+                            if row.map_ref == target.map_ref
+                        )
+                    if kind == "map.calibrate":
+                        hint = cast(MapCalibrationBody, body)
+                        session = await self.backend.open(
+                            target, restore=True, seed=Pose2D(hint.x, hint.y, hint.yaw)
+                        )
+                    else:
+                        session = await self.backend.open(target, restore=kind != "map.create")
                     self._session = session
                     # New sessions publish their first complete graph/Home cut before selection.
                     target = session.entry

@@ -31,7 +31,13 @@ from probe_read_graph import (
 )
 from rclpy.qos import qos_profile_sensor_data
 from senior_interfaces.msg import BoundedRawLaserScan
-from senior_interfaces.srv import CaptureGraph, MappingGate, ReadGraph
+from senior_interfaces.srv import (
+    CaptureGraph,
+    MappingGate,
+    ReadGraph,
+    ReadMappingGrid,
+    ReadMappingPose,
+)
 from sensor_msgs.msg import LaserScan
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
@@ -77,6 +83,8 @@ try:
     graph = node.create_client(ReadGraph, SERVICE)
     gate = node.create_client(MappingGate, "/senior/slam/mapping_gate")
     capture = node.create_client(CaptureGraph, CAPTURE_SERVICE)
+    raster = node.create_client(ReadMappingGrid, "/senior/slam/read_mapping_grid")
+    position = node.create_client(ReadMappingPose, "/senior/slam/read_mapping_pose")
     raw_gid, relay_gid = endpoint_gid(node, SCAN), endpoint_gid(node, BOUNDED_TOPIC)
     sequence = 0
 
@@ -129,6 +137,19 @@ try:
             saved = request(node, capture, CaptureGraph.Request())
             prefix = check_capture(saved, first, boot)
             assert saved.graph_commit_sequence == 2
+            navigation_grid = request(
+                node, raster, ReadMappingGrid.Request(boot_id=boot, graph_commit_sequence=2)
+            )
+            assert navigation_grid.ok and navigation_grid.boot_id == boot
+            assert navigation_grid.graph_commit_sequence == 2
+            assert navigation_grid.grid.header.frame_id == "probe_map"
+            assert 0 in navigation_grid.grid.data, "No positively observed free space"
+            odometry = request(node, position, ReadMappingPose.Request(boot_id=boot))
+            assert odometry.ok and odometry.boot_id == boot
+            assert abs(odometry.odom_x - 0.2) < 1e-6
+            assert odometry.capture.sample_steady_ns > 0
+            assert not odometry.static_lidar_tf_receipt_valid
+
         wait_for_disappearance(node, OWNED_NODE, graph, gate, capture)
         boot = str(uuid.uuid4())
         args = arguments(sys.argv[1], second) + [

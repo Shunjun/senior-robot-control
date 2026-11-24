@@ -129,6 +129,21 @@ def test_adapter_command_sources_runtime_overlay_without_motion_launch(service_r
     assert not (service_root / "estop-state.json").exists()
     assert "launch" not in command
 
+    # Active SLAM supplies the reference later; controller parameters still launch now.
+    from senior_robot.real_runtime import validate_navigation
+
+    parameters = service_root / "navigation.yaml"
+    parameters.write_text(
+        "controller_server:\n  ros__parameters:\n    use_sim_time: false\n"
+        "planner_server:\n  ros__parameters:\n    use_sim_time: false\n"
+        "bt_navigator:\n  ros__parameters:\n    use_sim_time: false\n"
+    )
+    validate_navigation(None, parameters)
+    live = profile.model_copy(update={"navigation_parameters": parameters})
+    command = _adapter_command(live, "robot-a")
+    assert f"navigation_controller_params:={parameters}" in command
+    assert not any(item.startswith("hardware_navigation_reference:=") for item in command)
+
 
 async def test_active_or_unrecognized_socket_is_never_replaced(service_root):
     import socket
@@ -337,7 +352,8 @@ raise SystemExit(subprocess.call([*prefix, sys.executable, '-c', LEAF_CODE, str(
             assert (await client.request("stop"))["ok"] is True
         finally:
             await client.close()
-        assert await asyncio.wait_for(task, 8) == 0
+        # Camera group cleanup has a 10s budget; include the other fixture owners.
+        assert await asyncio.wait_for(task, 20) == 0
         for pid, _ in owners:
             with pytest.raises(ProcessLookupError):
                 os.kill(pid, signal.SIGCONT)

@@ -2,6 +2,7 @@ import { useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "r
 
 import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
 import type { ResponsePayload, RobotSnapshot } from "../../api/protocol";
+import { readMappingCatalog, sendMapCommand } from "../../api/mapping";
 import { DriveView } from "../drive/DriveView";
 import { HomeControls } from "../map/HomeControls";
 import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
@@ -95,7 +96,8 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
 
   const map = occupancy ?? placeholder;
   const activeMap = occupancy !== undefined && displayOnly !== true;
-  const pickMap = activeMap ? map : { ...map, map_ref: null };
+  const mappingEdits = snapshot.mapping_protocol_version === 2;
+  const pickMap = activeMap || mappingEdits ? map : { ...map, map_ref: null };
   const liveMapTelemetry = activeMap && snapshot.connected && !snapshot.stale && snapshot.localized
     && snapshot.map_generation !== undefined && snapshot.map_generation === referenceVersion
     && snapshot.map_ref !== null && map.map_ref !== null
@@ -149,7 +151,53 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
     }
   }
 
+  async function editMappingPose(kind: "map.calibrate" | "map.home", hint: MapGoal): Promise<void> {
+    if (!mappingEdits || hint.pose === null || snapshot.map_ref === null || !snapshot.connected
+      || snapshot.stale || navigationBusy || routeActive) return;
+    const owner = navigationScope.current;
+    const id = crypto.randomUUID();
+    const label = kind === "map.home" ? "Home 坐标更新" : "车辆局部匹配";
+    setNavigationBusy(true);
+    setFeedback({ refKey, note: `正在进行${label}…` });
+    try {
+      const catalog = await readMappingCatalog(link, robotId);
+      if (owner !== navigationScope.current) return;
+      const selected = catalog.selection.map_ref;
+      if (selected?.map_id !== hint.map_ref.map_id || selected.reference_revision !== hint.map_ref.reference_revision) {
+        throw new CommandError("conflict", "地图选择已变化");
+      }
+      let status: ResponsePayload["status"] = "running";
+      try {
+        const reply = await sendMapCommand(link, kind, id, {
+          ...hint.map_ref, ...hint.pose, expected_generation: catalog.selection.generation,
+          ...(kind === "map.home" ? { expected_home_revision: snapshot.home_revision } : {}),
+        });
+        status = reply.status;
+      } catch (reason) {
+        if (!(reason instanceof CommandError) || (reason.code !== "timeout" && reason.code !== "operation_unknown")) throw reason;
+      }
+      while (owner === navigationScope.current && !["succeeded", "failed", "needs_review"].includes(status ?? "")) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        if (owner !== navigationScope.current) return;
+        const reply = await link.request<ResponsePayload>("operation.query", { operation_id: id, body: {} });
+        if (!reply.ok || reply.operation_id !== id || reply.status == null) throw new CommandError("operation_unknown", "匹配结果未确认");
+        status = reply.status;
+      }
+      if (owner === navigationScope.current) {
+        setFeedback({ refKey, note: status === "succeeded" ? `${label}已完成。` : `${label}未完成，请检查车辆状态后重试。` });
+        setMapLoad(value => value + 1);
+      }
+    } catch (reason) {
+      if (owner === navigationScope.current) setFeedback({ refKey,
+        note: `${label}未完成：${reason instanceof CommandError ? describeCommandError(reason.code) : "连接未确认"}。` });
+    } finally {
+      if (owner === navigationScope.current) setNavigationBusy(false);
+    }
+  }
+
   function onHint(hint: PoseHint): void {
+    if (mappingEdits && hint.pose !== null) { void editMappingPose("map.calibrate", { map_ref: hint.map_ref, pose: hint.pose }); return; }
+    //Compatible: original mapping protocol has no manual calibration operation.
     setFeedback({ refKey, note: `定位提示已设定（${describePose(hint.pose)}），未发送：车端未开放定位提示指令。` });
   }
 
@@ -220,8 +268,9 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
               />
               {routeActive && <p className={styles.quiet}>当前路线仍在执行，可以取消导航。</p>}
               <p className={styles.quiet}>
-                {directNavigation ? "定位提示保存在当前页面，车端尚不接收。"
-                  : "目标与定位提示为本地预览，车端尚不接收。"}
+                {mappingEdits ? "定位提示将交给车端进行局部匹配，请先停车，再设置车辆的位置和朝向。"
+                  : directNavigation ? "定位提示保存在当前页面，车端尚不接收。"
+                    : "目标与定位提示为本地预览，车端尚不接收。"}
               </p>
               <PosePicker
                 key={`pose:${refKey}`}
@@ -232,6 +281,7 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
                 pending={navigationBusy || routeActive}
                 onGoal={onGoal}
                 onHint={onHint}
+                {...(mappingEdits ? { onHome: (goal: MapGoal) => void editMappingPose("map.home", goal) } : {})}
               />
               {note !== null && <p className={styles.quiet} role="status">{note}</p>}
             </>

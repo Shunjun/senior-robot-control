@@ -126,7 +126,7 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             )
             if mapped is not None:
                 map_requests = workspace_requests = mapped
-                mapping_protocol_version = 1
+                mapping_protocol_version = 2 if hasattr(mapped, "coordinate_home") else 1
         state = ports.state(
             mapped.state_requests(state_client)
             if mapped is not None and hasattr(mapped, "state_requests")
