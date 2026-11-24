@@ -1,0 +1,75 @@
+# WHEEL 控制工作区实施计划
+
+已批准实施；此前只读限制由本次派发替代。使用现有隔离worktree，固定分支 feat/control-workspace，基线00dc3be5727b203bd4bbe6b7ed72e83226a7be71。
+
+Spec: docs/superpowers/specs/2026-11-24-control-workspace-design.md
+
+## Global Constraints
+单人顺序开发，不派发worker；RobotPanel连接、ControlSurface地图/操作、ManualController运动、VideoPanel媒体owner沿用。真实接口和资格不弱化；不启动车辆/ROS/业务服务，不发运动，只安全fixture静态预览。未知能力只提示暂未实现。图表无伪历史，单位通信SI。几何待负责人确认契约。
+
+## Review Focus
+切车/退出/失焦释放；预览交换不重建地图和驾驶owner；地图栅格内容版本与参考代次分离；定时开关不取消实例；部分航点确认保留；样本过期不填零；手机所有入口可触控。
+
+## Task 1: 公共控件与页面壳
+核验资产，复现canonical pairing CLI和grid identity bug；锁定lucide-react/echarts。实现少量受控公共控件、空页、设备/配对、顶部控制/日志/设置及单位状态入口。保留认证和解除配对竞态。验证：相关Vitest、typecheck、build；Expected:全部通过，原有保护不删除。提交批次1。
+
+## Task 2: 驾驶、状态与预览
+单杆双轴迟滞吸轴输入原ManualController；低速/高速、控制权实心/描边。速度单位共享上下文仅展示/编辑换算；草稿以SI保持。状态yaw有值才显示，roll/pitch不可用；ECharts只接真实新鲜样本，超时断点。唯一地图/媒体布局交换，日志/设置退场释放。验证：drive/state/settings/video相关测试、typecheck/build。提交批次2。
+
+## Task 3: 地图与任务
+原坐标变换与身份保护保留；free/unknown/occupied主题、真实比例尺与居中。底左工具/中四模式/右图例同底边，手机采用可触控布局。任务点草稿排序、有序保存和部分失败保留；复杂cron/timezone保留，task_id创建后不改；真实执行动作沿VehicleStateView；缺立即执行/队列只提示。几何确认后最小跨层贯通并跑对应Python回归。验证：map/tasks/mapping相关测试及类型构建。提交批次3。
+
+## Task 4: 日志设置和交付
+逐行安全日志、完整十字段设置、冲突恢复保留；浏览器1440/390安全fixture静态产物验证。运行受影响前端测试/typecheck/build，审实际diff，记录已接入/暂未实现/状态不可用/未验证和每项验收证据。推功能分支、创建PR，未闭环为Draft，不合main。
+
+## 开发前路径清单
+以下为精确预算，按实际复用收敛，删除0；不为凑数改路径，扩张另报负责人。
+
+### 产品/资源：基准新增14、修改30、删除0，共44
+
+新增14：
+1–6 `web/src/components/ui/{Button,IconButton,Switch,SegmentedControl,FloatingCard}.tsx` 与 `Ui.module.css`；
+7 `web/src/features/devices/useWorkspaceView.ts`；
+8–9 `devices/StatusOverlay.tsx`、`StatusOverlay.module.css`；
+10 `devices/charts.ts`（ECharts按需注册/主题，不放业务数据owner）；
+11 `drive/DriveJoystick.tsx`（样式沿Drive.module.css）；
+12 `web/src/display/speedUnits.ts`（小纯转换，仅确有跨设置/状态复用）；
+13–14 `web/src/assets/concrete.jpg`、`vehicle-marker.svg`（接收资产，不新生成）。
+
+修改30：
+- 全局3：`App.tsx`、`App.module.css`、`theme.css`。
+- devices11：`RobotPanel.tsx`、`DeviceList.tsx`、`PairingPanel.tsx`、`Devices.module.css`、`ControlSurface.tsx`、`OperatorWorkspace.module.css`、`VehicleTools.tsx`、`VehicleStateView.tsx`、`VehicleStateView.module.css`、`PerformancePanel.tsx`、`PerformancePanel.module.css`。
+- drive3：`DriveView.tsx`、`Drive.module.css`、`EmergencyStop.tsx`。
+- video2：`VideoPanel.tsx`、`Video.module.css`。
+- map2：`MapCanvas.tsx`、`Map.module.css`。
+- mapping2：`MapManager.tsx`、`Mapping.module.css`（保留MapCatalogController逻辑）。
+- tasks3：`TaskList.tsx`、`Tasks.module.css`、`ScheduleEditor.tsx`（保留ScheduleFields/schedule算法）。
+- logs2：`VehicleLogs.tsx`、`Logs.module.css`。
+- settings2：`VehicleSettings.tsx`、`Settings.module.css`。
+
+基准不修改 ManualController、useWorkspaceMap、PosePicker、HomeControls、ImportDialog、MapCatalogController/MapCatalog、api/client、demo、main.tsx；若接线必须改则逐项说明，而不是草案先列一串必改。地图重排通过MapCanvas布局插槽/props与ControlSurface即可保留原变换/数据owner，不为了三组工具单独造第二个MapCanvas。
+
+**车辆几何接线附加范围：产品修改估7–10、配置0–1、测试3–4**，取决于后续确定的真实config owner读取点：候选明确为 `vehicle_core/config.py`（若无需改模型只读即可不算）、`ros2/src/senior_robot/senior_robot/agent_adapter.py`（state_provider输出；实际配置加载位置仍需在实施前确定，最多再1–2个assembly文件）、`senior_control/src/vehicle_manager/agent/{local_state.py,ipc_state.py,state_ports.py,snapshot_state.py,snapshots.py}`（已核对 state.get → IpcState.read → RuntimeState/StateReading → SnapshotState.collect → LiveState/RobotSnapshot，通常这5个文件）、`contracts/src/senior_contracts/wire.py`、`web/src/api/protocol.ts`，MapCanvas/RobotPanel已经算入基准不重复计。不能宣称这块完全前端可做；该跨层清单是依赖发现后的范围估算，尚未完整设计新元数据路由，不伪称精确到最终源点。总产品44→约51–54，新增仍14、修改约37–40、删除0。若没有后续允许改该链路，保持中心箭头并把物理外轮廓列未满足项。
+
+### 测试：基准新增2、修改11、删除0，共13；按几何接线附加3–4
+
+新增 `web/src/components/ui/ui.test.tsx`、`web/src/features/devices/workspace.test.tsx`（集中新布局/浮层/切页/单位，不重写原功能矩阵）。修改现有 `devices/devices.test.tsx`、`devices/vehicleState.test.tsx`、`devices/PerformancePanel.test.tsx`、`drive/drive.test.tsx`、`map/map.test.tsx`、`mapping/mapping.test.tsx`、`tasks/tasks.test.tsx`、`logs/logs.test.tsx`、`settings/settings.test.tsx`、`video/video.test.tsx`、`web/e2e/control.spec.ts`。几何额外候选 `web/src/api/client.test.ts`、`senior_control/tests/test_vehicle_state.py`、`tests/unit/test_protocol.py` 与 `tests/ros/test_agent_adapter_shutdown.py`（仅若影响适配器生命周期），实际接口确定后选受影响文件；不为了“测试文件数”创建无行为价值测试。schedule.test.ts没有算法修改时只复用，不必算改。
+
+### 配置构建：新增0、修改2、删除0，共2
+
+`web/package.json`、`web/package-lock.json` 引入 lucide-react/echarts；当前React19/Vite/TS已具备，无需新测试框架、无必要改vite/tsconfig/Playwright启动服务配置。无前端lint script，后续不可假称 npm lint 已通过；按项目现有类型与构建检查。
+
+### 工具文档：新增3、修改1、删除0，共4
+
+新增 `docs/superpowers/specs/2026-11-24-control-workspace-design.md`、`docs/superpowers/plans/2026-11-24-control-workspace-implementation.md`、`docs/testing/2026-11-24-control-workspace-validation.md`；修改 `README.md` 的使用/能力/缺项说明；不预设新增工具脚本。此诊断报告位于/tmp，不计入仓库变更。
+
+**总基准63文件（新增19、修改44、删除0）**；车辆几何额外约10–15个后约73–78。草案36–59偏低，主要少算多个现有CSS Modules、真实性能/校准保留、受影响行为测试与跨层几何接线。若精简公共控件/视觉差异收敛，可降低，但应由实际复用证明，不承诺虚低数量。
+
+
+## 几何契约提案（待负责人确认，尚未跨层实现）
+
+现场代码纠正：审计所称 HardwareConfig 实际为 vehicle_core.config.DeviceProfile.footprint；正式 vehicle_manager.agent.config.AgentConfig 并不加载它。生产ROS的 HardwareMotionProfile 只有 length/width，不能据此声称已知四轮外凸真实多边形；现有adapter也未收到该DeviceProfile路径。
+
+建议最小契约：可选只读 `vehicle_footprint: { frame: "base_link", vertices: [{x:number,y:number}, ...] }`，米、车辆前方+x/左方+y，3–64个有限顶点、非零面积，配置应含轮胎整体边界。IPC state.get与RobotSnapshot可选同名字段；缺失时省略，旧车兼容、网页仅箭头与尺寸不可用。该字段不参与导航资格、不修改安全计算、不改设置写接口。视觉SVG仅供形状风格，实际多边形来自真实vertices，禁止用SVG示意比例替代米制轮廓。
+
+具体加载点建议：在现有 agent_adapter.main.spin 的配置组装处读取显式可选ROS参数 `vehicle_geometry_config` 指定的现有hardware.yaml（经 vehicle_core.config.load_settings/DeviceProfile 验证，仅取device.footprint）；未配置则无几何。需要该路径由现有启动组装传入，不能自动加载config/hardware.example.yaml，不能用motion profile长宽猜轮胎。贯通 adapter.state→StateReply/RuntimeState→IpcState→StateReading→SnapshotState→LiveState/Snapshot→wire.RobotSnapshotPayload→web protocol/client parser→MapCanvas；在adapter未部署时UI仍可用。确切启动路径仍需负责人确认是否接受新增显式可选参数，或指定当前部署的真实geometry配置owner。

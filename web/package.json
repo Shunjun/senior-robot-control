@@ -13,6 +13,8 @@
   "dependencies": {
     "@fontsource/chakra-petch": "^5.2.0",
     "@fontsource/ibm-plex-mono": "^5.2.0",
+    "echarts": "^6.1.0",
+    "lucide-react": "^1.79.0",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.6.0"
