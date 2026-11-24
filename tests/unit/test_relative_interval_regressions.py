@@ -174,8 +174,6 @@ def test_distinct_anchors_do_not_claim_shared_history_cancellation():
     assert result.software_position_m >= p.position_error
 
 
-
-
 def test_midsegment_pose_uses_recorded_motion_when_endpoint_velocity_changes():
     from senior_motion_estimation.kinematics import compose, inverse
 

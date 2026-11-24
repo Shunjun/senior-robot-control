@@ -10,12 +10,17 @@ from senior_contracts.wire import OperationEnvelope
 from vehicle_core.diagnostics import PendingCounter
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef, OperationResult, OperationStatus, Pose2D
-from vehicle_manager.agent.dispatcher import Deadlines, HomePort, NavigationAction, TaskPort
+
+# //Compatible: preserve the request facade's original typed public exports.
+from vehicle_manager.agent.dispatcher import Deadlines as Deadlines
 from vehicle_manager.agent.dispatcher import Dispatcher as _Dispatcher
+from vehicle_manager.agent.dispatcher import HomePort as HomePort
 from vehicle_manager.agent.dispatcher import (
     LifecycleNavigationOperations as _LifecycleNavigationOperations,
 )
+from vehicle_manager.agent.dispatcher import NavigationAction as NavigationAction
 from vehicle_manager.agent.dispatcher import StoreTaskPort as _StoreTaskPort
+from vehicle_manager.agent.dispatcher import TaskPort as TaskPort
 from vehicle_manager.agent.dispatcher import _map_ref as _canonical_map_ref
 from vehicle_manager.agent.dispatcher import _TaskRouteReceiver as _ManagerTaskRouteReceiver
 from vehicle_manager.agent.local_adapters import IpcState

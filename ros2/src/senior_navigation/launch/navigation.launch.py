@@ -15,8 +15,8 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
 
-from vehicle_core.lifecycle_events import resource_handlers
 from vehicle_core.launch_recovery import lifecycle_group_command, lifecycle_owner_prefix
+from vehicle_core.lifecycle_events import resource_handlers
 
 
 def _members(context):
@@ -159,7 +159,6 @@ def _entry_actions(context):
             sigkill_timeout="1.0",
         )
     ]
-
 
 
 def _entry(context):

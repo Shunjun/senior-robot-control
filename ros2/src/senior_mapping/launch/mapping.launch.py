@@ -14,8 +14,8 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
-from vehicle_core.lifecycle_events import resource_handlers
 from vehicle_core.launch_recovery import restart_prefix
+from vehicle_core.lifecycle_events import resource_handlers
 
 
 def _mapping_actions(context):
@@ -120,7 +120,6 @@ def _mapping_actions(context):
             parameters=[{"use_sim_time": use_sim_time, "odom_frame": odom_frame}],
         ),
     ]
-
 
 
 def _mapping_nodes(context):

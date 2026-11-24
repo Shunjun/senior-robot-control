@@ -9,7 +9,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timezone
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 from vehicle_manager.agent.bootstrap_ports import (
     AgentBootstrapPorts,
@@ -111,7 +111,7 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
         navigation_client = ipc(timeout_ms=3000.0)
         workspace_client = ipc()
         display_client = ipc()
-        mapping_protocol_version = None
+        mapping_protocol_version: Literal[1, 2] | None = None
         map_requests: Requester = map_client
         workspace_requests: Requester = workspace_client
         mapped = None

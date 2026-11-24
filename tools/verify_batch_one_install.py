@@ -186,7 +186,8 @@ def verify_production_entry(*, compatible: bool = False) -> None:
 
                 await asyncio.wait_for(reporting(), 5)
                 assert len(clients) == len({id(value) for value in clients}) == 9
-                assert sorted(value._timeout for value in clients) == [1.0] * 8 + [3.0]
+                # Control, navigation and long-running mapping retain independent deadlines.
+                assert sorted(value._timeout for value in clients) == [1.0] * 7 + [3.0, 30.0]
                 agent = agents[0]
                 database = agent._journal._database
                 tasks = agent._dispatcher._tasks._store

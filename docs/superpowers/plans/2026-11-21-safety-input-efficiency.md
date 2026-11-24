@@ -95,40 +95,57 @@ import time
 import tomllib
 import types
 
-ROOT = Path('/Users/zhangshunjun/workspace/orca/senior-robot-control/vehicle-architecture-refactor')
-config = tomllib.loads((ROOT / 'pyproject.toml').read_text())
-sys.path[:0] = [str(ROOT / p) for p in config['tool']['pytest']['ini_options']['pythonpath']]
+ROOT = Path("/Users/zhangshunjun/workspace/orca/senior-robot-control/vehicle-architecture-refactor")
+config = tomllib.loads((ROOT / "pyproject.toml").read_text())
+sys.path[:0] = [str(ROOT / p) for p in config["tool"]["pytest"]["ini_options"]["pythonpath"]]
 from control_process_test_support import generic_motion_profile
 from test_scan_gap_compensation import scan, poses
 
-REL = 'ros2/src/senior_perception/senior_perception/scan_gap_compensation.py'
+REL = "ros2/src/senior_perception/senior_perception/scan_gap_compensation.py"
+
+
 def load(name, source):
     module = types.ModuleType(name)
     sys.modules[name] = module
-    exec(compile(source, name, 'exec'), module.__dict__)
+    exec(compile(source, name, "exec"), module.__dict__)
     return module.ScanGapCompensator
 
-base = load('efficiency_baseline', subprocess.check_output(['git', 'show', '3807185:' + REL], cwd=ROOT, text=True))
-new = load('efficiency_candidate', (ROOT / REL).read_text())
-profile = generic_motion_profile(length=.55, width=.55, sensor_error=.05, decel=.5, lag_ms=500)
+
+base = load(
+    "efficiency_baseline",
+    subprocess.check_output(["git", "show", "3807185:" + REL], cwd=ROOT, text=True),
+)
+new = load("efficiency_candidate", (ROOT / REL).read_text())
+profile = generic_motion_profile(length=0.55, width=0.55, sensor_error=0.05, decel=0.5, lag_ms=500)
+
 
 def frames(gaps):
     rows = []
     for sequence in range(1, 121):
-        ranges = [(1.0 - sequence * .0001) / math.cos(-.36 + i * .001) for i in range(720)]
+        ranges = [(1.0 - sequence * 0.0001) / math.cos(-0.36 + i * 0.001) for i in range(720)]
         if gaps and sequence > 1:
             ranges[360] = math.inf
-        raw = scan(sequence, ranges, angle_min=-.36)
-        raw.message.angle_increment = .001
+        raw = scan(sequence, ranges, angle_min=-0.36)
+        raw.message.angle_increment = 0.001
         rows.append((raw, poses(raw)))
     return rows
 
+
 complete, holes = frames(False), frames(True)
+
 
 def signature(result, raw):
     assert result.message is raw.message
-    assert (result.stamp, result.received, result.received_ros, result.measurement_steady) == (raw.stamp, raw.received, raw.received_ros, raw.measurement_steady)
-    return tuple((p.index, p.distance, p.missing_frames, p.seed_capture) for p in result.predictions)
+    assert (result.stamp, result.received, result.received_ros, result.measurement_steady) == (
+        raw.stamp,
+        raw.received,
+        raw.received_ros,
+        raw.measurement_steady,
+    )
+    return tuple(
+        (p.index, p.distance, p.missing_frames, p.seed_capture) for p in result.predictions
+    )
+
 
 # Same frame retry, late poses, and finite/gap inputs use identical objects for both versions.
 for rows in (complete, holes):
@@ -136,41 +153,54 @@ for rows in (complete, holes):
     for raw, aligned in rows:
         assert engines[0].update(raw, [], now=raw.received) is raw
         assert engines[1].update(raw, [], now=raw.received) is raw
-        outputs = [e.update(raw, aligned, now=raw.received + .02) for e in engines]
+        outputs = [e.update(raw, aligned, now=raw.received + 0.02) for e in engines]
         assert signature(outputs[0], raw) == signature(outputs[1], raw)
         for engine, output in zip(engines, outputs):
-            assert engine.update(raw, [], now=raw.received + .03) is output
-print('equivalence: 240 acquisitions, 480 missing-pose retries and 480 cached repeats; identical exact prediction fields, capture, times and original message identity')
+            assert engine.update(raw, [], now=raw.received + 0.03) is output
+print(
+    "equivalence: 240 acquisitions, 480 missing-pose retries and 480 cached repeats; identical exact prediction fields, capture, times and original message identity"
+)
+
 
 def run(cls, rows, mode):
     engine = cls(profile)
     elapsed = []
     for raw, aligned in rows:
-        if mode == 'late_pose':
+        if mode == "late_pose":
             assert engine.update(raw, [], now=raw.received) is raw
-        if mode == 'cached':
+        if mode == "cached":
             result = engine.update(raw, aligned, now=raw.received)
             start = time.perf_counter_ns()
             for _ in range(10):
-                assert engine.update(raw, [], now=raw.received + .001) is result
+                assert engine.update(raw, [], now=raw.received + 0.001) is result
             elapsed.append((time.perf_counter_ns() - start) / 10 / 1e6)
         else:
             start = time.perf_counter_ns()
-            result = engine.update(raw, aligned, now=raw.received + .02)
+            result = engine.update(raw, aligned, now=raw.received + 0.02)
             elapsed.append((time.perf_counter_ns() - start) / 1e6)
         signature(result, raw)
     return statistics.median(elapsed)
 
+
 results = {}
-for mode, rows in [('complete', complete), ('positive_inf', holes), ('late_pose', holes), ('cached', holes)]:
-    values = {'baseline': [], 'candidate': []}
+for mode, rows in [
+    ("complete", complete),
+    ("positive_inf", holes),
+    ("late_pose", holes),
+    ("cached", holes),
+]:
+    values = {"baseline": [], "candidate": []}
     for round_id in range(4):
-        order = [('baseline', base), ('candidate', new)] if round_id % 2 == 0 else [('candidate', new), ('baseline', base)]
+        order = (
+            [("baseline", base), ("candidate", new)]
+            if round_id % 2 == 0
+            else [("candidate", new), ("baseline", base)]
+        )
         for label, cls in order:
             values[label].append(run(cls, rows, mode))
     results[mode] = values
-    results[mode]['baseline_median_ms'] = statistics.median(values['baseline'])
-    results[mode]['candidate_median_ms'] = statistics.median(values['candidate'])
+    results[mode]["baseline_median_ms"] = statistics.median(values["baseline"])
+    results[mode]["candidate_median_ms"] = statistics.median(values["candidate"])
 print(json.dumps(results, indent=2))
 ```
 

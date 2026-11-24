@@ -3,7 +3,7 @@
 import asyncio
 import time
 from collections.abc import Mapping
-from typing import Any
+from typing import Any, Literal, cast
 
 from senior_contracts.wire import ModulePerformance, PerformancePayload
 
@@ -47,7 +47,7 @@ class PerformanceMonitor:
         its identity to a recycled PID. Child births are checked by ProcSampler.
         """
         members: dict[int, int] = {}
-        pending = [(pid, None) for pid in roots]
+        pending: list[tuple[int, int | None]] = [(pid, None) for pid in roots]
         tasks_read = 0
         while pending:
             pid, parent = pending.pop()
@@ -100,7 +100,8 @@ class PerformanceMonitor:
             memory_used_bytes=reading.memory_used_bytes,
             modules=[
                 ModulePerformance(
-                    name=row.name,
+                    # The sampler receives only this monitor's fixed MODULES registry.
+                    name=cast(Literal["video", "navigation", "mapping"], row.name),
                     status="unavailable" if row.name in unavailable else row.status,
                     cpu_percent=None if row.name in unavailable else row.cpu_percent,
                     rss_bytes=None if row.name in unavailable else row.rss_bytes,

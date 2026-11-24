@@ -644,7 +644,10 @@ class LifecycleStore:
                 "json_extract(payload,'$.kind') <> 'manual_ready' "
                 "THEN rowid END)-1, MAX(rowid),0) FROM task_lifecycle_effect"
             ) as cursor:
-                frontier = int((await cursor.fetchone())[0])
+                frontier_row = await cursor.fetchone()
+                # An aggregate without GROUP BY always returns a row.
+                assert frontier_row is not None
+                frontier = int(frontier_row[0])
             return replace(effect, dispatch_sequence=int(row[0]), settled_through=frontier), (
                 row[2] == "done" and row[3] == 1
             )

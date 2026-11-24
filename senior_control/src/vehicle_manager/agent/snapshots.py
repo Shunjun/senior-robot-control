@@ -2,7 +2,7 @@
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from senior_contracts.navigation import RouteProgress
 from senior_contracts.wire import (
@@ -91,7 +91,7 @@ class RobotSnapshot:
     # //Compatible: legacy producers omit an independent raster version.
     map_grid_id: str | None = None
     performance: PerformancePayload | None = None
-    mapping_protocol_version: int | None = None
+    mapping_protocol_version: Literal[1, 2] | None = None
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:

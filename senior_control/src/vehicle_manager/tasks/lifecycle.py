@@ -315,10 +315,14 @@ def acknowledge(
     if effect.kind == "terminal_release":
         if not ok:
             return Transition(state)
-        phase = _terminal_phase(state)
-        assert phase is not None
+        terminal_phase = _terminal_phase(state)
+        assert terminal_phase is not None
         changed = replace(
-            state, version=state.version + 1, phase=phase, pending=None, recovery_requested=False
+            state,
+            version=state.version + 1,
+            phase=terminal_phase,
+            pending=None,
+            recovery_requested=False,
         )
         collection = replace(
             _effect(changed, "terminal_settled"), terminal_outcome=effect.terminal_outcome
