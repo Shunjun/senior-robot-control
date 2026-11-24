@@ -43,6 +43,8 @@ for (const viewport of [{width:1440,height:1000},{width:390,height:844}]) {
     await page.screenshot({path:testInfo.outputPath('drive.png'),fullPage:true});
     await page.getByRole('button',{name:'获取控制权',exact:true}).click();
     await expect(stick).toHaveAttribute('aria-disabled','false');
+    await stick.scrollIntoViewIfNeeded();
+    await expect(page.getByRole('button',{name:'急停',exact:true})).toBeInViewport({ratio:1});
     await stick.focus();await page.keyboard.down('ArrowUp');await page.keyboard.up('ArrowUp');
     await page.getByRole('button',{name:'日志',exact:true}).click();
     await expect(page.getByRole('log',{name:'车辆逐行日志'})).toBeVisible();

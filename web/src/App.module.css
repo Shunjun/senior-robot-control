@@ -15,4 +15,4 @@
 .notice { color:#ffbca4;background:var(--red-wash);padding:12px;border-radius:8px }
 .splash { display:grid;place-items:center;min-height:80dvh }.demo { padding:8px;background:#654524;color:white }.demoTag { font-weight:700;margin-right:12px }
 .srOnly { position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip-path:inset(50%);white-space:nowrap }
-@media(max-width:760px) { .app { padding:12px }.shell { gap:12px }.header { gap:6px }.brand { padding-right:6px }.brandName { font-size:17px }.grow { display:none }.side { left:0;top:112px }.header>div[role=group] { order:4;flex:1 }.logout { font-size:12px }.header>button { flex-shrink:0 } }
+@media(max-width:760px) { .app { padding:12px }.shell { gap:12px }.header { gap:6px;position:sticky;top:0;background:#252528f5;backdrop-filter:blur(12px);border-radius:10px;padding:6px }.brand { padding-right:6px }.brandName { font-size:17px }.grow { display:none }.side { position:fixed;left:12px;right:12px;top:184px;width:auto;max-height:calc(100dvh - 204px) }.header>div[role=group] { order:4;flex:1 }.logout { font-size:12px }.header>button { flex-shrink:0 } }

@@ -253,7 +253,7 @@ export function ControlSurface({ robotId, link, snapshot, active = true, statusO
       </div>
       <nav className={styles.dock} aria-label="车辆场景">{MODES.map(([value, label]) => {
         const Icon = icons[value];
-        return <button type="button" key={value} aria-pressed={mode === value} onClick={() => setMode(value)}><Icon size={18} /><span>{label}</span></button>;
+        return <button type="button" key={value} aria-label={label} aria-pressed={mode === value} onClick={() => setMode(value)}><Icon size={18} /><span>{label}</span></button>;
       })}</nav>
       <div className={styles.legend} aria-label="地图图例">
         <span><i data-kind="stable" />稳定结构</span><span><i data-kind="free" />确认空闲</span><span><i data-kind="unknown" />未知</span><span><i data-kind="scan" />实时扫描</span>
