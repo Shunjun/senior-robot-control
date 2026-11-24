@@ -231,3 +231,94 @@ npm run test:e2e -- control.integration.spec.ts
 | 文档（1，修改） | 本验证记录 |
 
 产品提交后只修改本文档；文档提交与最终远端/PR/清洁状态另记在证据目录 `delivery-report.md`。保持原分支、原工作区、原 PR #40 Draft，不创建第二 PR、不合并 main。自审实际 diff 后等待负责人亲审，本 worker 自审不冒充独立复核。
+
+
+## 2026-11-25 独立任务名称：正常集成与同版验证
+
+本节取代前文“独立名称待后续派发”的状态；此前控制页/F1/F2/G1的历史证据仍按原版本保留。负责人已完成两子分支实际diff与视觉亲审后正式派发Task3，集成未再次询问设计、未派子Agent。用户没有配置旧任务，本轮不扩历史数据回填、调度或几何功能。
+
+### 最终行为与产品版本
+
+名称独立保存在车端SQLite，可重复、可单独改名；新建生成稳定UUID，失败/未知重试保留草稿身份。名称去显式约定集合的首尾空白，保留内部字符，规范化后1–128个Unicode code point；显式null/全空白拒绝。旧API创建省name使用ID，更新省name与启停保留名称。改名递增定义revision，但不改变计划、路线、created_at、已接受实例/版本/冻结路线；同帧列表与执行卡片关联当前名称，控制命令仍使用执行实例ID。旧端缺task.names.v1（包括零目录）只读ID fallback、禁名称写入/命名创建并提示升级，仍可编辑已有任务的非名称字段。
+
+- 准确父工作区 `/home/toby/orca/workspaces/senior-robot-control/control-workspace`，固定 `feat/control-workspace`，起点干净 `119dc4c578eaa73e0f1fbf3709ec9b8add602112`。
+- 子工作区开始均干净：backend `6eb3eb9370cd0feb2009cee7b6a13cdee7ffefed`，frontend `00deeebce4b6389341a924d38dedcc4d91fecbc4`。
+- 按顺序正常 `git merge --no-ff`：后端合并 `b9b4bfc1b3e7e7cdfad6bb712e6e75f009b6a9d0`，前端合并 `24b95555b5a5e7b9cbd11dcf10642fe659634299`；两次均ort成功、**无冲突**，没有整文件ours/theirs、cherry-pick、reset或替换父分支。
+- 最终产品/测试版本 **`c864d82f46b032cd665844a86bf474697eac011b`**。Task3仅整理指定4个测试文件，产品新增/修改/删除均0；19个产品blob与正常合并HEAD `24b9555`逐个相同。随后仅提交本文档，最终交付HEAD/推送/PR状态另记证据目录delivery-report与version.json。
+- 名称整体相对119dc4c共**31路径：产品19、测试/fixture9、文档3**，新增2、修改29、删除0；本次集成自身编辑**5路径：测试4、本文档1**，在批准预算内。没有依赖/配置改动。
+
+证据目录 **`/tmp/task-names-integration-2026-11-25/`**：version.json保存产品/测试提交与blob，build-sha256.json保存本版dist哈希，ancestry.log给出两个merge的双parent及三个审核提交的祖先/零独有提交证明，product-preservation.log确认集成无产品改动。
+
+### 同版导入、持久化与生产领取链
+
+原先单独editable安装可能指向子工作区/旧main，因此显式使用父树PYTHONPATH，并在195项pytest结束后枚举并断言**127个项目/测试模块全部来自父树**（import-paths.json）。代表性实际路径如下；后端解释器的依赖环境随后原地移至父工作区 `.venv` 并重新安装父树editable，最终路径再查无误（import-paths-final.log）：
+
+| 模块 | 实际__file__（父工作区相对路径） |
+|---|---|
+| senior_contracts / wire | contracts/src/senior_contracts/__init__.py / wire.py |
+| vehicle_manager / dispatcher | senior_control/src/vehicle_manager/__init__.py / agent/dispatcher.py |
+| cloud / snapshots | cloud/src/cloud/__init__.py / snapshots.py |
+| test_agent / test_task_lifecycle_store | senior_control/tests/test_agent.py / test_task_lifecycle_store.py |
+| vehicle_core | vehicle_core/__init__.py |
+
+复用独立审核 `/tmp/task-names-review-probe.py` 与返修frontend-probe，保留适配副本 review-probe.py/frontend-probe.cjs；只改证据输出地址、实际父树TS路径并补齐本轮必要创建/改名读取，不另建协议。临时SQLite均在/tmp，退出删除；无服务、网络或车辆动作。
+
+1. StoreTaskPort创建“东区巡检”→关闭/重开SQLite→真实WorkspaceReader.task.get→真实SnapshotState.collect任务summary→shared wire→真实cloud SnapshotCache及其snapshot_envelope→父树实际TypeScript parseInbound。随后同一ID改成“夜班巡检”，重复该链；名称与revision 1→2都正确。create-rename-wire.json保存真实get与完整最终帧，两个probe日志均通过断言。未把agent uplink当作带last_synced_at的cloud下行。
+2. 审核原probe的“读取到期定义→纯改名→旧定义提交”实际经过**生产LifecycleStore.submit/原claim写事务**：accepted=True、冻结名称夜班巡检/revision2、初次1个effect、同请求重放0个effect且receipt相同。没有只用兼容executor的N5用例来宣称生产领取已验证。N3既有新增回归另验证已接受实例、冻结路线/版本/effects不变及实时名称投影。
+3. R1真实FEFF-only/NEL-only写入均拒绝；NEL/FEFF包围中文存储/wire规范为“巡检”，实际parseInbound接收；严格拒绝null/FEFF/NEL summary。R2非法省name update与119dc4c对照均为validation/FAILED，未变unknown边界。
+
+### 本轮命令与结果
+
+后端从父工作区执行。195项运行最初使用 `../control-workspace-names-backend/.venv/bin/python` 的依赖解释器，显式导入父树；该环境已移至父 `.venv`，以下为可继续复现的相同命令，非子树产品测试。Python 3.11.2；Node v24.13.0。
+
+```sh
+PYTHONPATH=contracts/src:senior_control/src:cloud/src:senior_control/tests:tests/integration:. \
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python -m pytest \
+  senior_control/tests/test_agent.py senior_control/tests/test_workspace_data.py \
+  senior_control/tests/test_task_runner.py senior_control/tests/test_task_lifecycle_store.py \
+  tests/unit/test_protocol.py -q
+# 195 passed in 15.80s；backend-regression.log；同进程额外断言127个import均在父树。
+
+PYTHONPATH=contracts/src:senior_control/src:cloud/src:senior_control/tests:tests/integration:ros2/src/senior_mapping:. \
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python /tmp/task-names-integration-2026-11-25/review-probe.py
+node /tmp/task-names-integration-2026-11-25/frontend-probe.cjs
+# probe-backend.log / probe-frontend.log，均成功。
+
+PYTHONPATH=contracts/src:senior_control/src:cloud/src:. PYTHONDONTWRITEBYTECODE=1 \
+.venv/bin/python -m pytest senior_control/tests/test_agent.py \
+  -k 'test_operation_id_deduplicates or test_same_operation_id_with_different_content_conflicts' -q
+# 最终环境2 passed，61 deselected；idempotency-final.log。
+```
+
+前端从 `web/` 执行：
+
+| 命令 | 结果 / 日志 |
+|---|---|
+| `npm test -- --run src/api/vehicleState.test.ts src/features/tasks/tasks.test.tsx src/features/devices/vehicleState.test.tsx src/api/client.test.ts` | **4文件/63通过**；frontend-targeted.log，包含N7–N10、同实例命令、F1七分支与真实client保护 |
+| `npm run typecheck` | 通过；typecheck.log |
+| `npx tsc --noEmit --target ES2022 --module ESNext --moduleResolution bundler --strict --skipLibCheck --types node e2e/control.spec.ts e2e/control.integration.spec.ts` | 通过；e2e-typecheck.log |
+| `npm run build` | 通过；build.log，保留原>500kB提示 |
+| `PLAYWRIGHT_BASE_URL=http://127.0.0.1:4147 PLAYWRIGHT_CHANNEL=chrome npm run test:e2e -- control.spec.ts --output=/tmp/task-names-integration-2026-11-25/browser-final` | **三尺寸3通过**（12.9s）；browser-final.log |
+| `git diff --check` | 通过；最终文档提交后再记录清洁状态 |
+
+未变化的完整lifecycle service/其他前端模块沿用独立审核及原交付/返修证据，不无故全仓重复。本次没有新增skip/xfail或删除119dc4c基线保护。早期失败保留并明确不作产品bug证据：新复制的忽略目录.venv耗尽共享磁盘，首次pytest输出中断；只删除本轮新复制环境释放214MB后重跑195项通过，后续复用原环境并移至父目录。首次probe漏调用cloud下行投影导致last_synced_at=null，补用现有cloud.snapshot_envelope后通过；一次npm在父目录而非web目录运行的ENOENT也仅为命令目录错误。
+
+### 独立输入场景计数、bug回归与测试整理
+
+按独立输入流程而非it块/断言数或视口参数计数；同一流程中的创建→改名、坏输入对照不拆成多场景：
+
+- 批准名称行为**新增11个独立流程**：后端6个（空库升级重开；真实创建/重开/旧API省名与启停保名；已接受执行改名保身份/路线；读旧定义后改名到期领取；summary/cache往返及旧省字段；null/空白拒绝与重复名辨识），前端5个（N7连续创建改名预览；N9旧端/零目录/切回及非名称编辑；N10重复名与内部空白/禁止空白提交；执行name/definition_task_id及非法名称边界；summary名称/null边界）。
+- 批准行为**实质增强4个既有流程**：真实Agent创建/启停持久化；N8定义/实例ID分离的pause→resume→cancel与改名显示；当前地图路线进度名称且仍拒绝陈旧地图；原安全fixture主流程增加1440命名创建→改名→预览。三尺寸只算一个既有行为的覆盖入口，不把参数展开当新增场景。
+- 已确认实际新bug为**R1、R2两项**，保留**4个专用回归输入流程**：后端R1存储→wire边界；R2缺task_id省名update/journal与重放；前端首尾集合/内部字符与边缘空白包围128字符；task.get的FEFF-only/NEL-only。R1还加强上述执行decoder、summary、N7、N10四流程，计为复用场景中的额外断言，**不再加4**。前端task.get专题已只保留真实R1触发。
+- 整理只去掉本轮重复保护：Agent用例里重复create同operation_id/变name同operation_id，由119dc4c原专用dedup/conflict测试承接且执行通过；execution专题移除42/null定义ID/extra通用patch与单独128emoji，保留有效元数据、name:null、普通空白、FEFF/NEL拒绝；normalize专题去独立null/129emoji重复断言，保留实际128字符路径；task.get去null/旧省字段重复检查，生产strict未放宽，旧编辑由N9覆盖。没有添加未指定参数矩阵。
+- 原F1未知/FAILED **7个journal输入分支**、地图身份/版本、控制退出与急停、目录并发、旧省字段等都为复用回归，未算名称新增。原schema版本断言正常随domain4更新，未删除既有安全断言。
+
+### 三尺寸视觉、安全边界与清理
+
+只更新批准的 `/tmp/control-workspace-static-preview` 构建/fixture，复用原 **4147纯静态预览**，没有启动开发/业务服务器。三尺寸保留原控制、小地图/唯一owner、底部容器与间距/触控目标、急停滚动可达、日志安全、设置SI保存、任务编辑/路线重排/cron/timezone、未实现能力零请求检查。**命名创建→改名→命名预览仅1440执行**；390/844仍完成全部原任务编辑/布局流程，不把未运行名称操作写成小屏验证。
+
+browser-final有**13张本版截图**：每尺寸drive/mini-map/estop-scrolled/tasks各4张，另1440一张names-preview。13张均实际调用view_image查看：名称与只读编号分离、桌面“夜班巡检”列表/路线标题；390底部两行与完整触控、844横屏sticky急停及小图工具、桌面底部三组。滚动时的fullPage截图可能把sticky header捕获在滚动位置，estop-scrolled是实际viewport截图并有toBeInViewport断言；不把该截图机制当新布局功能。真实视频在fixture中不可用是预期。
+
+合并后再次确认两子树干净、两HEAD相对父HEAD独有提交均0，检查Orca全部子树会话均在空闲shell/已完成worker提示，没有另行运行的开发/返修任务或明确keep-open要求。使用Orca `worktree rm --delete-branch --json` 正常移除两子worktree（无force）；机制保留了本地分支，随后基于当前父HEAD已包含全部提交以普通 `git branch -d` 删除。前后worktree/sessions清单及两个cleanup收据保存在证据目录；父工作区、原main工作区和main分支均保留。
+
+**未验证**：真实HTTP/WS服务集成、实车、ROS、真实视频/WebRTC/TURN、真实配对兑换。原control.integration.spec.ts保留且默认不连接服务器，此轮只类型检查。缺实际轮廓仍箭头fallback并提示尺寸不可用；FIFO/run-now缺失仍提示暂未实现。需要contracts/cloud与车端协同部署，不能宣传任意版本双向兼容或新数据库可直接降级。PR40保持Draft，等待负责人最终同版验收；最终发布结果见交付报告，不能以本地验证代替已推送声明。
