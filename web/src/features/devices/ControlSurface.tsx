@@ -1,14 +1,18 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
 import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
 import type { ResponsePayload, RobotSnapshot } from "../../api/protocol";
 import { readMappingCatalog, sendMapCommand } from "../../api/mapping";
 import { DriveView } from "../drive/DriveView";
 import { HomeControls } from "../map/HomeControls";
-import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
+import { type OccupancySnapshot, type Pose } from "../map/MapCanvas";
 import { useWorkspaceMap } from "../map/useWorkspaceMap";
 import { PosePicker, type MapGoal, type PoseHint } from "../map/PosePicker";
-import { PerformancePanel } from "./PerformancePanel";
+import { TaskExecutionControls } from "./VehicleStateView";
+import { StatusOverlay } from "./StatusOverlay";
+import { Switch } from "../../components/ui/Switch";
+import { IconButton } from "../../components/ui/IconButton";
+import { ArrowLeftRight, Gamepad2, Navigation, ListOrdered, Map as MapIcon } from "lucide-react";
 import { MapManager } from "../mapping/MapManager";
 import { TaskList } from "../tasks/TaskList";
 import { VideoPanel } from "../video/VideoPanel";
@@ -18,6 +22,8 @@ export interface ControlSurfaceProps {
   robotId: string;
   link: RobotLink;
   snapshot: RobotSnapshot;
+  active?: boolean;
+  statusOpen?: boolean;
 }
 
 export type WorkspaceMode = "manual" | "navigation" | "tasks" | "mapping";
@@ -56,15 +62,20 @@ function navigationUnavailableMessage(reason: string | null | undefined): string
 }
 
 /** Drive and map controls for the selected vehicle and its current map reference. */
-export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps): ReactElement {
+export function ControlSurface({ robotId, link, snapshot, active = true, statusOpen = false }: ControlSurfaceProps): ReactElement {
   const [mapLoad, setMapLoad] = useState(0);
   const [mode, setMode] = useState<WorkspaceMode>("manual");
-  const [manualView, setManualView] = useState<PrimaryView>("map");
-  const [navigationView, setNavigationView] = useState<PrimaryView>("map");
-  const view = mode === "manual" ? manualView : mode === "navigation" ? navigationView : "map";
-  const setView = mode === "manual" ? setManualView : setNavigationView;
+  const [view, setView] = useState<PrimaryView>("map");
+  const [performanceExpired, setPerformanceExpired] = useState(false);
+  useEffect(() => {
+    setPerformanceExpired(false);
+    const timer=setTimeout(() => setPerformanceExpired(true),3500);
+    return () => clearTimeout(timer);
+  }, [snapshot.performance?.sequence]);
+  const [statusTab, setStatusTab] = useState<"motion" | "performance">("motion");
+  const [cameraOn, setCameraOn] = useState(false);
   const { map: occupancy, gridId, waypoints, message, displayOnly, waypointWrites, navigationReady } =
-    useWorkspaceMap(link, snapshot, { enabled: view === "map" || mode === "navigation", catalog: mode === "tasks", refresh: mapLoad });
+    useWorkspaceMap(link, snapshot, { enabled: true, catalog: mode === "tasks", refresh: mapLoad });
   //Compatible: legacy interactions keep their original per-grid scope.
   const referenceVersion = snapshot.map_grid_id === undefined ? gridId : snapshot.map_generation;
   const refKey = JSON.stringify([snapshot.map_ref, referenceVersion]);
@@ -201,95 +212,53 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
     setFeedback({ refKey, note: `定位提示已设定（${describePose(hint.pose)}），未发送：车端未开放定位提示指令。` });
   }
 
-  return (
-    <>
-    <PerformancePanel reading={snapshot.performance} live={snapshot.connected && !snapshot.stale} />
-    <div className={styles.workspace} data-mode={mode}>
-      <div className={styles.toolbar}>
-        <nav className={styles.switches} aria-label="车辆场景">
-          {MODES.map(([value, label]) => (
-            <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>
-              {label}
-            </button>
-          ))}
-        </nav>
-        {view === "map" && mode !== "manual" && (
-          <div className={styles.switches}>
-            <button type="button" onClick={() => setMapLoad((previous) => previous + 1)}>刷新地图</button>
-          </div>
-        )}
-        {(mode === "manual" || mode === "navigation") && (
-          <div className={styles.switches} role="group" aria-label="主视图">
-            <button type="button" aria-pressed={view === "video"} onClick={() => setView("video")}>视频</button>
-            <button type="button" aria-pressed={view === "map"} onClick={() => setView("map")}>地图</button>
-          </div>
-        )}
+  const icons = { manual: Gamepad2, navigation: Navigation, tasks: ListOrdered, mapping: MapIcon };
+  return <TaskList snapshot={snapshot} link={link} workspace={workspace} map={map} unavailable={message}
+    mapCanvasProps={mode === 'tasks' ? {mini:cameraOn && view === 'video'} : {
+      mini:cameraOn && view === 'video',
+      map, robot: liveMapTelemetry ? snapshot.robot_pose ?? null : null,
+      scanPoints: liveMapTelemetry ? snapshot.scan_points ?? [] : [],
+      pickEnabled: mode === 'navigation' && activeMap, draft: mode === 'navigation' ? draft : null,
+      onPick: setDraft, taskRoute: [], waypointMarkers: [], onAddWaypoint: () => {},
+    }}
+    renderWorkspace={(mapView, taskPanel) => <div className={styles.workspace} data-mode={mode} data-primary={cameraOn ? view : 'map'}>
+      <div className={styles.previewHead}>
+        <span>{cameraOn && view === 'video' ? '摄像头' : '实时地图'}</span>
+        {occupancy === undefined && message && <p className={styles.mapMessage} role="status">{message}</p>}
+        <Switch label="摄像头" checked={cameraOn} onChange={next => { setCameraOn(next); if (!next) setView('map'); }} />
       </div>
-      {mode === "tasks" && <TaskList snapshot={snapshot} link={link}
-        workspace={workspace} map={occupancy} unavailable={message} />}
-      <div className={styles.stage} data-tasks={mode === "tasks"}>
-        {mode !== "tasks" && <div className={styles.primary}>
-          {view === "video" ? (
-            <VideoPanel link={link} live={snapshot.connected && !snapshot.stale} compact />
-          ) : (
-            <>
-              {message !== undefined && <p className={styles.quiet}>{message}</p>}
-              {(occupancy !== undefined || mode === "navigation") && (
-                <>
-                  <MapCanvas
-                    key={snapshot.map_grid_id === undefined ? gridId ?? "unavailable" : refKey}
-                    map={map}
-                    compact={occupancy !== undefined}
-                    robot={liveMapTelemetry ? snapshot.robot_pose ?? null : null}
-                    scanPoints={liveMapTelemetry ? snapshot.scan_points ?? [] : []}
-                    stale={snapshot.stale || !snapshot.connected}
-                    pickEnabled={mode === "navigation" && activeMap}
-                    draft={mode === "navigation" ? draft : null}
-                    onPick={setDraft}
-                  />
-                  {(!liveMapTelemetry || snapshot.robot_pose == null) && <p className={styles.quiet}>车辆位置暂不可用</p>}
-                </>
-              )}
-            </>
-          )}
-        </div>}
-        <div className={styles.operations} data-manual={mode === "manual"}>
-          <DriveView robotId={robotId} link={link} snapshot={snapshot} active={mode === "manual"} compact />
-          {mode === "navigation" && (
-            <>
-              <HomeControls
-                key={`home:${refKey}`}
-                snapshot={snapshot}
-                link={link}
-                homeMapAvailable={activeMap && waypointWrites === true}
-                {...(directNavigation
-                  ? { directNavigation: { onReturnHome: () => void runNavigation("return_home"), pending: navigationBusy || routeActive } }
-                  : { navigationUnavailable: navigationUnavailableMessage(snapshot.navigation_block_reason) })}
-              />
-              {routeActive && <p className={styles.quiet}>当前路线仍在执行，可以取消导航。</p>}
-              <p className={styles.quiet}>
-                {mappingEdits ? "定位提示将交给车端进行局部匹配，请先停车，再设置车辆的位置和朝向。"
-                  : directNavigation ? "定位提示保存在当前页面，车端尚不接收。"
-                    : "目标与定位提示为本地预览，车端尚不接收。"}
-              </p>
-              <PosePicker
-                key={`pose:${refKey}`}
-                snapshot={snapshot}
-                map={pickMap}
-                draft={snapshot.map_grid_id === undefined && !activeMap ? null : draft}
-                onDraftChange={setDraft}
-                pending={navigationBusy || routeActive}
-                onGoal={onGoal}
-                onHint={onHint}
-                {...(mappingEdits ? { onHome: (goal: MapGoal) => void editMappingPose("map.home", goal) } : {})}
-              />
-              {note !== null && <p className={styles.quiet} role="status">{note}</p>}
-            </>
-          )}
-          {mode === "mapping" && <MapManager robotId={robotId} snapshot={snapshot} link={link} />}
-        </div>
+      <div className={styles.mapViewport}>
+        {mapView}
+        {cameraOn && view === 'video' && <div className={styles.swap}><IconButton label="交换主次画面" onClick={() => setView('map')}><ArrowLeftRight /></IconButton></div>}
       </div>
-    </div>
-    </>
-  );
+      {cameraOn && <div className={styles.videoViewport}>
+        <VideoPanel link={link} live={active && snapshot.connected && !snapshot.stale} compact />
+        {view === 'map' && <div className={styles.swap}><IconButton label="交换主次画面" onClick={() => setView('video')}><ArrowLeftRight /></IconButton></div>}
+      </div>}
+      <div className={styles.status} hidden={!statusOpen}><StatusOverlay snapshot={snapshot} port={link.vehicle} tab={statusTab} onTabChange={setStatusTab} performanceExpired={performanceExpired} visible={active && statusOpen} /></div>
+      <div className={styles.operations} data-manual={mode === 'manual'}>
+        <div hidden={mode !== 'manual'}><DriveView robotId={robotId} link={link} snapshot={snapshot} active={active && mode === 'manual'} compact /></div>
+        <div hidden={mode !== 'tasks'}>{taskPanel}<TaskExecutionControls port={link.vehicle} /></div>
+        {mode === 'navigation' && <>
+          <HomeControls key={`home:${refKey}`} snapshot={snapshot} link={link} homeMapAvailable={activeMap && waypointWrites === true}
+            {...(directNavigation ? { directNavigation: { onReturnHome: () => void runNavigation('return_home'), pending: navigationBusy || routeActive } }
+              : { navigationUnavailable: navigationUnavailableMessage(snapshot.navigation_block_reason) })} />
+          <button type="button" onClick={() => setMapLoad(n => n + 1)}>刷新地图</button>
+          <PosePicker key={`pose:${refKey}`} snapshot={snapshot} map={pickMap} draft={snapshot.map_grid_id === undefined && !activeMap ? null : draft}
+            onDraftChange={setDraft} pending={navigationBusy || routeActive} onGoal={onGoal} onHint={onHint}
+            {...(mappingEdits ? { onHome: (goal: MapGoal) => void editMappingPose('map.home', goal) } : {})} />
+          {note && <p role="status">{note}</p>}
+        </>}
+        {mode === 'mapping' && <MapManager robotId={robotId} snapshot={snapshot} link={link} />}
+      </div>
+      <nav className={styles.dock} aria-label="车辆场景">{MODES.map(([value, label]) => {
+        const Icon = icons[value];
+        return <button type="button" key={value} aria-pressed={mode === value} onClick={() => setMode(value)}><Icon size={18} /><span>{label}</span></button>;
+      })}</nav>
+      <div className={styles.legend} aria-label="地图图例">
+        <span><i data-kind="stable" />稳定结构</span><span><i data-kind="free" />确认空闲</span><span><i data-kind="unknown" />未知</span><span><i data-kind="scan" />实时扫描</span>
+        <button type="button" onClick={() => setFeedback({ refKey, note:'暂未实现：独立候选层 / 空闲证据层 / 线段拟合' })}>更多图层</button>
+      </div>
+      {note?.startsWith('暂未实现') && <p className={styles.toast} role="status">{note}</p>}
+    </div>} />;
 }

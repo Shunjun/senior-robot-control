@@ -102,7 +102,7 @@ it('shows unavailable instead of enabling old velocity controls', () => {
     vehicle?: unknown;
   }).vehicle;
   render(<DriveView robotId="robot" link={old} snapshot={null} />);
-  expect(screen.getByRole('group', { name: '前进后退摇杆' }).getAttribute('aria-disabled')).toBe('true');
+  expect(screen.getByRole('group', { name: '驾驶摇杆' }).getAttribute('aria-disabled')).toBe('true');
   expect((screen.getByRole('button', { name: '获取控制权' }) as HTMLButtonElement).disabled).toBe(true);
 });
 it('a request acknowledgement does not claim confirmed emergency stop', async () => {
@@ -121,8 +121,8 @@ it('actual controls stop on key release and restart with the same authority on a
   });
   render(<DriveView robotId="robot" link={link(port)} snapshot={null} />);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: '获取控制权' })));
-  fireEvent.click(screen.getByRole('button', { name: '高档' }));
-  const stick = screen.getByRole('group', { name: '前进后退摇杆' });
+  fireEvent.click(screen.getByRole('button', { name: '高速' }));
+  const stick = screen.getByRole('group', { name: '驾驶摇杆' });
   await act(async () => fireEvent.keyDown(stick, { key: 'ArrowUp' }));
   expect(sent.find(item => item[0] === 'drive.intent')?.[1]).toMatchObject({ linear: 1, turn: 0, gear: 'high' });
   await act(async () => fireEvent.keyUp(stick, { key: 'ArrowUp' }));
@@ -153,7 +153,7 @@ it('sends emergency stop before fencing a held input, and requires owner permiss
     <EmergencyStop link={l} />
   </StrictMode>);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: '获取控制权' })));
-  await act(async () => fireEvent.keyDown(screen.getByRole('group', { name: '前进后退摇杆' }), { key: 'ArrowUp' }));
+  await act(async () => fireEvent.keyDown(screen.getByRole('group', { name: '驾驶摇杆' }), { key: 'ArrowUp' }));
   await act(async () => fireEvent.click(screen.getByRole('button', { name: '急停' })));
   expect(sent.slice(-2)).toEqual(['safety.estop', 'control.release']);
   const old = port.getSnapshot().frame!;
@@ -202,7 +202,7 @@ it('requires a fresh press after stop acknowledgement without replaying a held p
   });
   render(<DriveView robotId="robot" link={link(port)} snapshot={null} />);
   await act(async () => fireEvent.click(screen.getByRole('button', { name: '获取控制权' })));
-  const stick = screen.getByRole('group', { name: '前进后退摇杆' });
+  const stick = screen.getByRole('group', { name: '驾驶摇杆' });
   await act(async () => fireEvent.keyDown(stick, { key: 'ArrowUp' }));
   await act(async () => fireEvent.keyUp(stick, { key: 'ArrowUp' }));
   await act(async () => fireEvent.pointerDown(stick, { pointerId: 7 }));

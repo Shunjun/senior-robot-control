@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 
+import { CircleDot, ChevronDown, Activity, ArrowLeftRight } from "lucide-react";
+import { Button } from "./components/ui/Button";
+import { SegmentedControl } from "./components/ui/SegmentedControl";
+import { EmergencyStop } from "./features/drive/EmergencyStop";
+import { useWorkspaceView } from "./features/devices/useWorkspaceView";
+import { SpeedUnitContext } from "./display/speedUnits";
 import styles from "./App.module.css";
 import { UnauthorizedError, type ControlApi, type RobotLink } from "./api/client";
 import type { RobotSummary } from "./api/protocol";
@@ -47,20 +53,21 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice
   const currentRobotId = useRef(robotId);
   currentRobotId.current = robotId;
   const [openDeviceList, setOpenDeviceList] = useState<string | null>(null);
-  const devicesOpen = robotId !== undefined && openDeviceList === robotId;
+  const devicesOpen = openDeviceList === (robotId ?? "empty");
+  const workspace = useWorkspaceView();
   const selected: RobotSummary | undefined = list.robots.find((robot) => robot.id === robotId);
 
   let main: ReactElement;
   if (robotId === undefined) {
     main = (
       <section className={styles.placeholder}>
-        <h2>选择一台设备</h2>
-        <p>从左侧设备列表选择车辆，查看状态并建立控制通道。</p>
+        <CircleDot size={52} aria-hidden="true" /><h2>选择一台设备</h2>
+        <p>选择已配对车辆或添加设备，建立真实控制通道。</p>
       </section>
     );
   } else if (selected !== undefined) {
     // The key remounts the panel, so nothing of the previous robot survives a switch.
-    main = <RobotPanel key={selected.id} robot={selected} link={link} onLinkLost={onLinkLost} />;
+    main = <RobotPanel key={selected.id} robot={selected} link={link} onLinkLost={onLinkLost} page={workspace.page} onPageChange={workspace.setPage} statusOpen={workspace.statusOpen} />;
   } else if (list.status === "loading") {
     main = (
       <section className={styles.placeholder} role="status">
@@ -77,19 +84,17 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice
   }
 
   return (
-    <div className={styles.shell} data-workspace={selected !== undefined}>
+    <SpeedUnitContext.Provider value={workspace.unit}><div className={styles.shell} data-workspace={selected !== undefined}>
       <header className={styles.header}>
-        <div className={styles.brand}>
-          <span className={styles.mark} aria-hidden="true" />
-          <span className={styles.brandName}>车辆控制台</span>
-          <span className={styles.brandTag}>SENIOR · CTRL</span>
-        </div>
-        {selected !== undefined && (
-          <button type="button" className={styles.switchDevice} aria-expanded={devicesOpen}
-            aria-controls="device-switcher" onClick={() => setOpenDeviceList(devicesOpen ? null : selected.id)}>
-            切换车辆
-          </button>
-        )}
+        <div className={styles.brand}><CircleDot aria-hidden="true" /><span className={styles.brandName}>WHEEL</span></div>
+        <Button aria-label={selected ? "切换车辆" : "选择车辆"} aria-expanded={devicesOpen} aria-controls="device-switcher" onClick={() => setOpenDeviceList(devicesOpen ? null : robotId ?? 'empty')}>
+          <span>{selected?.name ?? '选择车辆'}</span><ChevronDown size={16} /><span className={styles.srOnly}>{selected ? '切换车辆' : '选择设备'}</span>
+        </Button>
+        <SegmentedControl label="页面视图" value={workspace.page} disabled={!selected} onChange={workspace.setPage} options={[{value:'control',label:'控制'},{value:'logs',label:'日志'},{value:'settings',label:'设置'}]} />
+        <div className={styles.grow} />
+        <Button aria-label="切换速度单位" disabled={!selected} onClick={() => workspace.setUnit(workspace.unit === 'm/s' ? 'km/h' : 'm/s')}>{workspace.unit}<ArrowLeftRight size={16} /></Button>
+        <Button disabled={!selected} aria-expanded={workspace.statusOpen} onClick={() => workspace.setStatusOpen(!workspace.statusOpen)}><Activity size={16} />状态</Button>
+        {selected && <EmergencyStop key={selected.id} link={link} compact />}
         <button type="button" className={styles.logout} disabled={loggingOut} onClick={onLogout}>
           退出登录
         </button>
@@ -99,7 +104,7 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice
           {notice}
         </p>
       )}
-      <aside id="device-switcher" className={styles.side} data-open={devicesOpen}>
+      <aside id="device-switcher" className={styles.side} data-open={devicesOpen || selected === undefined}>
         <DeviceList list={list} selectedId={robotId ?? null} onRefresh={onRefresh} pairing={pairing}
           onRevoke={onRevoke === null ? null : async (id) => {
             await onRevoke(id);
@@ -107,7 +112,7 @@ function Shell({ list, link, onRefresh, onLinkLost, onLogout, loggingOut, notice
           }} />
       </aside>
       <main className={styles.main}>{main}</main>
-    </div>
+    </div></SpeedUnitContext.Provider>
   );
 }
 

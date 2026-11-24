@@ -14,12 +14,12 @@
 .editor { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: var(--space-2); }
 .editor label { display: grid; gap: var(--space-1); color: var(--ink-soft); font-size: 12px; }
 .editor input, .editor select { min-height: 40px; padding: 0 var(--space-2); color: var(--ink); background: var(--graphite-950); border: 1px solid var(--line); }
-.editor button, .primary { min-height: 42px; padding: 0 var(--space-3); color: var(--graphite-950); font-weight: 700; background: var(--amber); border: 0; }
+.editor button, .primary { min-height: 42px; padding: 0 var(--space-3); color: white; font-weight: 600; background: var(--amber); border: 0; }
 .editor button:disabled, .primary:disabled { opacity: .45; cursor: not-allowed; }
 .warning { margin: 0; padding: var(--space-2); background: var(--amber-wash); border-left: 3px solid var(--amber); }
 .taskRow { display: flex; align-items: center; gap: var(--space-2); margin: var(--space-1) 0; }
-.taskRow code { flex: 1; color: var(--teal); }
-.taskRow button { min-height: 34px; color: var(--ink-soft); background: var(--graphite-700); border: 1px solid var(--line); }
+.taskRow code { flex: 1 0 100%; color: var(--teal); }
+.taskRow button { border-radius:8px;padding:8px;min-height: 44px; color: var(--ink-soft); background: var(--graphite-700); border: 1px solid var(--line); }
 
 .workspace {
   display: grid;
@@ -45,13 +45,13 @@
 .route li::marker { color: var(--teal); }
 .drawerToggle { display: none; }
 .taskRow { flex-wrap: wrap; }
-.taskRow select { min-height: 34px; max-width: 100%; }
+.taskRow select { min-height: 44px; max-width: 100%; }
 .taskRow code { overflow-wrap: anywhere; }
 
 @media (max-width: 680px) {
   .workspace { grid-template: minmax(0, 1fr) auto / minmax(0, 1fr); }
   .workspace .panel { max-height: 52dvh; }
-  .drawerToggle { display: block; margin-inline-start: auto; min-height: 34px; }
+  .drawerToggle { display: block; margin-inline-start: auto; min-height: 44px; }
   .panel[data-open="false"] .body, .panel[data-open="false"] .footer { display: none; }
 }
 
@@ -66,3 +66,5 @@
 .routePreview { padding: var(--space-2); margin-block: var(--space-2); border: 1px solid var(--teal); }
 .routePreview h4 { margin: 0 0 var(--space-2); }
 .routePreview button { min-height: 36px; color: var(--ink-soft); background: var(--graphite-700); border: 1px solid var(--line); }
+
+.panel>div>button,.panel fieldset>button,.drawerToggle { min-height:44px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--graphite-800);cursor:pointer }.panel input,.panel select { min-height:44px;border-radius:8px }.taskRow code { font-size:14px;line-height:1.6 }.primary { border-radius:8px }

@@ -9,6 +9,7 @@ import {
   type ReactElement,
 } from "react";
 
+import { ZoomIn, ZoomOut, LocateFixed, Maximize } from "lucide-react";
 import type { MapRef } from "../../api/protocol";
 import styles from "./Map.module.css";
 
@@ -186,6 +187,7 @@ export interface MapCanvasProps {
   pickEnabled?: boolean;
   onPick?: (pose: Pose) => void;
   compact?: boolean;
+  mini?: boolean;
   taskRoute?: readonly Point[];
   waypointMarkers?: readonly WaypointMarker[];
   highlightedWaypoint?: string | null;
@@ -197,11 +199,10 @@ const DEFAULT_HEIGHT = 420;
 const ZOOM_STEP = 1.25;
 const KEY_PAN_PX = 40;
 const DRAG_THRESHOLD_PX = 4;
-const SCALE_LENGTHS_M = [0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100] as const;
+const SCALE_LENGTHS_M = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100] as const;
 
 const INK = "#f2ead9";
-const AMBER = "#ffb21a";
-const RED = "#ec3a2f";
+const AMBER = "#ff7532";
 
 interface Gesture {
   pointerId: number;
@@ -213,7 +214,7 @@ interface Gesture {
 }
 
 function scaleBar(zoom: number): { meters: number; pixels: number } {
-  const meters = SCALE_LENGTHS_M.find((length) => length * zoom >= 60) ?? 100;
+  const meters = SCALE_LENGTHS_M.reduce<number>((best, length) => Math.abs(length * zoom - 45) < Math.abs(best * zoom - 45) ? length : best, 1);
   return { meters, pixels: meters * zoom };
 }
 
@@ -236,6 +237,7 @@ export function MapCanvas({
   pickEnabled = false,
   onPick,
   compact = false,
+  mini = false,
   taskRoute = [],
   waypointMarkers = [],
   highlightedWaypoint = null,
@@ -305,12 +307,11 @@ export function MapCanvas({
     if (context === null) return null;
     const pixels = context.createImageData(grid.width, grid.height);
     grid.values.forEach((cell, index) => {
-      if (cell === -1) return;
-      const shade = Math.round(223 - 1.8 * cell);
+      const color = cell === -1 ? [66,68,73] : cell === 0 ? [216,211,203] : cell >= 50 ? [85,87,91] : [174,170,166];
       const offset = index * 4;
-      pixels.data[offset] = shade;
-      pixels.data[offset + 1] = shade;
-      pixels.data[offset + 2] = shade;
+      pixels.data[offset] = color[0]!;
+      pixels.data[offset + 1] = color[1]!;
+      pixels.data[offset + 2] = color[2]!;
       pixels.data[offset + 3] = 255;
     });
     context.putImageData(pixels, 0, 0);
@@ -364,8 +365,8 @@ export function MapCanvas({
       let color: string | null = null;
       if (layer === "raw") color = inRaw ? AMBER : null;
       else if (layer === "filtered") color = inFiltered ? INK : null;
-      else if (inFiltered) color = INK;
-      else if (inRaw) color = RED;
+      else if (inFiltered) color = "#55575b";
+      else if (inRaw) color = "#aeaaa6";
       if (color === null) continue;
       context.fillStyle = color;
       context.fillRect(entry.cell[0], entry.cell[1], 1, 1);
@@ -486,7 +487,9 @@ export function MapCanvas({
       ArrowDown: { x: 0, y: -step },
     };
     const move = moves[event.key];
-    if (move !== undefined) {
+    if (event.key === "Enter" && picking && onPick) {
+      event.preventDefault();onPick({ ...view.center, yaw: draft?.yaw ?? 0 });
+    } else if (move !== undefined) {
       event.preventDefault();
       setPlacement((current) => ({
         zoom: current.zoom,
@@ -508,7 +511,7 @@ export function MapCanvas({
   const preview = pending ?? draft;
 
   return (
-    <section className={styles.mapPanel} data-stale={stale} data-compact={compact}>
+    <section className={styles.mapPanel} data-stale={stale} data-compact={compact} data-mini={mini}>
       <div className={styles.toolbar}>
         {map.grid === undefined && <fieldset className={styles.layers}>
           <legend className={styles.legend}>显示层</legend>
@@ -531,18 +534,21 @@ export function MapCanvas({
           ))}
         </fieldset>}
         <div className={styles.zoomGroup}>
-          <button type="button" className={styles.tool} onClick={() => zoomBy(ZOOM_STEP)}>
-            放大
+          <button type="button" aria-label="放大" className={styles.tool} onClick={() => zoomBy(ZOOM_STEP)}>
+            <ZoomIn size={18} />
           </button>
-          <button type="button" className={styles.tool} onClick={() => zoomBy(1 / ZOOM_STEP)}>
-            缩小
+          <button type="button" aria-label="缩小" className={styles.tool} onClick={() => zoomBy(1 / ZOOM_STEP)}>
+            <ZoomOut size={18} />
           </button>
-          <button type="button" className={styles.tool} onClick={fit}>
-            适应窗口
+          <button type="button" aria-label="适应窗口" className={styles.tool} onClick={fit}>
+            <Maximize size={18} />
           </button>
+          <button type="button" className={styles.tool} aria-label="居中车辆" disabled={stale || robot === null} onClick={() => { if(robot) setPlacement(current => ({ ...current, center: {x:robot.x,y:robot.y} })); }}><LocateFixed size={18} /></button>
+          <span className={styles.scaleHtml}><i style={{width:bar.pixels}} />{bar.meters} m</span>
         </div>
       </div>
 
+      {!stale && robot !== null && <span className={styles.geometryNote}>实际轮廓尺寸不可用</span>}
       {stale && (
         <p className={styles.staleBanner}>缓存地图 · 非实时。不能在这张图上下达目标。</p>
       )}
@@ -628,7 +634,7 @@ export function MapCanvas({
                   }
                 }}>
                 <title>{waypoint.waypoint_id}</title>
-                <circle r={12} />
+                <circle r={12} /><text textAnchor="middle" dominantBaseline="central" className={styles.waypointName}>{waypoint.waypoint_id.slice(0,3)}</text>
               </g>
             );
           })}
@@ -649,14 +655,6 @@ export function MapCanvas({
             </g>
           )}
           {!stale && robot !== null && <Marker kind="robot" pose={robot} view={view} />}
-          <g className={styles.scale} transform={`translate(16 ${size.height - 18})`}>
-            <line x1={0} y1={0} x2={bar.pixels} y2={0} />
-            <line x1={0} y1={-4} x2={0} y2={4} />
-            <line x1={bar.pixels} y1={-4} x2={bar.pixels} y2={4} />
-            <text x={bar.pixels + 8} y={4}>
-              {bar.meters} m
-            </text>
-          </g>
         </svg>
       </div>
       <p id={hintId} className={styles.hint}>
@@ -703,8 +701,7 @@ function Marker({
       transform={`translate(${at.x} ${at.y}) rotate(${degrees})`}
     >
       <title>{MARKER_LABEL[kind]}</title>
-      <circle r={9} />
-      <path d="M 0 0 L 22 0 M 14 -6 L 22 0 L 14 6" />
+      {kind === "robot" ? <path d="M 13 0 L -11 -9 L -6 0 L -11 9 Z" className={styles.robotArrow} /> : <><circle r={9} /><path d="M 0 0 L 22 0 M 14 -6 L 22 0 L 14 6" /></>}
     </g>
   );
 }

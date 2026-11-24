@@ -3,10 +3,11 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
 import type { ResponsePayload, RobotSnapshot, TaskSummary } from "../../api/protocol";
 import { getTaskDetails, type TaskDetails, type WorkspaceWaypoint } from "../../api/workspace";
-import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
+import { MapCanvas, type OccupancySnapshot, type Pose, type MapCanvasProps } from "../map/MapCanvas";
 import { listCurrentWaypoints } from "../map/useWorkspaceMap";
 import { NEW_TASK, ScheduleEditor } from "./ScheduleEditor";
 import { draftSchedule, scheduleDraft, scheduleSummary, type TaskDraft } from "./schedule";
+import { Switch } from "../../components/ui/Switch";
 import styles from "./Tasks.module.css";
 
 export interface TaskWorkspaceData {
@@ -22,26 +23,33 @@ interface TaskListProps {
   workspace?: TaskWorkspaceData | undefined;
   unavailable?: string | undefined;
   map?: OccupancySnapshot | undefined;
+  mapCanvasProps?: Partial<MapCanvasProps> | undefined;
+  renderWorkspace?: ((mapView: ReactElement, panel: ReactElement) => ReactElement) | undefined;
 }
 
-export function TaskList({ snapshot, link, workspace, unavailable, map }: TaskListProps): ReactElement {
+export function TaskList({ snapshot, link, workspace, unavailable, map, mapCanvasProps, renderWorkspace }: TaskListProps): ReactElement {
   const ref = snapshot.map_ref;
   //Compatible: older snapshots omit map_generation; still require matching map_ref.
   const matches = ref !== null && workspace?.map.map_ref?.map_id === ref.map_id
     && workspace.map.map_ref.reference_revision === ref.reference_revision
-    && (snapshot.map_generation === undefined || workspace.grid_id === snapshot.map_generation);
+    && ((snapshot.map_grid_id ?? snapshot.map_generation) === undefined || workspace.grid_id === (snapshot.map_grid_id ?? snapshot.map_generation));
   const live = snapshot.connected && !snapshot.stale;
-  const scope = JSON.stringify([snapshot.robot_id, ref?.map_id, ref?.reference_revision, matches ? workspace.grid_id : null, live]);
+  const scope = JSON.stringify([snapshot.robot_id, ref?.map_id, ref?.reference_revision, (snapshot.map_grid_id === undefined ? snapshot.map_generation ?? workspace?.grid_id : snapshot.map_generation) ?? null, live]);
   return <TaskEditor key={scope} snapshot={snapshot} link={link}
-    workspace={live && matches ? workspace : undefined} unavailable={unavailable} map={map} />;
+    workspace={live && matches ? workspace : undefined} unavailable={unavailable} map={map} mapCanvasProps={mapCanvasProps} renderWorkspace={renderWorkspace} />;
 }
 
-function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListProps): ReactElement {
+function TaskEditor({ snapshot, link, workspace, unavailable, map, mapCanvasProps, renderWorkspace }: TaskListProps): ReactElement {
   const [draft, setDraft] = useState<TaskDraft>(NEW_TASK);
   const [editing, setEditing] = useState<TaskDetails | null>(null);
   const [preview, setPreview] = useState<TaskDetails | null>(null);
   const [routeBlocked, setRouteBlocked] = useState(false);
   const [waypointIds, setWaypointIds] = useState<string[]>([]);
+  const [pickingRoute, setPickingRoute] = useState(false);
+  const [draftPoints, setDraftPoints] = useState<Array<WorkspaceWaypoint & { operationId: string }>>([]);
+  const confirmedCount = useRef(0);
+  const alive = useRef(true);
+  useEffect(() => { alive.current=true;return () => {alive.current=false;}; }, []);
   const [selected, setSelected] = useState("");
   const [highlight, setHighlight] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
@@ -62,7 +70,8 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   const live = snapshot.connected && !snapshot.stale;
   const progress = live && snapshot.route_progress?.map_generation === snapshot.map_generation
     ? snapshot.route_progress : undefined;
-  const available = catalog ?? workspace?.waypoints ?? [];
+  const persisted = catalog ?? workspace?.waypoints ?? [];
+  const available = [...persisted, ...draftPoints];
   const waypoints = new Map(available.map((waypoint) => [waypoint.waypoint_id, waypoint]));
   const resolved = waypointIds.map((id) => waypoints.get(id));
   const route = resolved.filter((point) => point !== undefined);
@@ -73,7 +82,7 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
   const mapRoute = routeBlocked || routeMissing ? [] : previewPoints ?? route;
   const schedule = draftSchedule(draft);
   const canSubmit = live && workspace !== undefined && schedule !== null && draft.task_id.trim() !== ""
-    && route.length > 0 && !missingWaypoint && !pending && !conflict && !creatingWaypoint && preview === null;
+    && route.length > 0 && !missingWaypoint && !pending && !conflict && !creatingWaypoint && !pickingRoute && preview === null;
 
   function clearWaypointDraft(): void {
     setCreatingWaypoint(false);
@@ -149,6 +158,9 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
 
   function newTask(): void {
     clearWaypointDraft();
+    setPickingRoute(false);
+    setDraftPoints([]);
+    confirmedCount.current=0;
     setEditing(null);
     setPreview(null);
     setRouteBlocked(false);
@@ -216,20 +228,39 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
       enabled: editing?.enabled ?? true,
     };
     try {
+      for(const id of waypointIds) {
+        const point=draftPoints.find(candidate=>candidate.waypoint_id===id);
+        if(!point) continue;
+        if(!workspace.waypointWrites) throw new Error('航点写入不可用');
+        const reply=await link.request<ResponsePayload>('waypoint.create',{operation_id:point.operationId,body:{...snapshot.map_ref,grid_id:workspace.grid_id,waypoint_id:id,x:point.x,y:point.y,yaw:point.yaw}});
+        if(!alive.current) return;
+        if(!reply.ok) throw new Error('航点保存未确认');
+        confirmedCount.current++;
+        const confirmed: WorkspaceWaypoint={waypoint_id:id,x:point.x,y:point.y,yaw:point.yaw,kind:'waypoint',status:'active'};
+        setCatalog(previous=>[...(previous ?? workspace.waypoints),confirmed]);
+        setDraftPoints(previous=>previous.filter(candidate=>candidate.waypoint_id!==id));
+      }
+      if(!alive.current) return;
       const response = await link.request<ResponsePayload>(editing === null ? "task.create" : "task.update", {
         operation_id: crypto.randomUUID(),
         ...(editing === null ? {} : { expected_revision: editing.revision }),
         body,
       });
+      if(!alive.current) return;
       if (response.ok) {
         // Require a fresh revision before another update. An old summary is never promoted.
         newTask();
         setMessage("车端已确认保存任务。");
       } else {
-        setMessage("保存未确认。");
+        setMessage(confirmedCount.current > 0 ? `已确认 ${confirmedCount.current} 个航点，任务尚未保存。草稿已保留。` : "保存未确认。");
       }
     } catch (error) {
-      if (error instanceof CommandError && error.code === "conflict") {
+      if(!alive.current) return;
+      const versionConflict=error instanceof CommandError && error.code === "conflict";
+      if(versionConflict) setConflict(true);
+      if(confirmedCount.current > 0) {
+        setMessage(`已确认 ${confirmedCount.current} 个航点，任务尚未保存。草稿已保留，${versionConflict ? "车端版本已变化，请重载车端版本。" : "可重试未确认部分。"}`);
+      } else if (error instanceof CommandError && error.code === "conflict") {
         setConflict(true);
         setMessage("车端版本已变化。已保留草稿，可重新读取车端版本。");
       } else {
@@ -261,31 +292,37 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
 
   const displayedMap = live ? workspace?.map ?? map : undefined;
   const liveMapTelemetry = live && snapshot.localized && workspace !== undefined
-    && snapshot.map_generation !== undefined && snapshot.map_generation === workspace.grid_id
+    && snapshot.map_generation !== undefined && (snapshot.map_grid_id ?? snapshot.map_generation) === workspace.grid_id
     && snapshot.map_ref !== null && displayedMap?.map_ref != null
     && snapshot.map_ref.map_id === displayedMap.map_ref.map_id
     && snapshot.map_ref.reference_revision === displayedMap.map_ref.reference_revision;
-  return (
-    <div className={styles.workspace}>
+  const mapView = (
       <div className={styles.map}>
         {displayedMap === undefined ? (
           <p className={styles.warning}>{unavailable ?? "地图不可用"}</p>
         ) : (
           <>
-            <MapCanvas key={workspace?.grid_id ?? "read-only"} map={displayedMap} stale={!live} compact
+            <MapCanvas key={JSON.stringify([snapshot.robot_id, snapshot.map_ref, snapshot.map_generation ?? workspace?.grid_id])} map={displayedMap} stale={!live} compact
               robot={liveMapTelemetry ? snapshot.robot_pose ?? null : null}
               scanPoints={liveMapTelemetry ? snapshot.scan_points ?? [] : []}
               taskRoute={workspace === undefined ? [] : mapRoute.filter(point => point !== undefined)}
               waypointMarkers={available}
               highlightedWaypoint={highlight}
               draft={waypointDraft}
-              pickEnabled={creatingWaypoint && !pending}
-              onPick={setWaypointDraft}
-              {...(pending || creatingWaypoint || preview !== null ? {} : { onAddWaypoint: addWaypoint })} />
-            {(!liveMapTelemetry || snapshot.robot_pose == null) && <p className={styles.note}>车辆位置暂不可用</p>}
+              pickEnabled={(creatingWaypoint || pickingRoute) && !pending}
+              onPick={pose => {
+                if(!pickingRoute){setWaypointDraft(pose);return;}
+                const id=`point-${crypto.randomUUID().slice(0,16)}`;
+                setDraftPoints(previous=>[...previous,{...pose,waypoint_id:id,kind:'waypoint',status:'draft',operationId:crypto.randomUUID()}]);
+                setWaypointIds(previous=>[...previous,id]);
+              }}
+              {...(pending || creatingWaypoint || pickingRoute || preview !== null ? {} : { onAddWaypoint: addWaypoint })} {...mapCanvasProps} />
+            {(mapCanvasProps?.robot !== undefined ? mapCanvasProps.robot === null : !liveMapTelemetry || snapshot.robot_pose == null) && <p className={styles.note}>车辆位置暂不可用</p>}
           </>
         )}
       </div>
+    );
+  const panel = (
       <section className={styles.panel} aria-label="任务管理" data-open={drawerOpen}>
         <header className={styles.header}>
           <h3>任务与计划</h3>
@@ -303,6 +340,7 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
             </p>
           )}
           <div>
+            <button type="button" onClick={() => setMessage("暂未实现：FIFO 等待队列")}>等待队列</button>
             {(snapshot.tasks ?? []).length === 0 && <p>暂无任务</p>}
             {(snapshot.tasks ?? []).map((task) => (
               <div className={styles.taskRow} key={task.task_id} data-selected={(preview?.task_id ?? editing?.task_id) === task.task_id}>
@@ -311,10 +349,8 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
                   disabled={!workspace || pending} onClick={() => void openTask(task.task_id, "view")}>查看路线</button>
                 <button type="button" aria-label={`编辑 ${task.task_id}`} disabled={!workspace || pending}
                   onClick={() => void openTask(task.task_id)}>编辑</button>
-                <button type="button" disabled={!live || pending}
-                  onClick={() => void changeTask(task, task.enabled ? "disable" : "enable")}>
-                  {task.enabled ? "停用计划" : "启用计划"}
-                </button>
+                <Switch label={task.enabled ? "停用计划" : "启用计划"} checked={task.enabled} disabled={!live || pending} onChange={enabled => void changeTask(task, enabled ? 'enable' : 'disable')} />
+                <button type="button" onClick={() => setMessage('暂未实现：立即执行已保存任务')}>立即执行</button>
                 <button type="button" disabled={!live || pending}
                   onClick={() => void changeTask(task, "delete")}>删除</button>
               </div>
@@ -332,6 +368,8 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
           </section>}
           <fieldset className={styles.fields} disabled={!workspace || pending || preview !== null}>
             <legend>{editing === null ? "新建任务" : `编辑任务 · r${editing.revision}`}</legend>
+            {workspace?.waypointWrites && <button type="button" onClick={() => setPickingRoute(!pickingRoute)}>{pickingRoute ? '完成选点' : '多点路线选取'}</button>}
+            {pickingRoute && <p>在地图上依次选点；键盘方向键移动，Enter 添加中心点。完成后编辑定时与顺序，再保存。</p>}
             <ScheduleEditor value={draft} onChange={setDraft} editing={editing !== null} />
             <div className={styles.taskRow}>
               <label>
@@ -366,7 +404,11 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
             )}
             <ol aria-label="任务航点顺序" className={styles.route}>
               {waypointIds.map((id, index) => (
-                <li key={`${index}:${id}`}>
+                <li key={`${index}:${id}`} draggable={!pending && workspace !== undefined && preview === null} onDragStart={event => event.dataTransfer.setData('text/plain', String(index))} onDragOver={event => event.preventDefault()} onDrop={event => {
+                  event.preventDefault(); const raw=event.dataTransfer.getData('text/plain');const from=Number(raw);
+                  if(pending || workspace === undefined || preview !== null || raw === '' || !Number.isInteger(from) || from<0 || from>=waypointIds.length) return;
+                  const next=[...waypointIds];const point=next.splice(from,1)[0]!;next.splice(index,0,point);setWaypointIds(next);
+                }}>
                   <div className={styles.taskRow} onFocus={() => setHighlight(id)}>
                     <code>{id}</code>
                     <button type="button" aria-label={`上移 ${id}`} disabled={index === 0}
@@ -392,6 +434,6 @@ function TaskEditor({ snapshot, link, workspace, unavailable, map }: TaskListPro
             onClick={() => void submit()}>提交任务</button>
         </footer>
       </section>
-    </div>
   );
+  return renderWorkspace ? renderWorkspace(mapView, panel) : <div className={styles.workspace}>{mapView}{panel}</div>;
 }

@@ -56,7 +56,7 @@ describe("task schedules", () => {
       }} />;
     }
     render(<Editor />);
-    fireEvent.change(screen.getByLabelText("任务编号"), { target: { value: "daily" } });
+    fireEvent.change(screen.getByLabelText("任务名称（编号）"), { target: { value: "daily" } });
     expect(draftSchedule(changed.at(-1)!)).toEqual({ kind: "cron", expression: "0 9 * * *" });
     expect(changed.at(-1)?.timezone).toBe("Asia/Shanghai");
 
@@ -76,7 +76,7 @@ describe("task schedules", () => {
       ],
     };
     render(<TaskList snapshot={listed} link={robotLink} workspace={workspace} />);
-    fireEvent.change(screen.getByLabelText("任务编号"), { target: { value: "evening" } });
+    fireEvent.change(screen.getByLabelText("任务名称（编号）"), { target: { value: "evening" } });
     fireEvent.keyDown(screen.getByRole("button", { name: "添加地图航点 gate" }), { key: "Enter" });
     fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
     await screen.findByText("车端已确认保存任务。");
@@ -87,9 +87,9 @@ describe("task schedules", () => {
     };
     expect(created.body.waypoint_ids).toEqual(["gate"]);
 
-    fireEvent.click(screen.getByRole("button", { name: "停用计划" }));
+    fireEvent.click(screen.getByRole("switch", { name: "停用计划" }));
     await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls).toHaveLength(2));
-    fireEvent.click(screen.getByRole("button", { name: "启用计划" }));
+    fireEvent.click(screen.getByRole("switch", { name: "启用计划" }));
     await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls).toHaveLength(3));
     fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]!);
     await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls).toHaveLength(4));
@@ -429,7 +429,7 @@ it.each(['daily', 'weekly', 'interval'] as const)('creates, saves and reopens a 
     return { ok: true } as never;
   });
   const { rerender } = render(<TaskList snapshot={snapshot} link={robotLink} workspace={workspace} />);
-  fireEvent.change(screen.getByLabelText('任务编号'), { target: { value: 'daily' } });
+  fireEvent.change(screen.getByLabelText('任务名称（编号）'), { target: { value: 'daily' } });
   fireEvent.change(screen.getByLabelText('计划类型'), { target: { value: mode } });
   if (mode === 'interval') {
     fireEvent.change(screen.getByLabelText('间隔数值'), { target: { value: '2' } });
@@ -474,4 +474,76 @@ it('keeps an existing complex cron unchanged when saving other task fields', asy
   expect(robotLink.request).toHaveBeenCalledWith('task.update', expect.objectContaining({
     expected_revision: 4, body: expect.objectContaining({ task_id: 'daily', timezone: 'Europe/Berlin', schedule: { kind: 'cron', expression } })
   }));
+});
+
+it("accepts independent raster and reference versions, retiring drafts on reference change", () => {
+  const robotLink = link();
+  const state = { ...snapshot, map_generation: "reference-7", map_grid_id: workspace.grid_id };
+  const page = render(<TaskList snapshot={state} link={robotLink} workspace={workspace} />);
+  const input = screen.getByLabelText("任务名称（编号）") as HTMLInputElement;
+  expect(input.closest("fieldset")?.disabled).toBe(false);
+  fireEvent.change(input, { target: { value: "draft-current" } });
+  page.rerender(<TaskList snapshot={{ ...state, map_generation: "reference-8", map_ref: { map_id: "another", reference_revision: 3 } }} link={robotLink} workspace={workspace} />);
+  expect((screen.getByLabelText("任务名称（编号）") as HTMLInputElement).value).toBe("");
+  expect((screen.getByLabelText("任务名称（编号）") as HTMLInputElement).closest("fieldset")?.disabled).toBe(true);
+});
+
+it('keeps confirmed waypoints and the route draft when the second draft point fails', async () => {
+  const robotLink = link();
+  const request=vi.mocked(robotLink.request);
+  let creates=0;
+  request.mockImplementation(async (type) => {
+    if(type==='waypoint.create' && ++creates===2) throw new Error('second waypoint rejected');
+    return {ok:true,status:'succeeded'} as never;
+  });
+  render(<TaskList snapshot={snapshot} link={robotLink} workspace={{...workspace,waypointWrites:true}} />);
+  fireEvent.change(screen.getByLabelText('任务名称（编号）'),{target:{value:'route-new'}});
+  fireEvent.click(screen.getByRole('button',{name:'多点路线选取'}));
+  const surface=screen.getByRole('application',{name:'地图'});
+  fireEvent.keyDown(surface,{key:'Enter'});
+  fireEvent.keyDown(surface,{key:'ArrowRight'});
+  fireEvent.keyDown(surface,{key:'Enter'});
+  fireEvent.click(screen.getByRole('button',{name:'完成选点'}));
+  fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
+  await screen.findByText(/已确认 1 个航点，任务尚未保存/);
+  expect(request.mock.calls.filter(call=>call[0]==='task.create')).toHaveLength(0);
+  expect(screen.getByLabelText('任务名称（编号）')).toHaveProperty('value','route-new');
+  fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
+  await screen.findByText('车端已确认保存任务。');
+  expect(request.mock.calls.filter(call=>call[0]==='waypoint.create')).toHaveLength(3);
+});
+
+it('makes missing immediate execution and queue actions explicit without sending requests', () => {
+  const robotLink=link();
+  render(<TaskList snapshot={{...snapshot,tasks:[{task_id:'saved',revision:1,enabled:true}]}} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button',{name:'立即执行'}));
+  expect(screen.getByText('暂未实现：立即执行已保存任务')).toBeTruthy();
+  fireEvent.click(screen.getByRole('button',{name:'等待队列'}));
+  expect(screen.getByText('暂未实现：FIFO 等待队列')).toBeTruthy();
+  expect(robotLink.request).not.toHaveBeenCalled();
+});
+
+it('persists drag order and a subsequent keyboard-accessible adjustment from the same route', async () => {
+  const robotLink=taskLink(['gate','hall','dock']);
+  render(<TaskList snapshot={listedSnapshot} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button',{name:'编辑 daily'}));
+  await screen.findByRole('button',{name:'上移 dock'});
+  const route=screen.getByRole('list',{name:'任务航点顺序'});
+  const items=route.querySelectorAll('li');
+  const values=new Map<string,string>();const dataTransfer={setData:(k:string,v:string)=>values.set(k,v),getData:(k:string)=>values.get(k)??''};
+  fireEvent.dragStart(items[2]!,{dataTransfer});
+  fireEvent.drop(items[0]!,{dataTransfer});
+  expect([...route.querySelectorAll('code')].map(node=>node.textContent)).toEqual(['dock','gate','hall']);
+  fireEvent.click(screen.getByRole('button',{name:'上移 hall'}));
+  fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
+  await screen.findByText('车端已确认保存任务。');
+  expect(robotLink.request).toHaveBeenCalledWith('task.update',expect.objectContaining({body:expect.objectContaining({waypoint_ids:['dock','hall','gate']})}));
+});
+
+it('keeps the saved-route preview read-only while retaining the current editable draft', async () => {
+  const robotLink=taskLink(['gate','hall']);
+  render(<TaskList snapshot={listedSnapshot} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button',{name:'查看路线 daily'}));
+  const preview=await screen.findByRole('region',{name:'所选任务路线'});
+  expect([...preview.querySelectorAll('li')].some(item=>item.draggable)).toBe(false);
 });

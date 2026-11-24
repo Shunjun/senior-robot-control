@@ -1,62 +1,79 @@
-import { expect, test } from "@playwright/test";
+import { expect, test } from '@playwright/test';
+import { fileURLToPath } from 'node:url';
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL;
-const password = process.env.SENIOR_CONTROL_PASSWORD;
+test.skip(baseURL === undefined, 'PLAYWRIGHT_BASE_URL is required; only a static preview is used');
+const fixture = fileURLToPath(new URL('./fixtures/control-fixture.js', import.meta.url));
 
-test.skip(baseURL === undefined, "PLAYWRIGHT_BASE_URL is required; no server is started");
-test.skip(password === undefined, "SENIOR_CONTROL_PASSWORD is required");
-
-test("test_browser_controls_simulated_robot", async ({ page }, testInfo) => {
-  await page.goto(new URL("/login", baseURL).toString());
-  await page.getByLabel("管理员密码").fill(password as string);
-  await page.getByRole("button", { name: "进入控制台" }).click();
-  await page.getByRole("navigation", { name: "设备列表" }).waitFor();
-
-  const robot = page.getByRole("link").filter({ hasText: "在线" }).first();
-  await expect(robot).toBeVisible();
-  await robot.click();
-  await page.getByRole("button", { name: "获取控制权" }).click();
-
-  const forward = page.getByRole("group", { name: "前进后退摇杆" });
-  await forward.focus();
-  await page.keyboard.down("ArrowUp");
-  await expect(page.getByRole("button", { name: "释放控制权" })).toBeVisible();
-  await page.keyboard.up("ArrowUp");
-  await expect(page.getByRole("button", { name: "急停" })).toBeEnabled();
-
-  await page.screenshot({
-    path: testInfo.outputPath("desktop-drive.png"),
-    fullPage: true,
-  });
-});
-
-for (const viewport of [
-  { width: 1440, height: 900 },
-  { width: 390, height: 844 },
-  { width: 844, height: 390 },
-]) {
-  test(`manual driving fits a ${viewport.width} × ${viewport.height} viewport`, async ({ page }) => {
+for (const viewport of [{width:1440,height:1000},{width:390,height:844}]) {
+  test.describe(`${viewport.width}px fixture`,()=>{
+  test.use({viewport,hasTouch:viewport.width===390,isMobile:viewport.width===390});
+  test(`safe production-client workspace at ${viewport.width}px`, async ({page},testInfo) => {
     await page.setViewportSize(viewport);
-    await page.goto(new URL("/login", baseURL).toString());
-    await page.getByLabel("管理员密码").fill(password as string);
-    await page.getByRole("button", { name: "进入控制台" }).click();
-    await page.getByRole("link").filter({ hasText: "在线" }).first().click();
-
-    const controls = [
-      page.getByRole("region", { name: "实时视频" }),
-      page.getByRole("group", { name: "前进后退摇杆" }),
-      page.getByRole("group", { name: "左转右转摇杆" }),
-      page.getByRole("button", { name: "停车", exact: true }),
-      page.getByRole("button", { name: "急停", exact: true }),
-    ];
-    for (const control of controls) {
-      await expect(control).toBeInViewport({ ratio: 0.99 });
+    await page.addInitScript({path:fixture});
+    await page.goto(baseURL!);
+    await expect(page.getByRole('heading',{name:'选择一台设备'})).toBeVisible();
+    await expect(page.getByRole('button',{name:'急停',exact:true})).toHaveCount(0);
+    await page.getByRole('link',{name:/安全测试车辆 A/}).click();
+    const map=page.getByRole('application',{name:'地图'});
+    const stick=page.getByRole('group',{name:'驾驶摇杆'});
+    await expect(map).toBeVisible();
+    await page.evaluate(()=>{const w=window as unknown as Record<string,unknown>;w.mapOwner=document.querySelector('[role=application]');w.stickOwner=document.querySelector('[aria-label=驾驶摇杆]');});
+    const camera=page.getByRole('switch',{name:'摄像头'});
+    if(viewport.width===390) await camera.tap();
+    else {await camera.focus();await page.keyboard.press('Space');}
+    expect(await camera.evaluate(el=>{const track=el.children[1]!.getBoundingClientRect(),dot=el.children[1]!.firstElementChild!.getBoundingClientRect();return Math.abs((track.top+track.bottom-dot.top-dot.bottom)/2);})).toBeLessThan(.5);
+    await page.getByRole('button',{name:'交换主次画面'}).click();
+    await page.getByRole('button',{name:'放大',exact:true}).click();
+    await map.click({position:{x:40,y:40}});
+    expect(await page.evaluate(()=>document.querySelector('[data-primary]')?.getAttribute('data-primary'))).toBe('video');
+    expect(await page.evaluate(()=>{const w=window as unknown as Record<string,unknown>;return {map:w.mapOwner===document.querySelector('[role=application]'),stick:w.stickOwner===document.querySelector('[aria-label=驾驶摇杆]')};})).toEqual({map:true,stick:true});
+    await page.getByRole('switch',{name:'摄像头'}).click();
+    await expect(page.getByRole('region',{name:'实时视频'})).toHaveCount(0);
+    await page.getByRole('button',{name:'状态',exact:true}).click();
+    await expect(page.getByText('Roll 横滚')).toBeVisible();
+    await expect(page.getByText('Pitch 俯仰')).toBeVisible();
+    await page.getByRole('button',{name:'切换速度单位'}).click();
+    await expect(page.getByRole('region',{name:'手动驾驶'}).getByText('1.80',{exact:false})).toBeVisible();
+    await page.getByRole('button',{name:'状态',exact:true}).click();
+    if(viewport.width===1440){
+      const bottom=await page.evaluate(()=>['[aria-label="放大"]','nav[aria-label="车辆场景"]','div[aria-label="地图图例"]'].map(selector=>{const el=document.querySelector(selector)!;return (selector.includes('放大')?el.parentElement!:el).getBoundingClientRect().bottom;}));
+      expect(Math.max(...bottom)-Math.min(...bottom)).toBeLessThanOrEqual(1);
     }
-    const video = await controls[0]!.boundingBox();
-    expect(video?.height).toBeGreaterThanOrEqual(Math.min(viewport.height / 4, 210));
-    expect(await page.evaluate(() => ({
-      width: document.documentElement.scrollWidth,
-      height: document.documentElement.scrollHeight,
-    }))).toEqual(viewport);
+    await page.screenshot({path:testInfo.outputPath('drive.png'),fullPage:true});
+    await page.getByRole('button',{name:'获取控制权',exact:true}).click();
+    await expect(stick).toHaveAttribute('aria-disabled','false');
+    await stick.focus();await page.keyboard.down('ArrowUp');await page.keyboard.up('ArrowUp');
+    await page.getByRole('button',{name:'日志',exact:true}).click();
+    await expect(page.getByRole('log',{name:'车辆逐行日志'})).toBeVisible();
+    await expect(page.locator('img')).toHaveCount(0);
+    await expect(page.getByText(/安全 fixture：逐行日志/)).toBeVisible();
+    await page.getByRole('button',{name:'设置',exact:true}).click();
+    await expect(page.getByLabel('低档线速度上限')).toHaveValue('1.8');
+    await page.getByLabel('低档线速度上限').fill('2.16');
+    await page.getByRole('button',{name:'切换速度单位'}).click();
+    await expect(page.getByLabel('低档线速度上限')).toHaveValue('0.6');
+    await page.getByRole('button',{name:'保存驾驶设置'}).click();
+    await expect(page.getByText(/车端已确认配置生效/)).toBeVisible();
+    await page.getByRole('button',{name:'返回控制',exact:true}).click();
+    await expect(map).toBeVisible();
+    await page.getByRole('button',{name:'任务管理',exact:true}).click();
+    await page.getByRole('button',{name:'编辑 fixture-route',exact:true}).click();
+    await expect(page.getByLabel('任务名称（编号）')).toHaveValue('fixture-route');
+    const route=page.getByRole('list',{name:'任务航点顺序'});
+    await route.getByRole('button',{name:'上移 C',exact:true}).click();
+    await route.getByRole('button',{name:'上移 C',exact:true}).click();
+    await page.getByRole('button',{name:'提交任务',exact:true}).click();
+    await expect(page.getByText('车端已确认保存任务。')).toBeVisible();
+    const before=await page.evaluate(()=>((window as unknown as {__wheelFixture:{calls:unknown[]}}).__wheelFixture.calls.length));
+    await page.getByRole('button',{name:'立即执行',exact:true}).first().click();
+    await expect(page.getByText('暂未实现：立即执行已保存任务')).toBeVisible();
+    expect(await page.evaluate(()=>((window as unknown as {__wheelFixture:{calls:unknown[]}}).__wheelFixture.calls.length))).toBe(before);
+    expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
+    await page.screenshot({path:testInfo.outputPath('tasks.png'),fullPage:true});
+    const calls=await page.evaluate(()=>((window as unknown as {__wheelFixture:{calls:Array<{type?:string;payload?:unknown}>}}).__wheelFixture.calls));
+    expect(calls.some(call=>call.type==='control.release')).toBe(true);
+    expect(calls.find(call=>call.type==='task.update')?.payload).toMatchObject({body:{waypoint_ids:['C','A','B'],schedule:{kind:'cron',expression:'15 9 * * 1,3'},timezone:'Asia/Shanghai'}});
+  });
   });
 }

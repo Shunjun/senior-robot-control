@@ -606,3 +606,13 @@ it("renders live scan hits in the map frame and hides all live overlays on cache
   expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
   expect(container.querySelector('[data-marker="robot"]')).toBeNull();
 });
+
+it('draws native unknown, legal free zero and stable occupied as distinct opaque cells', () => {
+  const putImageData = vi.fn();
+  const context = {createImageData:(width:number,height:number)=>({data:new Uint8ClampedArray(width*height*4),width,height}),putImageData,setTransform:vi.fn(),clearRect:vi.fn(),drawImage:vi.fn()};
+  vi.spyOn(HTMLCanvasElement.prototype,'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D);
+  render(<MapCanvas stale={false} map={{map_ref:{map_id:'native',reference_revision:1},resolution:.05,origin:{x:1,y:2,yaw:.3},cells:[],grid:{width:3,height:1,values:new Int8Array([-1,0,100])}}} />);
+  const pixels=putImageData.mock.calls[0]?.[0].data as Uint8ClampedArray;
+  expect([...pixels]).toEqual([66,68,73,255,216,211,203,255,85,87,91,255]);
+  expect(screen.queryByText(/15.*m/)).toBeNull();
+});

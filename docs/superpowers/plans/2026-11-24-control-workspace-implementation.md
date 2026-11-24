@@ -73,3 +73,11 @@ Spec: docs/superpowers/specs/2026-11-24-control-workspace-design.md
 建议最小契约：可选只读 `vehicle_footprint: { frame: "base_link", vertices: [{x:number,y:number}, ...] }`，米、车辆前方+x/左方+y，3–64个有限顶点、非零面积，配置应含轮胎整体边界。IPC state.get与RobotSnapshot可选同名字段；缺失时省略，旧车兼容、网页仅箭头与尺寸不可用。该字段不参与导航资格、不修改安全计算、不改设置写接口。视觉SVG仅供形状风格，实际多边形来自真实vertices，禁止用SVG示意比例替代米制轮廓。
 
 具体加载点建议：在现有 agent_adapter.main.spin 的配置组装处读取显式可选ROS参数 `vehicle_geometry_config` 指定的现有hardware.yaml（经 vehicle_core.config.load_settings/DeviceProfile 验证，仅取device.footprint）；未配置则无几何。需要该路径由现有启动组装传入，不能自动加载config/hardware.example.yaml，不能用motion profile长宽猜轮胎。贯通 adapter.state→StateReply/RuntimeState→IpcState→StateReading→SnapshotState→LiveState/Snapshot→wire.RobotSnapshotPayload→web protocol/client parser→MapCanvas；在adapter未部署时UI仍可用。确切启动路径仍需负责人确认是否接受新增显式可选参数，或指定当前部署的真实geometry配置owner。
+
+### 几何源核对结果（按负责人答复纠正）
+已核对 `platform_runtime._adapter_command` 先调用 `validate_real_runtime(profile.motion_profile, profile.safety_parameters)`，然后以现有 `--params-file profile.safety_parameters` 启动 adapter；`real_runtime.load_real_parameters` 合并 safety_gate.ros__parameters 与 `real_parameter_defaults(profile)`。仓库当前 `config/hardware-safety.yaml` safety_gate 显式 body_frame=base_link，但没有 footprint_xy；默认 footprint_xy 是从 HardwareMotionProfile.length/width 派生的矩形。故此版本没有可声称“包含外凸四轮”的真实显式轮廓，不贯通这个默认矩形、不新增几何owner，当前只画中心箭头并提示尺寸不可用。外部部署若有显式校准footprint，后续可从同一已验证safety_parameters值传给可选vehicle_footprint_xy启动参数再贯通已批准契约；当前不修改安全/导航/启动行为，几何验收第8项仍待实际配置证据。
+
+### 安全浏览器fixture范围补充
+增加 `web/e2e/fixtures/control-fixture.js`（测试专用，在生产构建外），以原HTTP/WebSocket协议向未修改的生产客户端提供安全fixture；无真实socket和运动能力。原e2e/control.spec.ts改用此fixture，不依赖旧DEMO服务。静态预览仅装载构建产物与测试fixture，截图不当实车证明。
+
+浏览器配置补充：web/playwright.config.ts允许可选PLAYWRIGHT_CHANNEL选择已安装Chrome；默认保持原Chromium。Orca截图返回整幅灰色，保留Orca交互/DOM证据并用Playwright像素截图交叉验证；不将灰色截图视为视觉通过。

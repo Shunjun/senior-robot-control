@@ -42,6 +42,7 @@ export function PairingPanel({ createCode, onReauthenticate }: PairingPanelProps
   const [busy, setBusy] = useState(false);
   const [issued, setIssued] = useState<IssuedCode | null>(null);
   const [remaining, setRemaining] = useState(0);
+  const [copyStatus, setCopyStatus] = useState<string | null>(null);
   const [expired, setExpired] = useState(false);
   const [error, setError] = useState<PairingFailure | null>(null);
 
@@ -64,7 +65,7 @@ export function PairingPanel({ createCode, onReauthenticate }: PairingPanelProps
     }
     const timer = setInterval(updateRemaining, 250);
     document.addEventListener("visibilitychange", updateRemaining);
-    return () => {
+  return () => {
       clearInterval(timer);
       document.removeEventListener("visibilitychange", updateRemaining);
     };
@@ -111,6 +112,11 @@ export function PairingPanel({ createCode, onReauthenticate }: PairingPanelProps
     }
   }
 
+    async function copy(value: string): Promise<void> {
+    try { await navigator.clipboard.writeText(value); setCopyStatus("已复制"); }
+    catch { setCopyStatus("无法自动复制，请选中文本手动复制。"); }
+  }
+
   return (
     <div className={styles.pairing}>
       <button type="button" className={styles.ghost} aria-expanded={open} aria-controls={panelId} onClick={toggle}>
@@ -132,11 +138,13 @@ export function PairingPanel({ createCode, onReauthenticate }: PairingPanelProps
               <div className={styles.pairingReceipt}>
                 <code aria-label="配对码" className={styles.pairingCode}>{issued.code}</code>
                 <span className={styles.quiet}>剩余 {remaining} 秒</span>
+                <button type="button" onClick={() => void copy(issued.code)}>复制配对码</button>
               </div>
               <p className={styles.quiet}>在车端可写的目标目录运行以下命令，并在提示符中输入配对码。</p>
               <code className={styles.pairingCommand}>
-                {`python -m senior_control.agent.main --pair --cloud-url 'wss://${window.location.host}/ws/agent' --device-name '巡检车' --credentials-file "$PWD/device-credentials.json"`}
+                {`python -m vehicle_manager.agent --pair --cloud-url 'wss://${window.location.host}/ws/agent' --device-name '巡检车' --credentials-file "$PWD/device-credentials.json"`}
               </code>
+              {copyStatus && <p role="status">{copyStatus}</p>}
               <p className={styles.quiet}>配对完成后可刷新列表。启动车端代理时使用同一凭据文件，连接后设备显示为在线。</p>
             </>
           )}

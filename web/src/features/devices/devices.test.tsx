@@ -885,7 +885,7 @@ describe("remote drive admission", () => {
     const socket = FakeSocket.instances[0]!;
     act(() => socket.open());
     act(() => socket.receive(frame("snapshot", "robot-alpha", wirePayload)));
-    expect(screen.getByRole("group", { name: "前进后退摇杆" }).getAttribute("aria-disabled")).toBe("true");
+    expect(screen.getByRole("group", { name: "驾驶摇杆" }).getAttribute("aria-disabled")).toBe("true");
   });
 
   it("marks an existing live view stale when the control link closes", async () => {
@@ -1008,9 +1008,9 @@ describe("device pairing", () => {
     try {
       await act(async () => fireEvent.click(screen.getByRole("button", { name: "生成配对码" })));
       expect(screen.getByText("first-code")).toBeTruthy();
-      const command = screen.getByText(/python -m senior_control.agent.main --pair/).textContent;
+      const command = screen.getByText(/python -m vehicle_manager.agent --pair/).textContent;
       expect(command).toBe(
-        `python -m senior_control.agent.main --pair --cloud-url 'wss://${window.location.host}/ws/agent' --device-name '巡检车' --credentials-file "$PWD/device-credentials.json"`,
+        `python -m vehicle_manager.agent --pair --cloud-url 'wss://${window.location.host}/ws/agent' --device-name '巡检车' --credentials-file "$PWD/device-credentials.json"`,
       );
       await act(async () => vi.advanceTimersByTimeAsync(1_000));
       expect(screen.queryByText("first-code")).toBeNull();
@@ -1108,20 +1108,22 @@ describe("operator workspace", () => {
   it("test_keeps_manual_controls_mounted_on_primary_view_switch", async () => {
     await openWorkspace();
     expect(screen.queryByRole("region", { name: "实时视频" })).toBeNull();
-    const stick = screen.getByRole("group", { name: "前进后退摇杆" });
+    const stick = screen.getByRole("group", { name: "驾驶摇杆" });
     const stop = screen.getByRole("button", { name: "释放控制权" });
-    fireEvent.click(screen.getByRole("button", { name: "视频" }));
+    fireEvent.click(screen.getByRole("switch", { name: "摄像头" }));
+    fireEvent.click(screen.getByRole("button", { name: "交换主次画面" }));
     expect(screen.getByRole("region", { name: "实时视频" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "地图" }));
+    fireEvent.click(screen.getByRole("button", { name: "交换主次画面" }));
+    fireEvent.click(screen.getByRole("switch", { name: "摄像头" }));
     expect(screen.queryByRole("region", { name: "实时视频" })).toBeNull();
-    expect(screen.getByRole("group", { name: "前进后退摇杆" })).toBe(stick);
+    expect(screen.getByRole("group", { name: "驾驶摇杆" })).toBe(stick);
     expect(screen.getByRole("button", { name: "释放控制权" })).toBe(stop);
   });
 
   it("test_leaving_manual_revokes_gesture_without_rearm", async () => {
     const link = await openWorkspace();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "获取控制权" })));
-    const stick = screen.getByRole("group", { name: "前进后退摇杆" });
+    const stick = screen.getByRole("group", { name: "驾驶摇杆" });
     fireEvent.keyDown(stick, { key: "ArrowUp" });
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "导航与定位" })));
     expect(link.requests.filter(({ type }) => type === "drive.stop")).toHaveLength(0);

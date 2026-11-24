@@ -166,25 +166,13 @@ export const VehicleLogs = memo(function VehicleLogs({ port, enabled }: VehicleL
       <button disabled={!available} onClick={() => setFollowing(value => !value)}>{following ? '暂停跟随' : '继续跟随'}</button>
       <button disabled={!available || busy} onClick={() => void download()}>{downloadMore ? '下载下一段' : '下载当前条件'}</button>
     </div>{error && <p role="alert">日志读取失败：{error}</p>}{window.trimmed && <p className={styles.gap}>浏览器窗口已裁剪，当前显示不包含全部历史；可按条件重新查询或分段下载。</p>}{window.gaps.map((gap, index) => <p key={index} className={styles.gap}>日志缺口：{gap.reason} {gap.after !== null ? `#${gap.after}–${gap.through ?? '?'}` : ''}{gap.count !== null ? `，数量 ${gap.count}` : '，数量未知'}{gap.durable ? '' : ' · 尚未持久确认'}</p>)}<div className={styles.table}>
-      <table>
-        <thead>
-          <tr>
-            <th>源时间 / 接收时间</th>
-            <th>级别 / 模块</th>
-            <th>事件 / 关联操作</th>
-          </tr>
-        </thead>
-        <tbody>{window.entries.map(entry => <tr key={entry.sequence}>
-          <td>{new Date(entry.source_utc * 1000).toLocaleTimeString()}<small>接收 {new Date(entry.received_utc * 1000).toLocaleTimeString()} · #{entry.sequence}</small>
-          </td>
-          <td>{entry.level}<small>{entry.module}</small>
-          </td>
-          <td>{entry.kind === 'gap' ? `日志丢失：${entry.loss_reason} · ${entry.loss_count ?? '数量未知'}` : entry.summary}<small>{entry.task_id} {entry.request_id}</small>{(entry.detail || entry.fields_json !== '{}') && <details>
-            <summary>详情</summary>
-            <pre>{entry.detail}{'\n'}{entry.fields_json}</pre>
-          </details>}</td>
-        </tr>)}</tbody>
-      </table>
+      <div className={styles.stream} role="log" aria-label="车辆逐行日志">{window.entries.map(entry => <article key={entry.sequence} className={styles.entry} data-level={entry.level}>
+        <time>{new Date(entry.source_utc * 1000).toLocaleTimeString()}<small>接收 {new Date(entry.received_utc * 1000).toLocaleTimeString()} · #{entry.sequence}</small></time>
+        <span className={styles.level}>{entry.level}</span><span className={styles.module}>[{entry.module}]</span>
+        <span className={styles.message}>{entry.kind === 'gap' ? `日志丢失：${entry.loss_reason} · ${entry.loss_count ?? '数量未知'}` : entry.summary}</span>
+        {(entry.task_id || entry.request_id) && <small className={styles.correlation}>{entry.task_id} {entry.request_id}</small>}
+        {(entry.detail || entry.fields_json !== '{}') && <details><summary>详情</summary><pre>{entry.detail}{'\n'}{entry.fields_json}</pre></details>}
+      </article>)}</div>
     </div>
     <footer>
       <span>当前 {window.entries.length} 条 · 游标 {window.cursor}</span>

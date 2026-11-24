@@ -9,6 +9,7 @@ export default defineConfig({
   use: {
     baseURL,
     trace: "retain-on-failure",
+    ...(process.env.PLAYWRIGHT_CHANNEL ? { channel: process.env.PLAYWRIGHT_CHANNEL } : {}),
   },
   projects: [
     {

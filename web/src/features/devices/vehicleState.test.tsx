@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { afterEach, expect, it } from 'vitest';
 import { runtime, testPort } from '../../api/vehicleState.testUtils';
 import { VehicleTransport, type LearningStatus } from '../../api/vehicleState';
-import { VehicleStateView } from './VehicleStateView';
+import { VehicleStateView, TaskExecutionControls } from './VehicleStateView';
 afterEach(cleanup);
 it('keeps disconnected wheel speed and running task as last measurements', () => {
   const port = testPort();
@@ -19,7 +19,7 @@ it('keeps disconnected wheel speed and running task as last measurements', () =>
   }), true);
   port.setConnection(false);
   render(<VehicleStateView port={port} />);
-  expect(screen.getByText('1.44', { selector: 'strong' })).toBeTruthy();
+  expect(screen.getByText('0.40', { selector: 'strong' })).toBeTruthy();
   expect(screen.getByText('轮速里程计 · 已过期 / 最后测量')).toBeTruthy();
   expect(screen.getByText('最后已知 · 非实时')).toBeTruthy();
   expect(screen.getByText(/任务可能继续/)).toBeTruthy();
@@ -78,7 +78,7 @@ it('shows measured wheel speed with its source when the body estimate is absent'
   const port = testPort();
   port.update(runtime({ sequence: 2, body_reference: null, wheel_linear_mps: -0.5 }), true);
   render(<VehicleStateView port={port} />);
-  expect(screen.getByText('-1.80', { selector: 'strong' })).toBeTruthy();
+  expect(screen.getByText('-0.50', { selector: 'strong' })).toBeTruthy();
   expect(screen.getByText('轮速里程计')).toBeTruthy();
   expect(screen.queryByText(/已过期 \/ 最后测量/)).toBeNull();
 });
@@ -131,4 +131,19 @@ it('queries the original uncertain calibration and retains the old model through
   expect(screen.getByText('当前生效：96 个真实参考点')).toBeTruthy();
   expect(screen.getByRole('heading', { name: '手动驾驶' })).toBeTruthy();
   expect(starts).toBe(1);
+});
+
+it('runs one real execution through pause, resume and cancel with the current version', async () => {
+  const requests:Array<{action:string;task_id:string;expected_version:number}>=[];
+  const port=testPort(async (_type,payload)=>{const q=payload as typeof requests[number] & {request_id:string};requests.push(q);return {request_id:q.request_id,task_id:q.task_id,accepted:true,reason:'accepted',version:q.expected_version+1};});
+  const report=(sequence:number,version:number,phase:'running'|'paused',action:'pause'|'resume'|'cancel')=>port.update(runtime({sequence,task:{task_id:'execution-id',version,phase,completed:1,total:3,stopped_for:null,allowed_actions:[action]}}),true);
+  report(2,3,'running','pause');
+  render(<TaskExecutionControls port={port} />);
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'暂停当前任务'})));
+  expect(screen.getByText(/execution-id · 运行中/)).toBeTruthy();
+  act(()=>report(3,4,'paused','resume'));
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'明确继续任务'})));
+  act(()=>report(4,5,'running','cancel'));
+  await act(async()=>fireEvent.click(screen.getByRole('button',{name:'取消当前任务'})));
+  expect(requests.map(q=>[q.action,q.task_id,q.expected_version])).toEqual([['pause','execution-id',3],['resume','execution-id',4],['cancel','execution-id',5]]);
 });

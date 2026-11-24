@@ -31,8 +31,8 @@
 .primary {
   min-height: var(--touch);
   padding: 0 var(--space-5);
-  color: var(--graphite-950);
-  font-weight: 700;
+  color: white;
+  font-weight: 600;
   letter-spacing: 0.12em;
   background: var(--amber);
   border: 0;
@@ -42,7 +42,7 @@
 }
 
 .primary:hover:not(:disabled) {
-  background: #ffc548;
+  background: var(--amber-deep);
 }
 
 .primary:disabled {
@@ -647,11 +647,6 @@
   overflow: auto;
   padding-bottom: 24px;
 }
-.panel[data-workspace="true"] .panelHead {
-  position: sticky;
-  top: 0;
-  z-index: 20;
-  flex-wrap: wrap;
-  background: var(--graphite-900);
-  padding: 8px;
-}
+.panel[data-workspace="true"] .panelHead { display:none }
+
+.diagnostics { margin:8px 0;color:var(--ink-soft) }.diagnostics summary { cursor:pointer;min-height:44px;display:flex;align-items:center }.panelHead { display:none }.panel { min-height:0 }

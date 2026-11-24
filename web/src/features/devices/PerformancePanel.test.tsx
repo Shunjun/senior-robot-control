@@ -4,10 +4,11 @@ import { parseInbound } from "../../api/protocol";
 import { ControlSurface } from "./ControlSurface";
 import type { RobotLink } from "../../api/client";
 
-afterEach(() => { cleanup(); vi.useRealTimers(); });
+afterEach(() => { cleanup(); vi.useRealTimers(); vi.restoreAllMocks(); });
 
 it("shows received resource counters and expires an unchanged sample even while connected", async () => {
   vi.useFakeTimers();
+  vi.spyOn(HTMLCanvasElement.prototype,"getContext").mockReturnValue(null);
   const frame = parseInbound(JSON.stringify({
     v: 1, robot_id: "robot", session_id: "cloud", connection_epoch: 1,
     request_id: "resources", seq: 1, expires_at: Date.now() / 1000 + 10, type: "snapshot",
@@ -27,15 +28,20 @@ it("shows received resource counters and expires an unchanged sample even while 
     request,
     subscribe: () => () => {}, subscribeStatus: () => () => {} };
   const snapshot = { ...frame.payload, robot_id: "robot" };
-  const { rerender } = render(<ControlSurface robotId="robot" link={link} snapshot={snapshot} />);
+  const { rerender } = render(<ControlSurface robotId="robot" link={link} snapshot={snapshot} statusOpen />);
+  fireEvent.click(screen.getByRole("button", { name:"性能" }));
   expect(screen.getByText("25.0%")).toBeTruthy();
   expect(screen.getByText("512 MiB")).toBeTruthy();
   expect(screen.getByText("未启动")).toBeTruthy();
   act(() => vi.advanceTimersByTime(3501));
   expect(screen.getByText("样本已过期")).toBeTruthy();
+  rerender(<ControlSurface robotId="robot" link={link} snapshot={snapshot} statusOpen={false} />);
+  rerender(<ControlSurface robotId="robot" link={link} snapshot={snapshot} statusOpen />);
+  expect(screen.getByText("样本已过期")).toBeTruthy();
+  expect(screen.queryByText("25.0%")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "地图管理" }));
   await act(async () => { await Promise.resolve(); });
   expect(request).not.toHaveBeenCalled();
-  rerender(<ControlSurface robotId="robot" link={link} snapshot={{ ...snapshot, connected: false }} />);
+  rerender(<ControlSurface robotId="robot" link={link} snapshot={{ ...snapshot, connected: false }} statusOpen />);
   expect(screen.getByText("离线 · 最后样本")).toBeTruthy();
 });
