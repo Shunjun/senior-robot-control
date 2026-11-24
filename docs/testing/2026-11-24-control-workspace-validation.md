@@ -303,15 +303,94 @@ PYTHONPATH=contracts/src:senior_control/src:cloud/src:. PYTHONDONTWRITEBYTECODE=
 
 未变化的完整lifecycle service/其他前端模块沿用独立审核及原交付/返修证据，不无故全仓重复。本次没有新增skip/xfail或删除119dc4c基线保护。早期失败保留并明确不作产品bug证据：新复制的忽略目录.venv耗尽共享磁盘，首次pytest输出中断；只删除本轮新复制环境释放214MB后重跑195项通过，后续复用原环境并移至父目录。首次probe漏调用cloud下行投影导致last_synced_at=null，补用现有cloud.snapshot_envelope后通过；一次npm在父目录而非web目录运行的ENOENT也仅为命令目录错误。
 
-### 独立输入场景计数、bug回归与测试整理
+### 独立输入场景计数、bug回归与测试整理（2026-11-25最终校正）
 
-按独立输入流程而非it块/断言数或视口参数计数；同一流程中的创建→改名、坏输入对照不拆成多场景：
+下表以真实独立输入或连续使用流程计数，不按it块或for循环合并独立参数。创建→同ID改名→预览、同请求重放可作为连续流程；互不依赖的创建支线、不同坏值分别计数。原标签迁移、旧安全保护不计为名称新增。下列覆盖属于名称功能整体，**本次证据校正新增测试输入0**。
 
-- 批准名称行为**新增11个独立流程**：后端6个（空库升级重开；真实创建/重开/旧API省名与启停保名；已接受执行改名保身份/路线；读旧定义后改名到期领取；summary/cache往返及旧省字段；null/空白拒绝与重复名辨识），前端5个（N7连续创建改名预览；N9旧端/零目录/切回及非名称编辑；N10重复名与内部空白/禁止空白提交；执行name/definition_task_id及非法名称边界；summary名称/null边界）。
-- 批准行为**实质增强4个既有流程**：真实Agent创建/启停持久化；N8定义/实例ID分离的pause→resume→cancel与改名显示；当前地图路线进度名称且仍拒绝陈旧地图；原安全fixture主流程增加1440命名创建→改名→预览。三尺寸只算一个既有行为的覆盖入口，不把参数展开当新增场景。
-- 已确认实际新bug为**R1、R2两项**，保留**4个专用回归输入流程**：后端R1存储→wire边界；R2缺task_id省名update/journal与重放；前端首尾集合/内部字符与边缘空白包围128字符；task.get的FEFF-only/NEL-only。R1还加强上述执行decoder、summary、N7、N10四流程，计为复用场景中的额外断言，**不再加4**。前端task.get专题已只保留真实R1触发。
-- 整理只去掉本轮重复保护：Agent用例里重复create同operation_id/变name同operation_id，由119dc4c原专用dedup/conflict测试承接且执行通过；execution专题移除42/null定义ID/extra通用patch与单独128emoji，保留有效元数据、name:null、普通空白、FEFF/NEL拒绝；normalize专题去独立null/129emoji重复断言，保留实际128字符路径；task.get去null/旧省字段重复检查，生产strict未放宽，旧编辑由N9覆盖。没有添加未指定参数矩阵。
-- 原F1未知/FAILED **7个journal输入分支**、地图身份/版本、控制退出与急停、目录并发、旧省字段等都为复用回归，未算名称新增。原schema版本断言正常随domain4更新，未删除既有安全断言。
+核心覆盖共 **21条独立输入/连续流程：后端11、前端10**。中文summary/cache循环中的“东区巡检”revision1与“夜班巡检”revision2没有执行真实改名，各自从snapshot构造，因此独立计2条；真实创建后重开与旧API省名创建支线也分别列出。路径均相对父工作区：
+
+| # | 独立输入/连续流程 | 真实测试路径与定位 | 来源 |
+|---|---|---|---|
+| B1 | 空domain3目录升级到4并重开，创建后改名“东区巡检”，其他schema/probe保持 | `senior_control/tests/test_task_runner.py::test_empty_domain3_upgrades_task_names_and_reopens` | 名称新增，复用schema隔离保护 |
+| B2 | route-01以`  东区巡检  `创建，重开后task.get/真实summary读取 | `senior_control/tests/test_workspace_data.py::test_task_names_persist_and_legacy_mutations_preserve_them` | 名称新增 |
+| B3 | old-api省name创建→改名“夜班巡检”→省name更新→禁用保名，重开summary读取 | 同B2，独立old-api支线 | 名称新增 |
+| B4 | 接纳执行后“东区巡检”改“夜班巡检”，冻结路线/实例/版本/effect不变并重放 | `senior_control/tests/test_task_lifecycle_store.py::test_rename_keeps_accepted_execution_and_fingerprint` | 名称新增 |
+| B5 | 读到期定义→改名→领取/同请求重放，仅一次effect | `senior_control/tests/test_task_runner.py::test_due_claim_accepts_only_a_concurrent_name_change_once`；生产事务另见历史`/tmp/task-names-integration-2026-11-25/review-probe.py::main`的LifecycleStore.submit链 | 名称新增；不把兼容executor冒称生产链 |
+| B6 | “东区巡检”revision1，经完整envelope/cloud cache往返 | `senior_control/tests/test_agent.py::test_named_summaries_roundtrip_through_cloud_cache`，循环第一输入 | 名称新增 |
+| B7 | “夜班巡检”revision2，经完整envelope/cloud cache往返 | 同B6，循环第二独立输入 | 名称新增 |
+| B8 | 旧summary省name，经完整envelope/cache投影往返且不补字段 | 同B6，删除raw.payload.tasks[0].name后的分支 | 名称兼容输入 |
+| B9 | API显式`None`创建拒绝，最终目录无写入 | `senior_control/tests/test_workspace_data.py::test_task_names_reject_explicit_null_or_blank_without_writing`，invalid第一输入 | 名称新增 |
+| B10 | API普通全空白`   `创建拒绝，最终目录无写入 | 同B9，invalid第二独立输入 | 名称新增 |
+| B11 | one/two不同ID分别以`  夜班  巡检  `及`夜班  巡检`创建，同名且保留双内部空格 | 同B9，两ID共同构成重复名称流程 | 名称新增 |
+| F1 | execution `exec-88`/definition `route-01`/“东区巡检”/version3正向解码 | `web/src/api/vehicleState.test.ts`，`accepts named execution metadata…` | 名称新增 |
+| F2 | 正常中文“东区巡检”summary完整快照解码 | 同文件，`preserves Chinese task summary names…` | 名称新增 |
+| F3 | N7独立UUID创建“东区巡检”→同ID改“夜班巡检”→命名预览 | `web/src/features/tasks/tasks.test.tsx`，`N7 creates…` | 名称新增连续流程 |
+| F4 | N9无能力旧端已有任务/零目录→省name非名称编辑→切回新端 | 同文件，`N9 locks names…` | 名称新增连续流程 |
+| F5 | N10 two/one同名“东区  巡检”，识别ID并删除two | 同文件，`N10 trims names…`，删除支线 | 名称新增 |
+| F6 | N10普通全空白`   `禁止提交 | 同F5，value循环第一独立输入 | 名称新增 |
+| F7 | N10以`  东区  巡检  `创建，提交规范化名且保留内部双空格 | 同F5，最后独立创建支线 | 名称新增 |
+| F8 | 当前路线进度显示“夜班巡检”，地图换代/陈旧后隐藏 | 同文件，`shows only vehicle-reported progress on the current live map` | 既有用例增强名称，陈旧地图保护复用 |
+| F9 | N8执行改名后pause→resume→cancel始终发送实例ID及实际version3→4→5 | `web/src/features/devices/vehicleState.test.tsx`，`runs one real execution…` | 既有执行流程增强 |
+| F10 | 1440安全fixture命名创建→改名“夜班巡检”→预览 | `web/e2e/control.spec.ts`，1440条件分支 | 既有fixture增强，仅历史本版证据；此次未重跑 |
+
+**R1/R2实际bug输入另列19条覆盖记录**，不是“4个it/专题=4个输入”。其中R1共18条，R2共1条连续请求流程。R1-15/16是F3同一连续流程中的两个实际输入，已与核心表重叠，不能相加宣称40个不重复场景；其余列明确具体值与独立数量。
+
+| # | 实际输入与预期 | 测试定位 |
+|---|---|---|
+| R1-1 | API `\uFEFF`-only拒绝/VALIDATION且该ID无写入 | `test_agent.py::test_task_name_boundary_whitespace_store_to_wire` |
+| R1-2 | API `\u0085巡 检\u0085`经真实SQLite→wire为“巡 检” | 同上，持久化成功支线 |
+| R1-3 | wire `\uFEFF`-only拒绝 | 同上，invalid循环唯一输入 |
+| R1-4 | wire `\u0085巡 检\u0085`规范为“巡 检” | 同上，直接wire输入 |
+| R1-5 | execution name=`\uFEFF`拒绝 | `web/src/api/vehicleState.test.ts`，命名execution专题 |
+| R1-6 | execution name=`\u0085`拒绝 | 同上，独立patch |
+| R1-7 | summary name=`\uFEFF`拒绝 | 同文件，中文summary专题 |
+| R1-8 | summary name=`\u0085`拒绝 | 同上，独立name |
+| R1-9 | task.get name=`\uFEFF`拒绝 | `web/src/features/tasks/tasks.test.tsx`，`rejects FEFF-only and NEL-only names from task.get` |
+| R1-10 | task.get name=`\u0085`拒绝 | 同上，独立name |
+| R1-11 | normalize ` \u0085东区 \u0085\uFEFF 巡检\uFEFF `剥首尾、保内部NEL/FEFF/空格 | `web/src/api/vehicleState.test.ts`，`uses the agreed boundary whitespace…` |
+| R1-12 | isTaskName(`\u0085`)为false | 同上，独立输入 |
+| R1-13 | isTaskName(`\uFEFF`)为false | 同上，独立输入 |
+| R1-14 | ` \u0085`+128个😀+`\uFEFF `为有效名（code point边界） | 同上，独立边缘长度输入 |
+| R1-15 | N7创建输入` \u0085东区巡检\u0085 `，发送“东区巡检” | F3创建阶段，重叠覆盖 |
+| R1-16 | N7改名输入` \u0085夜班巡检\uFEFF `，发送“夜班巡检” | F3改名阶段，重叠覆盖 |
+| R1-17 | N10 UI `\uFEFF`-only禁止提交 | F5所在用例value循环，独立输入，不并入F6普通空白 |
+| R1-18 | N10 UI `\u0085`-only禁止提交 | 同上，独立输入 |
+| R2-1 | 省task_id且省name的update→VALIDATION/FAILED→目录无写入→原operation_id重放仍同FAILED且无写入 | `senior_control/tests/test_agent.py::test_missing_update_task_id_is_failed_validation`，完整原流程未改 |
+
+复用保护单列：F1多点恢复七分支（unavailable/FAILED、timeout/FAILED、SUCCEEDED、NEEDS_REVIEW、RUNNING、operation_unknown、其他ID的FAILED）仍是**7个独立journal输入分支**，不计为名称新增；原认证/envelope/strict协议、schema/core/agent版本隔离、任务expected_revision冲突、operation_id去重/异内容冲突、执行实例控制与急停、地图身份/陈旧地图、设置与日志安全等原保护保留。原标签迁移不算名称新增。
+
+本次严格只改`senior_control/tests/test_agent.py`、`web/src/api/vehicleState.test.ts`和本文档。Agent原`test_task_edit_commits_in_robot_database`的body.name与两条stored.name恢复119dc4c原样，created/enable/revision/conflict及全部原断言不动；真实名称持久化由B2/B3等原已批准用例承接。R1去掉重复wire None及末尾省字段检查，由B9及B8承接；保留四个实际边界输入。execution专题去重复null/普通空白，summary去重复null；strict产品不改，normalize四个实际输入断言原样保留。未改tasks.test.tsx、R2、F1或其他批准存储用例，未合并it或引入新参数。
+
+三尺寸原布局/控制检查均为基线复用，名称派发没有实质改写这些流程；只有1440新增命名动作。390/844未执行命名创建/改名，不能写成小屏名称验证，也不能用视口参数合并独立输入来调减计数。
+
+### 本次证据校正验证（task_d58414bcb315）
+
+起点准确HEAD为`ac2bd1041f22d2ae21a93e41145f8bd0a6116b02`，分支`feat/control-workspace`，干净状态；测试在该父树加本次两测试文件小diff上执行。产品/配置新增、修改、删除均0，共3条修改路径，无新增测试输入。最终提交完整SHA、逐项产品blob比较、实际3文件diff、命令原始日志/退出码、清洁状态与origin/PR40同HEAD证据记录于`/tmp/task-names-final-evidence-correction-2026-11-25.md`及同名证据目录；提交SHA不自嵌入本提交。
+
+实测依赖：Python 3.11.2、pytest 8.4.2、pytest-asyncio 0.26.0、pydantic 2.14.4、aiosqlite 0.22.1；Node v24.13.0、npm 11.6.2、Vitest 5.0.5（`versions.json`/`frontend.log`）。本次命令及结果：
+
+```sh
+# 父工作区；run_backend.py只调用下列pytest并在同进程结束后断言项目模块路径。
+PYTHONPATH=contracts/src:senior_control/src:cloud/src:senior_control/tests:tests/integration:. \
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
+  /tmp/task-names-final-evidence-correction-2026-11-25/run_backend.py
+# 内部：pytest.main(['senior_control/tests/test_agent.py',
+#                      'senior_control/tests/test_workspace_data.py', '-q'])
+# 70 passed in 8.07s，exit 0；121个项目/测试模块均来自准确父树。
+# backend.log、import-paths.json；包含原dedup/conflict及完整R2 journal回归。
+
+# web/：包含必要N9/N10、task.get R1及F1七分支原断言。
+npm test -- --run src/api/vehicleState.test.ts src/features/tasks/tasks.test.tsx
+# 2 files / 42 passed，2.63s，exit 0；frontend.log。
+
+# 父工作区；比较既有19产品blob、原Agent测试、R2、normalize与旧前端测试体。
+python3 /tmp/task-names-final-evidence-correction-2026-11-25/check_preservation.py
+# exit 0；19/19等于ac2bd10，除指定三路径外整树无改动。
+git diff --check
+# exit 0；diff-check.log；提交后再次核对并记录干净状态。
+```
+
+本次没有运行全量、build、typecheck、三尺寸e2e、生产probe或实车；上表B1/B4/B5/F9/F10等未重跑入口明确复用前文已审同一产品树证据。机械比对确认原Agent SQLite用例整体等于119dc4c，其他Agent函数除指定R1整理外等于ac2bd10，R2原样，前端119dc4c全部测试体原样，normalize四断言原样；`tasks.test.tsx`（含F1七分支、N9/N10与task.get）逐字节未改。
 
 ### 三尺寸视觉、安全边界与清理
 

@@ -450,7 +450,6 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
         created = datetime(2026, 10, 27, tzinfo=timezone.utc)
         body = {
             "task_id": "patrol",
-            "name": "东区巡检",
             "map_id": MAP.map_id,
             "reference_revision": MAP.reference_revision,
             "waypoint_ids": ["wp-1"],
@@ -462,7 +461,6 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
         await agent.dispatch(operation("task.create", "op-create", body))
         stored = await store.get("patrol")
         assert stored is not None and stored.revision == 1 and stored.enabled is True
-        assert stored.name == "东区巡检"
 
         await agent.dispatch(
             operation(
@@ -474,7 +472,6 @@ async def test_task_edit_commits_in_robot_database(tmp_path: Path) -> None:
         )
         stored = await store.get("patrol")
         assert stored is not None and stored.revision == 2 and stored.enabled is False
-        assert stored.name == "东区巡检"
 
         with pytest.raises(DomainError) as caught:
             await agent.dispatch(
@@ -1604,15 +1601,12 @@ async def test_task_name_boundary_whitespace_store_to_wire(tmp_path: Path) -> No
         )
         assert TaskSummaryPayload.model_validate_json(summary.model_dump_json()).name == "巡 检"
         raw = summary.model_dump()
-        for invalid in ("\ufeff", None):
+        for invalid in ("\ufeff",):
             with pytest.raises(ValidationError):
                 TaskSummaryPayload.model_validate({**raw, "name": invalid})
         assert (
             TaskSummaryPayload.model_validate({**raw, "name": "\u0085巡 检\u0085"}).name == "巡 检"
         )
-        del raw["name"]
-        legacy = TaskSummaryPayload.model_validate(raw)
-        assert "name" not in TaskSummaryPayload.model_validate(legacy).model_dump()
 
 
 async def test_missing_update_task_id_is_failed_validation(tmp_path: Path) -> None:

@@ -105,13 +105,11 @@ it('keeps calibration start identity and status query on distinct explicit reque
   ]);
 });
 
-it('accepts named execution metadata and rejects null or blank names', () => {
+it('accepts named execution metadata and rejects FEFF-only or NEL-only names', () => {
   const task={task_id:'exec-88',definition_task_id:'route-01',name:'东区巡检',version:3,phase:'running',completed:1,total:3,stopped_for:null,allowed_actions:['pause']};
   const named={...frame,capabilities:[...frame.capabilities,'task.names.v1'],task};
   expect(decodeVehicleFrame(named).task).toMatchObject(task);
   for (const patch of [
-    { name: null },
-    { name: '   ' },
     { name: '\u0085' },
     { name: '\uFEFF' },
   ]) {
@@ -119,10 +117,10 @@ it('accepts named execution metadata and rejects null or blank names', () => {
   }
 });
 
-it('preserves task summary names through the snapshot decoder and rejects explicit invalid names', () => {
+it('preserves Chinese task summary names and rejects FEFF-only or NEL-only names', () => {
   const envelope={v:1,robot_id:'robot',session_id:'cloud',connection_epoch:1,request_id:'snapshot',seq:1,expires_at:2000,type:'snapshot',payload:{connected:true,localized:true,map_ref:null,home:null,home_revision:0,task_revision:1,runnable_task_ids:[],execution_status:'idle',collected_at:1000,stale:false,last_synced_at:1000,tasks:[{task_id:'route-01',name:'东区巡检',revision:1,enabled:true}]}};
   expect(parseInbound(JSON.stringify(envelope))).toMatchObject({payload:{tasks:[{task_id:'route-01',name:'东区巡检'}]}});
-  for (const name of [null, '\u0085', '\uFEFF']) {
+  for (const name of ['\u0085', '\uFEFF']) {
     expect(parseInbound(JSON.stringify({
       ...envelope,
       payload: { ...envelope.payload, tasks: [{ ...envelope.payload.tasks[0], name }] },
