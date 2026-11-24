@@ -9,6 +9,8 @@ import {
   type ReactElement,
 } from "react";
 
+import { createPortal } from "react-dom";
+
 import { ZoomIn, ZoomOut, LocateFixed, Maximize } from "lucide-react";
 import type { MapRef } from "../../api/protocol";
 import styles from "./Map.module.css";
@@ -188,6 +190,7 @@ export interface MapCanvasProps {
   onPick?: (pose: Pose) => void;
   compact?: boolean;
   mini?: boolean;
+  toolbarTarget?: HTMLElement | null;
   taskRoute?: readonly Point[];
   waypointMarkers?: readonly WaypointMarker[];
   highlightedWaypoint?: string | null;
@@ -238,6 +241,7 @@ export function MapCanvas({
   onPick,
   compact = false,
   mini = false,
+  toolbarTarget = null,
   taskRoute = [],
   waypointMarkers = [],
   highlightedWaypoint = null,
@@ -510,9 +514,8 @@ export function MapCanvas({
   const bar = scaleBar(view.zoom);
   const preview = pending ?? draft;
 
-  return (
-    <section className={styles.mapPanel} data-stale={stale} data-compact={compact} data-mini={mini}>
-      <div className={styles.toolbar}>
+  const toolbar = (
+    <div className={styles.toolbar} data-docked={toolbarTarget !== null && !mini}>
         {map.grid === undefined && <fieldset className={styles.layers}>
           <legend className={styles.legend}>显示层</legend>
           {(
@@ -544,9 +547,14 @@ export function MapCanvas({
             <Maximize size={18} />
           </button>
           <button type="button" className={styles.tool} aria-label="居中车辆" disabled={stale || robot === null} onClick={() => { if(robot) setPlacement(current => ({ ...current, center: {x:robot.x,y:robot.y} })); }}><LocateFixed size={18} /></button>
-          <span className={styles.scaleHtml}><i style={{width:bar.pixels}} />{bar.meters} m</span>
+          <span className={styles.scaleHtml} aria-label="地图比例尺"><i style={{width:bar.pixels}} />{bar.meters} m</span>
         </div>
       </div>
+  );
+
+  return (
+    <section className={styles.mapPanel} data-stale={stale} data-compact={compact} data-mini={mini}>
+      {toolbarTarget && !mini ? createPortal(toolbar, toolbarTarget) : toolbar}
 
       {!stale && robot !== null && <span className={styles.geometryNote}>实际轮廓尺寸不可用</span>}
       {stale && (

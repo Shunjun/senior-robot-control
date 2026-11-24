@@ -488,30 +488,112 @@ it("accepts independent raster and reference versions, retiring drafts on refere
   expect((screen.getByLabelText("任务名称（编号）") as HTMLInputElement).closest("fieldset")?.disabled).toBe(true);
 });
 
-it('keeps confirmed waypoints and the route draft when the second draft point fails', async () => {
-  const robotLink = link();
-  const request=vi.mocked(robotLink.request);
-  let creates=0;
-  request.mockImplementation(async (type) => {
-    if(type==='waypoint.create' && ++creates===2) throw new Error('second waypoint rejected');
-    return {ok:true,status:'succeeded'} as never;
-  });
-  render(<TaskList snapshot={snapshot} link={robotLink} workspace={{...workspace,waypointWrites:true}} />);
-  fireEvent.change(screen.getByLabelText('任务名称（编号）'),{target:{value:'route-new'}});
-  fireEvent.click(screen.getByRole('button',{name:'多点路线选取'}));
-  const surface=screen.getByRole('application',{name:'地图'});
-  fireEvent.keyDown(surface,{key:'Enter'});
-  fireEvent.keyDown(surface,{key:'ArrowRight'});
-  fireEvent.keyDown(surface,{key:'Enter'});
-  fireEvent.click(screen.getByRole('button',{name:'完成选点'}));
-  fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
-  await screen.findByText(/已确认 1 个航点，任务尚未保存/);
-  expect(request.mock.calls.filter(call=>call[0]==='task.create')).toHaveLength(0);
-  expect(screen.getByLabelText('任务名称（编号）')).toHaveProperty('value','route-new');
-  fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
-  await screen.findByText('车端已确认保存任务。');
-  expect(request.mock.calls.filter(call=>call[0]==='waypoint.create')).toHaveLength(3);
-});
+it.each([
+  "failed",
+  "needs_review",
+  "running",
+  "succeeded",
+  "unknown",
+  "mismatched",
+  "timeout_failed",
+] as const)(
+  "recovers draft points using journal evidence: %s",
+  async (scenario) => {
+    const outcome = scenario === "timeout_failed" ? "failed" : scenario;
+    const robotLink = link();
+    const request = vi.mocked(robotLink.request);
+    const journal = new Map<string, string>();
+    const creations: string[] = [];
+    let failedOperation: string | undefined;
+    request.mockImplementation(async (type, payload) => {
+      const operationId = (payload as { operation_id: string }).operation_id;
+      if (type === "operation.query") {
+        if (outcome === "unknown")
+          throw new CommandError("operation_unknown", "not found");
+        return {
+          ok: true,
+          operation_id: outcome === "mismatched" ? "another" : operationId,
+          status: outcome === "mismatched" ? "failed" : outcome,
+        } as never;
+      }
+      if (type === "waypoint.create") {
+        creations.push(operationId);
+        if (
+          journal.has(operationId) &&
+          journal.get(operationId) !== "succeeded"
+        ) {
+          const status = journal.get(operationId);
+          throw new CommandError(status === "needs_review" ? "operation_unknown"
+            : status === "running" ? "conflict" : "unavailable", "journal replay rejected");
+        }
+        if (journal.size === 1) {
+          failedOperation = operationId;
+          journal.set(operationId, outcome === "unknown" || outcome === "mismatched" ? "needs_review" : outcome);
+          throw new CommandError(
+            scenario === "timeout_failed" || outcome !== "failed" ? "timeout" : "unavailable",
+            "action response has no terminal status",
+          );
+        }
+        journal.set(operationId, "succeeded");
+      }
+      return { ok: true, status: "succeeded" } as never;
+    });
+    render(
+      <TaskList
+        snapshot={snapshot}
+        link={robotLink}
+        workspace={{ ...workspace, waypointWrites: true }}
+      />,
+    );
+    fireEvent.change(screen.getByLabelText("任务名称（编号）"), {
+      target: { value: "route-new" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "多点路线选取" }));
+    const surface = screen.getByRole("application", { name: "地图" });
+    fireEvent.keyDown(surface, { key: "Enter" });
+    fireEvent.keyDown(surface, { key: "ArrowRight" });
+    fireEvent.keyDown(surface, { key: "Enter" });
+    fireEvent.click(screen.getByRole("button", { name: "完成选点" }));
+    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    if (outcome === "succeeded") {
+      await screen.findByText("车端已确认保存任务。");
+      expect(creations).toHaveLength(2);
+      expect(
+        request.mock.calls.filter((call) => call[0] === "task.create"),
+      ).toHaveLength(1);
+      return;
+    }
+    await screen.findByText(/已确认 1 个航点，任务尚未保存/);
+    expect(
+      request.mock.calls.filter((call) => call[0] === "task.create"),
+    ).toHaveLength(0);
+    expect(request).toHaveBeenCalledWith("operation.query", {
+      operation_id: failedOperation,
+      body: {},
+    });
+    expect(screen.getByLabelText("任务名称（编号）")).toHaveProperty(
+      "value",
+      "route-new",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    if (outcome === "failed") {
+      await screen.findByText("车端已确认保存任务。");
+      expect(creations[2]).not.toBe(failedOperation);
+    } else {
+      await screen.findByText(/结果未知.*原操作/);
+      expect(creations[2]).toBe(failedOperation);
+      expect(
+        request.mock.calls.filter((call) => call[0] === "task.create"),
+      ).toHaveLength(0);
+    }
+    if (outcome !== "failed") {
+      expect(screen.getByRole("button", { name: "提交任务" })).toHaveProperty("disabled", false);
+    }
+    expect(creations).toHaveLength(3);
+    expect(creations.filter((id) => id === creations[0])).toHaveLength(1);
+  },
+);
+
 
 it('makes missing immediate execution and queue actions explicit without sending requests', () => {
   const robotLink=link();
