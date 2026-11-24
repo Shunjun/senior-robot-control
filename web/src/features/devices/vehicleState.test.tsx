@@ -136,14 +136,16 @@ it('queries the original uncertain calibration and retains the old model through
 it('runs one real execution through pause, resume and cancel with the current version', async () => {
   const requests:Array<{action:string;task_id:string;expected_version:number}>=[];
   const port=testPort(async (_type,payload)=>{const q=payload as typeof requests[number] & {request_id:string};requests.push(q);return {request_id:q.request_id,task_id:q.task_id,accepted:true,reason:'accepted',version:q.expected_version+1};});
-  const report=(sequence:number,version:number,phase:'running'|'paused',action:'pause'|'resume'|'cancel')=>port.update(runtime({sequence,task:{task_id:'execution-id',version,phase,completed:1,total:3,stopped_for:null,allowed_actions:[action]}}),true);
+  const report=(sequence:number,version:number,phase:'running'|'paused',action:'pause'|'resume'|'cancel')=>port.update(runtime({sequence,capabilities:['task.execution.v1','task.names.v1'],task:{task_id:'exec-88',definition_task_id:'route-01',name:sequence===2?'东区巡检':'夜班巡检',version,phase,completed:1,total:3,stopped_for:null,allowed_actions:[action]}}),true);
   report(2,3,'running','pause');
   render(<TaskExecutionControls port={port} />);
   await act(async()=>fireEvent.click(screen.getByRole('button',{name:'暂停当前任务'})));
-  expect(screen.getByText(/execution-id · 运行中/)).toBeTruthy();
+  expect(screen.getByText(/东区巡检 · 运行中/)).toBeTruthy();
   act(()=>report(3,4,'paused','resume'));
+  expect(screen.getByText(/夜班巡检 · 已暂停/)).toBeTruthy();
+  expect(screen.getByText(/内部编号 route-01 · 执行实例 exec-88/)).toBeTruthy();
   await act(async()=>fireEvent.click(screen.getByRole('button',{name:'明确继续任务'})));
   act(()=>report(4,5,'running','cancel'));
   await act(async()=>fireEvent.click(screen.getByRole('button',{name:'取消当前任务'})));
-  expect(requests.map(q=>[q.action,q.task_id,q.expected_version])).toEqual([['pause','execution-id',3],['resume','execution-id',4],['cancel','execution-id',5]]);
+  expect(requests.map(q=>[q.action,q.task_id,q.expected_version])).toEqual([['pause','exec-88',3],['resume','exec-88',4],['cancel','exec-88',5]]);
 });

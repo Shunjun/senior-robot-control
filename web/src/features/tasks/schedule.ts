@@ -22,6 +22,7 @@ export interface ScheduleDraft {
   scheduleEdited: boolean;
 }
 export interface TaskDraft extends ScheduleDraft {
+  name: string;
   task_id: string;
   timezone: string;
 }
@@ -30,7 +31,11 @@ const INITIAL_SCHEDULE: ScheduleDraft = {
   interval: '1', intervalUnit: 'days', cron: '0 9 * * *',
   originalSchedule: null, scheduleEdited: false,
 };
-export const NEW_TASK: TaskDraft = { task_id: '', timezone: 'Asia/Shanghai', ...INITIAL_SCHEDULE };
+export const NEW_TASK: TaskDraft = { name: '', task_id: '', timezone: 'Asia/Shanghai', ...INITIAL_SCHEDULE };
+
+export function newTaskDraft(): TaskDraft {
+  return { ...NEW_TASK, task_id: crypto.randomUUID() };
+}
 
 function clock(time: string): [number, number] | null {
   if (!/^\d{2}:\d{2}$/.test(time)) return null;

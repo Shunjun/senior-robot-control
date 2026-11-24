@@ -1,3 +1,4 @@
+import { isTaskName } from "./vehicleState";
 import { CommandError, type RobotLink } from "./client";
 import type { MapRef, ResponsePayload, WorkspaceRequestType } from "./protocol";
 
@@ -52,6 +53,7 @@ export type TaskSchedule =
   | { kind: "cron"; expression: string };
 
 export interface TaskDetails extends WorkspaceIdentity {
+  name?: string;
   task_id: string;
   waypoint_ids: string[];
   schedule: TaskSchedule;
@@ -176,9 +178,10 @@ export async function getTaskDetails(
 ): Promise<TaskDetails> {
   const data = await read(link, robotId, mapRef, "task.get", { task_id: taskId });
   const { waypoint_ids, schedule, timezone, enabled, revision, created_at } = data;
-  valid(data["task_id"] === taskId && Array.isArray(waypoint_ids) && waypoint_ids.length > 0 &&
+  //Compatible: legacy task.get omits name; an explicitly malformed value is never accepted.
+  valid((!("name" in data) || isTaskName(data["name"])) && data["task_id"] === taskId && Array.isArray(waypoint_ids) && waypoint_ids.length > 0 &&
     waypoint_ids.every(isText) && isSchedule(schedule) && isText(timezone) &&
     typeof enabled === "boolean" && isInteger(revision, 0) && isText(created_at) &&
     Number.isFinite(Date.parse(created_at)));
-  return { ...data, task_id: taskId, waypoint_ids, schedule, timezone, enabled, revision, created_at };
+  return { ...data, ...("name" in data ? {name: data["name"] as string} : {}), task_id: taskId, waypoint_ids, schedule, timezone, enabled, revision, created_at };
 }

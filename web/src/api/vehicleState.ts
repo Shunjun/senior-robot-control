@@ -1,6 +1,6 @@
 /** Versioned vehicle UI contract. New routes require an explicit car capability. */
 export type Mode = 'unknown' | 'idle' | 'manual' | 'task' | 'braking' | 'obstacle_hold' | 'feedback_stop' | 'execution_fault' | 'estop';
-export type Capability = 'runtime.v1' | 'motion.intent.v1' | 'settings.v1' | 'task.execution.v1' | 'logs.v1' | 'learning.v1';
+export type Capability = 'runtime.v1' | 'motion.intent.v1' | 'settings.v1' | 'task.execution.v1' | 'logs.v1' | 'learning.v1' | 'task.names.v1';
 export type Action = 'acquire' | 'estop_reset' | 'fault_recover';
 export type TaskAction = 'pause' | 'resume' | 'cancel' | 'takeover';
 export type Level = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
@@ -16,6 +16,8 @@ export interface BodyReference {
   kind: 'independent_body';
 }
 export interface TaskExecution {
+  name?: string;
+  definition_task_id?: string;
   task_id: string;
   version: number;
   phase: 'starting' | 'running' | 'revoking' | 'paused' | 'succeeded' | 'canceled' | 'failed';
@@ -253,7 +255,7 @@ export const EMPTY_VIEW: VehicleView = Object.freeze({
   rtt_ms: null
 });
 const MODES: readonly Mode[] = ['unknown', 'idle', 'manual', 'task', 'braking', 'obstacle_hold', 'feedback_stop', 'execution_fault', 'estop'];
-const CAPS: readonly Capability[] = ['runtime.v1', 'motion.intent.v1', 'settings.v1', 'task.execution.v1', 'logs.v1', 'learning.v1'];
+const CAPS: readonly Capability[] = ['runtime.v1', 'motion.intent.v1', 'settings.v1', 'task.execution.v1', 'logs.v1', 'learning.v1', 'task.names.v1'];
 const LEVELS: readonly Level[] = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL'];
 const ACTIONS: readonly Action[] = ['acquire', 'estop_reset', 'fault_recover'];
 const TASK_ACTIONS: readonly TaskAction[] = ['pause', 'resume', 'cancel', 'takeover'];
@@ -308,11 +310,29 @@ function body(value: unknown): BodyReference {
     stale: boolean(r.stale)
   };
 }
+/** Unicode character count matches the task store's Python validation. */
+export function isTaskName(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && Array.from(value).length <= 128;
+}
+function nonemptyId(value: unknown): string {
+  const id = text(value);
+  if (!id.trim()) throw new VehicleDecodeError();
+  return id;
+}
+function taskName(value: unknown): string {
+  if (!isTaskName(value)) throw new VehicleDecodeError();
+  return value;
+}
 function task(value: unknown): TaskExecution {
-  const r = record(value, ['task_id', 'version', 'phase', 'completed', 'total', 'stopped_for', 'allowed_actions']);
+  const raw = record(value);
+  //Compatible: metadata is optional on prior agents and direct navigation executions.
+  const keys = ['task_id', 'version', 'phase', 'completed', 'total', 'stopped_for', 'allowed_actions'];
+  const r = record(raw, [...keys, ...['name', 'definition_task_id'].filter(key => key in raw)]);
   const total = count(r.total);
   const completed = count(r.completed, total);
   return {
+    ...('name' in r ? { name: taskName(r.name) } : {}),
+    ...('definition_task_id' in r ? { definition_task_id: nonemptyId(r.definition_task_id) } : {}),
     task_id: text(r.task_id),
     version: count(r.version),
     phase: oneOf(r.phase, ['starting', 'running', 'revoking', 'paused', 'succeeded', 'canceled', 'failed']),
@@ -345,7 +365,7 @@ export function decodeVehicleFrame(value: unknown): VehicleFrame {
     wheel_linear_mps: nullable(r.wheel_linear_mps, number),
     task: nullable(r.task, task),
     allowed_actions: array(r.allowed_actions, v => oneOf(v, ACTIONS), 3),
-    capabilities: array(r.capabilities, v => oneOf(v, CAPS), 6)
+    capabilities: array(r.capabilities, v => oneOf(v, CAPS), CAPS.length)
   };
   if ('observation' in r) {
     const o = record(r.observation, ['status', 'last_sampled_steady', 'age_seconds']);

@@ -1,3 +1,4 @@
+import { isTaskName } from "../../api/vehicleState";
 import {
   useEffect,
   useRef,
@@ -31,6 +32,7 @@ import { listCurrentWaypoints } from "../map/useWorkspaceMap";
 import { NEW_TASK, ScheduleEditor } from "./ScheduleEditor";
 import {
   draftSchedule,
+  newTaskDraft,
   scheduleDraft,
   scheduleSummary,
   type TaskDraft,
@@ -107,7 +109,7 @@ function TaskEditor({
   mapCanvasProps,
   renderWorkspace,
 }: TaskListProps): ReactElement {
-  const [draft, setDraft] = useState<TaskDraft>(NEW_TASK);
+  const [draft, setDraft] = useState<TaskDraft>(newTaskDraft);
   const [editing, setEditing] = useState<TaskDetails | null>(null);
   const [preview, setPreview] = useState<TaskDetails | null>(null);
   const [routeBlocked, setRouteBlocked] = useState(false);
@@ -141,11 +143,18 @@ function TaskEditor({
   } | null>(null);
   useEffect(() => () => saveWaypointOperation.current?.abort(), [link]);
 
+  const namesSupported = snapshot.vehicle_ui?.capabilities.includes('task.names.v1') === true;
+  function taskLabel(task: { task_id: string; name?: string }): string {
+    //Compatible: an old vehicle always displays its stable ID.
+    return namesSupported ? task.name ?? task.task_id : task.task_id;
+  }
   const live = snapshot.connected && !snapshot.stale;
   const progress =
     live && snapshot.route_progress?.map_generation === snapshot.map_generation
       ? snapshot.route_progress
       : undefined;
+  const progressTask = (snapshot.tasks ?? []).find(task => task.task_id === progress?.task_id);
+  const progressLabel = taskLabel(progressTask ?? { task_id: progress?.task_id ?? "导航" });
   const persisted = catalog ?? workspace?.waypoints ?? [];
   const available = [...persisted, ...draftPoints];
   const waypoints = new Map(
@@ -165,6 +174,7 @@ function TaskEditor({
     workspace !== undefined &&
     schedule !== null &&
     draft.task_id.trim() !== "" &&
+    (namesSupported ? isTaskName(draft.name.trim()) : editing !== null) &&
     route.length > 0 &&
     !missingWaypoint &&
     !pending &&
@@ -275,7 +285,7 @@ function TaskEditor({
     setEditing(null);
     setPreview(null);
     setRouteBlocked(false);
-    setDraft(NEW_TASK);
+    setDraft(newTaskDraft());
     setWaypointIds([]);
     setHighlight(null);
     setMessage(null);
@@ -321,6 +331,7 @@ function TaskEditor({
       setDraft({
         ...NEW_TASK,
         task_id: task.task_id,
+        name: task.name ?? task.task_id,
         timezone: task.timezone,
         ...scheduleDraft(task.schedule),
       });
@@ -390,7 +401,8 @@ function TaskEditor({
     const body = {
       ...snapshot.map_ref,
       grid_id: workspace.grid_id,
-      task_id: draft.task_id.trim(),
+      task_id: draft.task_id,
+      ...(namesSupported ? { name: draft.name.trim() } : {}),
       created_at: editing?.created_at ?? new Date().toISOString(),
       timezone: draft.timezone.trim() || NEW_TASK.timezone,
       schedule,
@@ -625,7 +637,7 @@ function TaskEditor({
         </p>
         {progress && (
           <p className={styles.note}>
-            {progress.task_id ?? "导航"}
+            {progressLabel}
             {progress.active_waypoint_index !== null &&
               ` · 第 ${progress.active_waypoint_index + 1} 个航点`}
           </p>
@@ -646,7 +658,10 @@ function TaskEditor({
                 (preview?.task_id ?? editing?.task_id) === task.task_id
               }
             >
-              <code>{task.task_id}</code>
+              <div className={styles.taskIdentity}>
+                <strong>{taskLabel(task)}</strong>
+                <code>{task.task_id}</code>
+              </div>
               <button
                 type="button"
                 aria-label={`查看路线 ${task.task_id}`}
@@ -688,6 +703,7 @@ function TaskEditor({
             </div>
           ))}
         </div>
+        {!namesSupported && <p className={styles.warning}>车端需升级以支持独立任务名称；当前仅显示编号，可编辑已有任务的其他设置。</p>}
         {workspace === undefined && (
           <p className={styles.warning}>
             {!live
@@ -698,7 +714,8 @@ function TaskEditor({
         )}
         {preview !== null && (
           <section className={styles.routePreview} aria-label="所选任务路线">
-            <h4>任务路线 · {preview.task_id}</h4>
+            <h4>任务路线 · {taskLabel(preview)}</h4>
+            <p className={styles.note}>内部编号 {preview.task_id}</p>
             <p className={styles.note}>
               {scheduleSummary({
                 ...NEW_TASK,
@@ -745,6 +762,7 @@ function TaskEditor({
           <ScheduleEditor
             value={draft}
             onChange={setDraft}
+            namesSupported={namesSupported}
             editing={editing !== null}
           />
           <div className={styles.taskRow}>
@@ -875,7 +893,7 @@ function TaskEditor({
         )}
         <button
           type="button"
-          disabled={pending || !workspace}
+          disabled={pending || !workspace || !namesSupported}
           onClick={newTask}
         >
           新建任务

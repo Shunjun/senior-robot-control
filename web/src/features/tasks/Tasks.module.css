@@ -68,3 +68,8 @@
 .routePreview button { min-height: 36px; color: var(--ink-soft); background: var(--graphite-700); border: 1px solid var(--line); }
 
 .panel>div>button,.panel fieldset>button,.drawerToggle { min-height:44px;padding:8px 12px;border:1px solid var(--line);border-radius:8px;color:var(--ink);background:var(--graphite-800);cursor:pointer }.panel input,.panel select { min-height:44px;border-radius:8px }.taskRow code { font-size:14px;line-height:1.6 }.primary { border-radius:8px }
+
+.taskIdentity { flex: 1 0 100%; min-width: 0; overflow-wrap: anywhere; }
+.taskIdentity strong { display: block; }
+.taskIdentity code { display: block; color: var(--ink-dim); font-size: 11px; }
+.editor input[readonly] { color: var(--ink-dim); font-size: 11px; }

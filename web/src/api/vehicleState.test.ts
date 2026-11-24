@@ -1,3 +1,4 @@
+import { parseInbound } from "./protocol";
 import { describe, expect, it } from 'vitest';
 import { decodeVehicleFrame, VehicleTransport } from './vehicleState';
 
@@ -102,4 +103,18 @@ it('keeps calibration start identity and status query on distinct explicit reque
     { type: 'learning.start', requestId: 'original-start', payload: { expected_active_revision: 1, expected_authority_id: 'prepared' } },
     { type: 'learning.status', requestId: undefined, payload: { start_request_id: 'original-start' } }
   ]);
+});
+
+it('strictly accepts named execution metadata while rejecting malformed and extra fields', () => {
+  const task={task_id:'exec-88',definition_task_id:'route-01',name:'东区巡检',version:3,phase:'running',completed:1,total:3,stopped_for:null,allowed_actions:['pause']};
+  const named={...frame,capabilities:[...frame.capabilities,'task.names.v1'],task};
+  expect(decodeVehicleFrame(named).task).toMatchObject(task);
+  for(const patch of [{name:null},{name:'   '},{name:42},{definition_task_id:null},{extra:true}]) expect(()=>decodeVehicleFrame({...named,task:{...task,...patch}})).toThrow();
+  expect(decodeVehicleFrame({...named,task:{...task,name:'😀'.repeat(128)}}).task?.name).toHaveLength(256);
+});
+
+it('preserves task summary names through the snapshot decoder and rejects explicit null', () => {
+  const envelope={v:1,robot_id:'robot',session_id:'cloud',connection_epoch:1,request_id:'snapshot',seq:1,expires_at:2000,type:'snapshot',payload:{connected:true,localized:true,map_ref:null,home:null,home_revision:0,task_revision:1,runnable_task_ids:[],execution_status:'idle',collected_at:1000,stale:false,last_synced_at:1000,tasks:[{task_id:'route-01',name:'东区巡检',revision:1,enabled:true}]}};
+  expect(parseInbound(JSON.stringify(envelope))).toMatchObject({payload:{tasks:[{task_id:'route-01',name:'东区巡检'}]}});
+  expect(parseInbound(JSON.stringify({...envelope,payload:{...envelope.payload,tasks:[{...envelope.payload.tasks[0],name:null}]}}))).toBeNull();
 });
