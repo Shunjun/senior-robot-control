@@ -1,7 +1,9 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, renderHook, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
+import { runtime, testPort } from '../../api/vehicleState.testUtils';
+import { useMeasuredSpeed, useVehicleView } from './useVehicleView';
 import { DriveJoystick } from '../drive/DriveJoystick';
-afterEach(() => { cleanup();vi.unstubAllGlobals(); });
+afterEach(() => { cleanup();vi.unstubAllGlobals();vi.useRealTimers(); });
 it('normalizes both axes, snaps with hysteresis and returns to zero in one press', () => {
   vi.stubGlobal("PointerEvent", MouseEvent);
   const press = vi.fn(() => true), change = vi.fn(), release = vi.fn();
@@ -22,4 +24,18 @@ it('normalizes both axes, snaps with hysteresis and returns to zero in one press
   expect(change).toHaveBeenLastCalledWith(0,0);
   fireEvent.pointerUp(pad,{pointerId:1});
   expect(release).toHaveBeenCalledWith('release');
+});
+
+it('expires an unchanged runtime speed sample and accepts only a newer sequence as fresh', () => {
+  vi.useFakeTimers();
+  const port=testPort();
+  port.update(runtime({sequence:2,wheel_linear_mps:.5}),true);
+  const reading=renderHook(()=>useMeasuredSpeed(useVehicleView(port)));
+  expect(reading.result.current).toBe(.5);
+  act(()=>vi.advanceTimersByTime(5001));
+  expect(reading.result.current).toBeNull();
+  act(()=>port.update(runtime({sequence:2,wheel_linear_mps:.8}),true));
+  expect(reading.result.current).toBeNull();
+  act(()=>port.update(runtime({sequence:3,wheel_linear_mps:.5}),true));
+  expect(reading.result.current).toBe(.5);
 });

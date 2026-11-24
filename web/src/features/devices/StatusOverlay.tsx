@@ -5,7 +5,7 @@ import { useSpeedUnit, displaySpeed } from '../../display/speedUnits';
 import { FloatingCard } from '../../components/ui/FloatingCard';
 import { SegmentedControl } from '../../components/ui/SegmentedControl';
 import { PerformancePanel } from './PerformancePanel';
-import { useVehicleView } from './useVehicleView';
+import { useMeasuredSpeed, useVehicleView } from './useVehicleView';
 import { init, chartTheme } from './charts';
 import styles from './StatusOverlay.module.css';
 interface StatusOverlayProps { snapshot: RobotSnapshot; port: VehiclePort | undefined; tab: "motion" | "performance"; onTabChange: (tab: "motion" | "performance") => void; performanceExpired: boolean; visible: boolean }
@@ -16,7 +16,7 @@ export function StatusOverlay({ snapshot, port, tab, onTabChange, performanceExp
   const view = useVehicleView(port);
   const unit = useSpeedUnit();
   const body = view.frame?.body_reference;
-  const measured = view.available && view.connected ? body && !body.stale ? body.average.vx : view.frame?.wheel_linear_mps ?? null : null;
+  const measured = useMeasuredSpeed(view);
   const cpu = snapshot.connected && !snapshot.stale && !performanceExpired ? snapshot.performance?.cpu_percent ?? null : null;
   useEffect(() => {
     if (!view.frame) return;

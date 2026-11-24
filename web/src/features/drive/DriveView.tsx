@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import type { RobotLink } from '../../api/client';
 import type { RobotSnapshot } from '../../api/protocol';
-import { useVehicleView } from '../devices/useVehicleView';
+import { useMeasuredSpeed, useVehicleView } from '../devices/useVehicleView';
 import type { ReleaseReason } from './Joystick';
 import { DriveJoystick } from './DriveJoystick';
 import { ManualController, type ManualPhase } from './ManualController';
@@ -26,8 +26,7 @@ export function DriveView({ robotId, link, active = true, compact = false }: Dri
     setPhase(next);
     if (issue) setError(issue);
   }) : null, [link, robotId]);
-  const body = view.frame?.body_reference;
-  const measured = view.available && view.connected ? body && !body.stale ? body.average.vx : view.frame?.wheel_linear_mps ?? null : null;
+  const measured = useMeasuredSpeed(view);
   const enabled = active && view.manual_connected;
   useEffect(() => {
     if (!enabled) {
