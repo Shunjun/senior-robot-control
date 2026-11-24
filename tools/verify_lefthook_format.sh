@@ -42,7 +42,8 @@ format_copy() {
   cp "$src" "$dest"
   (
     cd "$LINKED"
-    uv run --no-sync ruff format --config "$LINKED/pyproject.toml" -- "$dest"
+    uv run --no-sync ruff check --select I --fix --config "$LINKED/pyproject.toml" -- "$dest" &&
+      uv run --no-sync ruff format --config "$LINKED/pyproject.toml" -- "$dest"
   ) >"$LOG/ruff-oracle.out" 2>&1 || die "ruff oracle failed for $src"
 }
 
@@ -89,7 +90,7 @@ printf 'git-dir %s\ncommon-dir %s\n' "$GIT_DIR" "$COMMON_DIR"
 
 (
   cd "$LINKED"
-  uv sync --frozen --no-install-project
+  uv sync --frozen --only-group dev
 ) >"$LOG/uv-sync.out" 2>&1 || {
   tail -n 40 "$LOG/uv-sync.out" >&2
   die "uv sync failed"
@@ -123,6 +124,9 @@ printf 'fixture-hooks %s\n' "$HOOKS"
 
 # 1. Fully staged root, nested, and spaced Unicode Python.
 write_bytes "$LINKED/root_mod.py" <<'EOF'
+import sys
+import os
+
 value=1+2
 EOF
 write_bytes "$LINKED/pkg/nested_mod.py" <<'EOF'
@@ -284,7 +288,7 @@ fi
 [ "$(sha256 "$LINKED/broken.py")" = "$broken_before" ] || die "scenario 5 changed broken.py"
 git -C "$LINKED" show :broken.py >"$LOG/staged-broken.py"
 cmp -s "$LINKED/broken.py" "$LOG/staged-broken.py" || die "scenario 5 changed the staged content"
-grep -q "Failed to parse" "$LOG/scenario-5.out" || die "scenario 5 error is not readable"
+grep -Eq "Failed to parse|invalid-syntax" "$LOG/scenario-5.out" || die "scenario 5 error is not readable"
 grep -q "broken.py" "$LOG/scenario-5.out" || die "scenario 5 error does not name the file"
 [ "$(git -C "$LINKED" status --porcelain -- broken.py)" = "A  broken.py" ] || die "scenario 5 did not keep the staged file"
 printf 'scenario 5 ok\n'

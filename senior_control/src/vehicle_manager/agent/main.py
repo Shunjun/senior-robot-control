@@ -7,7 +7,7 @@ import signal
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
 from pathlib import Path
-from typing import Any, Generic
+from typing import Any, Generic, Literal
 
 from senior_contracts.errors import ErrorCode
 from senior_contracts.wire import (
@@ -119,7 +119,7 @@ class Agent(Generic[ResultT]):
         metrics: Metrics | None = None,
         clock: Clock | None = None,
         performance: Callable[[], PerformancePayload | None] = lambda: None,
-        mapping_protocol_version: int | None = None,
+        mapping_protocol_version: Literal[1, 2] | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         if not robot_id.strip():
@@ -623,6 +623,8 @@ class Agent(Generic[ResultT]):
                 self._intent_task = self._spawn(self._drain_intent())
             return
         if envelope.type == "drive.stop" and envelope.payload.authority_id is not None:
+            # The validated authority tuple includes its gesture sequence.
+            assert envelope.payload.gesture is not None
             queued = self._queued_intent
             if queued is not None:
                 intent = queued[1]
@@ -818,7 +820,9 @@ class Agent(Generic[ResultT]):
             except Exception:
                 logger.warning("snapshot after edit failed", exc_info=True)
 
-    async def _answer_learning(self, link: Link, envelope) -> None:
+    async def _answer_learning(
+        self, link: Link, envelope: LearningStartEnvelope | LearningStatusEnvelope
+    ) -> None:
         try:
             self._admit(envelope)
             received = envelope._received_steady

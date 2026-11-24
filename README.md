@@ -62,18 +62,24 @@ CLI 源文件为单个 [bin/senior-robot.sh](bin/senior-robot.sh)，不编译、
 
 控制库开发检查使用项目 [pyproject.toml](pyproject.toml) 和 `uv.lock`；网页构建入口见 [web/package.json](web/package.json)。ROS 传感器契约、独立 launch 与 watchdog 负对照见 [ROS 说明](ros2/README.md)，它们不代替当前部署指南。历史验收记录见 [Linux 仿真记录](docs/testing/2026-10-27-linux-simulation.md)，当前未通过项见[阶段索引](docs/testing/2026-11-14-vehicle-stage-index.md)。
 
-提交前的 Python 格式化使用开发依赖里的 Lefthook 2.2.2。钩子只对已暂存的 `.py` 执行 `uv run --no-sync ruff format`，排版标准仍是根目录 [pyproject.toml](pyproject.toml) 的 `[tool.ruff]`。`ruff check`、mypy 和 pytest 不在这个钩子里。
+提交前的 Python 整理使用开发依赖里的 Lefthook 2.2.2。钩子对已暂存的 `.py` 先执行 `ruff check --select I --fix` 整理导入，再执行 `ruff format` 排版，结果纳入同一次提交。格式标准沿用根目录 [pyproject.toml](pyproject.toml)。完整 `ruff check`、mypy 和 pytest 由 CI 检查。
 
-Git hooks 由同一仓库的所有 worktree 共用，启用后也会作用于其他 worktree。当前 main 尚未包含此配置，先不要安装真实共用 hook；待本功能合并后，在实际开发 checkout 根目录一次性安装并启用：
+新电脑克隆仓库后，在开发 checkout 根目录执行一次（需要先安装 uv）：
 
 ```sh
-uv sync --frozen --group dev
+sh tools/setup-dev.sh
+```
+
+初始化脚本准备 Python 3.10、按锁文件安装项目及开发依赖，然后安装本地 Git 钩子。等价的手动命令为：
+
+```sh
+uv sync --frozen --python 3.10 --group dev
 uv run --no-sync lefthook install
 ```
 
-`uv sync --frozen --group dev` 按锁文件准备带有 Lefthook 和 Ruff 的项目环境。`lefthook install` 把 `pre-commit` 写进该仓库共用的 Git hooks，同一个仓库的其他 worktree 提交时也会走到这个钩子。之后本地 `git commit` 会格式化本次暂存的根目录和子目录 Python，路径可以带空格，并把格式化结果纳入同一次提交。提交时 PATH 里需要有 `uv`；钩子执行 `uv run --no-sync`，不会在提交时重新同步依赖。没有暂存 Python 时这次格式化跳过，其他文件保持原样。暂存的 Python 有语法错误时提交失败，HEAD 不变，已暂存内容保留，终端留下 Ruff 的解析错误。文件只暂存了其中一部分时，Lefthook 先藏起未暂存改动，只格式化暂存版本，再恢复未暂存改动。
+Git hooks 由同一仓库的 worktree 共用；每个用于开发的 worktree 仍须准备自己的开发依赖。提交时 PATH 需要有 `uv`，钩子使用 `--no-sync`，不会在每次提交时同步依赖。没有暂存 Python 时跳过；部分暂存时只整理暂存版本，之后恢复未暂存修改。Python 语法错误会阻止提交并保留 HEAD 和暂存内容。
 
-只克隆、未执行 `lefthook install` 的仓库不会在提交时自动格式化。
+`lefthook.yml`、依赖声明和锁文件随代码提交；生成的 `.git/hooks/pre-commit` 不纳入 Git。新克隆仓库需重新执行初始化，日常提交无需重复安装。初始化脚本只用于开发环境，不放入车辆或云端的启动流程。
 
 ## 任务路线图
 

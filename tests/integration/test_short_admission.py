@@ -153,6 +153,9 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
             }
         if kind == "learning_capability":
             return {"ok": True, "learning_protocol_version": None}
+        if kind == "map.backend.status":
+            # This controlled motion peer deliberately provides no optional SLAM backend.
+            return {"ok": False, "error": "unavailable"}
         assert kind in {"identity", "disable_motion", "exit"}
         return {"ok": True}
 
@@ -484,7 +487,7 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
             )
         )
         assert denied.reason == "stop_required"
-        Path(f"/private/tmp/task_b7719c254510-{path}-timing.json").write_text(
+        (tmp_path / f"{path}-timing.json").write_text(
             json.dumps(
                 {
                     "manual_lock_holds_seconds": holds,

@@ -62,10 +62,14 @@ def mapping_launch(monkeypatch):
         for action in actions
         if isinstance(action, modules["launch.actions"]["OpaqueFunction"])
     ]
+
     def select_nodes(context):
         # Launch diagnostics wrap the same nodes; retain all original command assertions.
-        return [action for action in select(context)
-                if isinstance(action, modules["launch_ros.actions"]["Node"])]
+        return [
+            action
+            for action in select(context)
+            if isinstance(action, modules["launch_ros.actions"]["Node"])
+        ]
 
     return select_nodes, defaults
 

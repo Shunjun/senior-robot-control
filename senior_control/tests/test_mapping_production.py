@@ -69,6 +69,9 @@ class NativeFixture:
             return dict(ok=True)
         assert fields["boot_id"] == self.boot
         if action == "grid":
+            if self.corrected and self.sequence == 4:
+                # A real raster RPC yields after the corrected graph commit becomes visible.
+                await asyncio.sleep(0.02)
             self.raster = dict(
                 boot_id=self.boot,
                 sequence=self.sequence,
@@ -235,10 +238,24 @@ async def test_production_assembly_continuously_saves_and_reopens_canonical_home
             for _ in range(200):
                 catalog = await managed.request("map.catalog")
                 if catalog["entries"][0]["version"] >= 2 and native.sequence == 4:
-                    break
+                    ref = catalog["entries"][0]["map_ref"]
+                    view = await managed.request("map.manifest", **ref)
+                    live = await managed.state_requests(client).request("state.get")
+                    # Receipt of cut 4 precedes publishing its qualified navigation view.
+                    # During correction the production owner deliberately exposes read-only data.
+                    published = (
+                        not view.get("display_only", False)
+                        and live.get("navigation_ready") is True
+                        and live.get("map_grid_id") == view.get("grid_id")
+                        and live.get("map_generation") == live.get("localization_generation")
+                    )
+                    if published and (
+                        scenario != "corrected" or math.isclose(live["robot_pose"]["yaw"], 0.15)
+                    ):
+                        break
                 await asyncio.sleep(0.01)
             else:
-                raise AssertionError("automatic checkpoint did not progress")
+                raise AssertionError("automatic checkpoint/navigation publication did not settle")
             first = catalog["entries"][0]
             manifest = await managed.request("map.manifest", **first["map_ref"])
             assert manifest.get("display_only", False) is False

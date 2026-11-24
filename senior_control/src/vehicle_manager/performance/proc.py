@@ -6,12 +6,13 @@ import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True)
 class ModuleReading:
     name: str
-    status: str
+    status: Literal["running", "inactive", "unavailable"]
     cpu_percent: float | None
     rss_bytes: int | None
     process_count: int

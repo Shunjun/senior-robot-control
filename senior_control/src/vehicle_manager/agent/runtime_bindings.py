@@ -5,7 +5,7 @@ import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from senior_contracts.wire import HEARTBEAT_INTERVAL_MS, PerformancePayload, VideoEnvelope
 
@@ -121,7 +121,7 @@ class Agent(_Agent[OperationResult]):
         metrics: Metrics | None = None,
         clock: Clock | None = None,
         performance: Callable[[], PerformancePayload | None] = lambda: None,
-        mapping_protocol_version: int | None = None,
+        mapping_protocol_version: Literal[1, 2] | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         super().__init__(
