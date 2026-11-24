@@ -164,7 +164,7 @@ async def test_version_three_leaves_map_link_unchanged(tmp_path: Path) -> None:
             link = await cursor.fetchone()
 
     assert version is not None
-    assert version[0] == 3
+    assert version[0] == 4
     assert columns == [
         "task_id",
         "definition",
@@ -1087,7 +1087,7 @@ async def test_domain_versions_upgrade_without_touching_agent_safety(
         async with database.connection.execute("SELECT * FROM agent_safety_intent") as cursor:
             assert await cursor.fetchone() == ("historical",)
         async with database.connection.execute("PRAGMA user_version") as cursor:
-            assert await cursor.fetchone() == (3,)
+            assert await cursor.fetchone() == (4,)
         async with database.connection.execute("SELECT version FROM core_schema_version") as cursor:
             assert await cursor.fetchone() == (4,)
 
@@ -1960,3 +1960,59 @@ async def test_runtime_persists_confirmed_route_completion(tmp_path: Path) -> No
         persisted = await store.execution_by_id(running.execution_id)
         assert persisted.status is ExecutionStatus.SUCCEEDED
         assert persisted.navigation_sent
+
+
+async def test_empty_domain3_upgrades_task_names_and_reopens(tmp_path: Path) -> None:
+    """N1: empty user catalog upgrades without changing other schema owners/data."""
+    from vehicle_manager.agent.production_bindings import AgentJournal
+
+    path = tmp_path / "names.db"
+    created = datetime(2026, 11, 25, tzinfo=timezone.utc)
+    async with Database(path) as database:
+        from vehicle_manager.storage.core_schema import migrate_core
+
+        await migrate(database, list(DOMAIN_MIGRATIONS[:3]))
+        await migrate_core(database)
+        journal = AgentJournal(database, robot_id="robot-a")
+        await journal.prepare()
+        await database.connection.execute("CREATE TABLE name_upgrade_probe(value TEXT)")
+        await database.connection.execute("INSERT INTO name_upgrade_probe VALUES ('untouched')")
+        await database.connection.commit()
+        async with database.connection.execute("SELECT version FROM agent_schema_version") as cur:
+            agent_version = await cur.fetchone()
+        store = TaskStore(database, robot_id="robot-a")
+        await store.prepare()
+        assert await store.list_tasks() == ()
+        async with database.connection.execute("PRAGMA user_version") as cur:
+            assert await cur.fetchone() == (4,)
+    async with Database(path) as database:
+        store, task = await saved_task(database, created)
+        renamed = await store.update(replace(task, name="东区巡检"), task.revision)
+        assert renamed.name == "东区巡检"
+        async with database.connection.execute("SELECT value FROM name_upgrade_probe") as cur:
+            assert await cur.fetchone() == ("untouched",)
+        async with database.connection.execute("SELECT version FROM core_schema_version") as cur:
+            assert await cur.fetchone() == (4,)
+        async with database.connection.execute("SELECT version FROM agent_schema_version") as cur:
+            assert await cur.fetchone() == agent_version
+
+
+async def test_due_claim_accepts_only_a_concurrent_name_change_once(tmp_path: Path) -> None:
+    """N5: deterministic read/edit/claim ordering at the transaction boundary."""
+    created = datetime(2026, 11, 25, tzinfo=timezone.utc)
+    due = created + timedelta(minutes=30)
+    async with Database(tmp_path / "claim.db") as database:
+        store, observed = await saved_task(database, created)
+        renamed = await store.update(replace(observed, name="夜班巡检"), observed.revision)
+        # Both edits are display-only, even when the final name matches the read.
+        await store.update(replace(renamed, name=observed.name), renamed.revision)
+        nav = RecordingNavigation()
+        executor = TaskExecutor(database, store, nav)
+        await executor.persist_and_dispatch(due_intent(observed, due), observed)
+        execution = await store.execution_for(observed.task_id, due)
+        assert execution is not None
+        assert nav.calls == [execution.execution_id]
+        with pytest.raises(DomainError):
+            await executor.persist_and_dispatch(due_intent(observed, due), observed)
+        assert nav.calls == [execution.execution_id]
+        assert await store.skips() == ()

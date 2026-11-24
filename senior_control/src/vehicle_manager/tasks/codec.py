@@ -52,6 +52,8 @@ class TaskCodec:
             self.flag(row[9]),
             self.whole(row[10]),
             created,
+            # //Compatible: internal execution definitions can use the original 12 columns.
+            self.optional_text(row[12]) if len(row) > 12 else None,
         )
 
     def execution(self, row: aiosqlite.Row) -> ExecutionRecord:

@@ -389,6 +389,16 @@ class StoreTaskPort(Generic[ResultT]):
         return stored.revision
 
     async def update(self, body: Mapping[str, Any], expected_revision: int) -> int:
+        if "name" not in body:
+            # //Compatible: old clients preserve the actual persisted display name.
+            try:
+                task_id = _text(body, "task_id")
+            except (KeyError, TypeError, ValueError) as exc:
+                raise self._values.error(ErrorCode.VALIDATION, "invalid task definition") from exc
+            current = await self._store.get(task_id)
+            if current is None:
+                raise self._values.error(ErrorCode.CONFLICT, "task does not exist")
+            body = {**body, "name": current.name}
         definition = self._definition(body)
         await self._qualify_workspace(body, definition)
         stored = await self._store.update(definition, expected_revision)
@@ -437,6 +447,13 @@ class StoreTaskPort(Generic[ResultT]):
             if not isinstance(waypoints, list):
                 raise ValueError("waypoint_ids must be a list")
             enabled = body["enabled"]
+            if "name" in body:
+                name = body["name"]
+                if not isinstance(name, str):
+                    raise ValueError("name must be text")
+            else:
+                # //Compatible: old API creation uses the stable ID as display metadata.
+                name = _text(body, "task_id")
             return TaskDefinition(
                 task_id=_text(body, "task_id"),
                 robot_id=self._robot_id,
@@ -447,6 +464,7 @@ class StoreTaskPort(Generic[ResultT]):
                 enabled=enabled,
                 revision=0,
                 created_at=created,
+                name=name,
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise self._values.error(ErrorCode.VALIDATION, "invalid task definition") from exc

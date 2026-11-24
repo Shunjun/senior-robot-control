@@ -430,11 +430,15 @@ class LifecycleStore:
     ) -> core.Transition:
         if cmd.action != "submit":
             raise ValueError("submit command required")
+        # Display metadata must not change execution request identity. Keep all
+        # original execution fields (including revision) in the established projection.
+        execution_definition = asdict(task)
+        execution_definition.pop("name")
         fingerprint = (
             operation_fingerprint
             or hashlib.sha256(
                 _json(
-                    {"command": asdict(cmd), "task": asdict(task), "occurrence": occurrence}
+                    {"command": asdict(cmd), "task": execution_definition, "occurrence": occurrence}
                 ).encode()
             ).hexdigest()
         )
