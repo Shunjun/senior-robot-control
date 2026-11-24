@@ -185,7 +185,8 @@ export function TaskExecutionControls({ port }: { port: VehiclePort | undefined 
   }
   if(!frame || !task) return null;
   return <section className={styles.task} aria-label="当前执行实例操作">
-    <h4>当前任务 {task.task_id} · {TASKS[task.phase]}</h4>
+    <h4>当前任务 {frame.capabilities.includes('task.names.v1') ? task.name ?? task.task_id : task.task_id} · {TASKS[task.phase]}</h4>
+    <p className={styles.source}>内部编号 {task.definition_task_id ?? task.task_id} · 执行实例 {task.task_id}</p>
     <p>已完成动作 {task.completed} / {task.total}{task.stopped_for ? ` · ${task.stopped_for}` : ''}</p>
     <div className={styles.actions}>{task.allowed_actions.map(action => <button key={action} disabled={!view.connected || !view.available || busy || !frame.capabilities.includes('task.execution.v1')} onClick={() => void command(action)}>{ACTIONS[action]}</button>)}</div>
     {note && <p role="status">{note}</p>}

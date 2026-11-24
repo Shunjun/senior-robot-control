@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useState } from "react";
 
 import { CommandError, type RobotLink } from "../../api/client";
+import { runtime } from "../../api/vehicleState.testUtils";
 import type { LinkStatus, RobotSnapshot } from "../../api/protocol";
 import { useWorkspaceMap } from "../map/useWorkspaceMap";
 
 import { draftSchedule, NEW_TASK, ScheduleEditor, type TaskDraft } from "./ScheduleEditor";
+import { getTaskDetails } from "../../api/workspace";
 import { TaskList, type TaskWorkspaceData } from "./TaskList";
 
 beforeEach(() => vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null));
@@ -17,6 +19,7 @@ afterEach(() => {
 });
 
 const snapshot: RobotSnapshot = {
+  vehicle_ui: runtime({capabilities:["task.names.v1"]}),
   robot_id: "robot-alpha",
   connected: true,
   localized: true,
@@ -56,7 +59,7 @@ describe("task schedules", () => {
       }} />;
     }
     render(<Editor />);
-    fireEvent.change(screen.getByLabelText("任务名称（编号）"), { target: { value: "daily" } });
+    fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "daily" } });
     expect(draftSchedule(changed.at(-1)!)).toEqual({ kind: "cron", expression: "0 9 * * *" });
     expect(changed.at(-1)?.timezone).toBe("Asia/Shanghai");
 
@@ -76,7 +79,7 @@ describe("task schedules", () => {
       ],
     };
     render(<TaskList snapshot={listed} link={robotLink} workspace={workspace} />);
-    fireEvent.change(screen.getByLabelText("任务名称（编号）"), { target: { value: "evening" } });
+    fireEvent.change(screen.getByLabelText("任务名称"), { target: { value: "evening" } });
     fireEvent.keyDown(screen.getByRole("button", { name: "添加地图航点 gate" }), { key: "Enter" });
     fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
     await screen.findByText("车端已确认保存任务。");
@@ -349,6 +352,7 @@ it("shows only vehicle-reported progress on the current live map", () => {
   const current: RobotSnapshot = {
     ...snapshot,
     execution_status: "running",
+    tasks: [{task_id:"daily",name:"夜班巡检",revision:4,enabled:true}],
     map_generation: "grid-1",
     route_progress: {
       execution_id: "run-1",
@@ -360,11 +364,11 @@ it("shows only vehicle-reported progress on the current live map", () => {
   };
   const robotLink = link();
   const view = render(<TaskList snapshot={current} link={robotLink} />);
-  expect(screen.getByText(/daily · 第 2 个航点/)).toBeTruthy();
+  expect(screen.getByText(/夜班巡检 · 第 2 个航点/)).toBeTruthy();
   view.rerender(<TaskList snapshot={{ ...current, map_generation: "grid-2" }} link={robotLink} />);
-  expect(screen.queryByText(/daily · 第 2 个航点/)).toBeNull();
+  expect(screen.queryByText(/夜班巡检 · 第 2 个航点/)).toBeNull();
   view.rerender(<TaskList snapshot={{ ...current, stale: true }} link={robotLink} />);
-  expect(screen.queryByText(/daily · 第 2 个航点/)).toBeNull();
+  expect(screen.queryByText(/夜班巡检 · 第 2 个航点/)).toBeNull();
 });
 
 it("shows current vehicle and laser hits on task maps only for qualified live generations", () => {
@@ -429,7 +433,7 @@ it.each(['daily', 'weekly', 'interval'] as const)('creates, saves and reopens a 
     return { ok: true } as never;
   });
   const { rerender } = render(<TaskList snapshot={snapshot} link={robotLink} workspace={workspace} />);
-  fireEvent.change(screen.getByLabelText('任务名称（编号）'), { target: { value: 'daily' } });
+  fireEvent.change(screen.getByLabelText('任务名称'), { target: { value: 'daily' } });
   fireEvent.change(screen.getByLabelText('计划类型'), { target: { value: mode } });
   if (mode === 'interval') {
     fireEvent.change(screen.getByLabelText('间隔数值'), { target: { value: '2' } });
@@ -444,8 +448,8 @@ it.each(['daily', 'weekly', 'interval'] as const)('creates, saves and reopens a 
   const expected = mode === 'interval' ? { kind: 'interval', every_seconds: 7200 }
     : { kind: 'cron', expression: mode === 'daily' ? '30 8 * * *' : '30 8 * * 1,3' };
   expect(saved.schedule).toEqual(expected);
-  rerender(<TaskList snapshot={listedSnapshot} link={robotLink} workspace={workspace} />);
-  fireEvent.click(screen.getByRole('button', { name: '编辑 daily' }));
+  rerender(<TaskList snapshot={{...listedSnapshot,tasks:[{task_id:saved.task_id,revision:4,enabled:true}]}} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button', { name: `编辑 ${saved.task_id}` }));
   await waitFor(() => expect((screen.getByLabelText('计划类型') as HTMLSelectElement).value).toBe(mode));
   if (mode === 'interval') expect((screen.getByLabelText('间隔数值') as HTMLInputElement).value).toBe('2');
   else expect((screen.getByLabelText('执行时间') as HTMLInputElement).value).toBe('08:30');
@@ -480,12 +484,12 @@ it("accepts independent raster and reference versions, retiring drafts on refere
   const robotLink = link();
   const state = { ...snapshot, map_generation: "reference-7", map_grid_id: workspace.grid_id };
   const page = render(<TaskList snapshot={state} link={robotLink} workspace={workspace} />);
-  const input = screen.getByLabelText("任务名称（编号）") as HTMLInputElement;
+  const input = screen.getByLabelText("任务名称") as HTMLInputElement;
   expect(input.closest("fieldset")?.disabled).toBe(false);
   fireEvent.change(input, { target: { value: "draft-current" } });
   page.rerender(<TaskList snapshot={{ ...state, map_generation: "reference-8", map_ref: { map_id: "another", reference_revision: 3 } }} link={robotLink} workspace={workspace} />);
-  expect((screen.getByLabelText("任务名称（编号）") as HTMLInputElement).value).toBe("");
-  expect((screen.getByLabelText("任务名称（编号）") as HTMLInputElement).closest("fieldset")?.disabled).toBe(true);
+  expect((screen.getByLabelText("任务名称") as HTMLInputElement).value).toBe("");
+  expect((screen.getByLabelText("任务名称") as HTMLInputElement).closest("fieldset")?.disabled).toBe(true);
 });
 
 it.each([
@@ -545,9 +549,10 @@ it.each([
         workspace={{ ...workspace, waypointWrites: true }}
       />,
     );
-    fireEvent.change(screen.getByLabelText("任务名称（编号）"), {
+    fireEvent.change(screen.getByLabelText("任务名称"), {
       target: { value: "route-new" },
     });
+    const stableTaskId=(screen.getByLabelText("内部编号") as HTMLInputElement).value;
     fireEvent.click(screen.getByRole("button", { name: "多点路线选取" }));
     const surface = screen.getByRole("application", { name: "地图" });
     fireEvent.keyDown(surface, { key: "Enter" });
@@ -571,10 +576,11 @@ it.each([
       operation_id: failedOperation,
       body: {},
     });
-    expect(screen.getByLabelText("任务名称（编号）")).toHaveProperty(
+    expect(screen.getByLabelText("任务名称")).toHaveProperty(
       "value",
       "route-new",
     );
+    expect(screen.getByLabelText("内部编号")).toHaveProperty("value",stableTaskId);
     fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
     if (outcome === "failed") {
       await screen.findByText("车端已确认保存任务。");
@@ -628,4 +634,93 @@ it('keeps the saved-route preview read-only while retaining the current editable
   fireEvent.click(screen.getByRole('button',{name:'查看路线 daily'}));
   const preview=await screen.findByRole('region',{name:'所选任务路线'});
   expect([...preview.querySelectorAll('li')].some(item=>item.draggable)).toBe(false);
+});
+
+it("N7 creates an independent stable ID then renames without changing the accepted plan", async () => {
+  const robotLink = link();
+  let stored: Record<string, unknown> = {};
+  vi.mocked(robotLink.request).mockImplementation(async (type, payload) => {
+    const q = payload as {body: Record<string, unknown>};
+    if(type === 'task.get') return {ok:true,data:{robot_id:snapshot.robot_id,map_ref:snapshot.map_ref,grid_id:workspace.grid_id,...stored,revision:1}} as never;
+    if(type === 'task.create' || type === 'task.update') stored = {...q.body};
+    return {ok:true,status:'succeeded'} as never;
+  });
+  const page=render(<TaskList snapshot={snapshot} link={robotLink} workspace={workspace} />);
+  fireEvent.change(screen.getByLabelText('任务名称'), {
+    target: { value: ' \u0085东区巡检\u0085 ' },
+  });
+  const id=(screen.getByLabelText('内部编号') as HTMLInputElement).value;
+  expect(id).toMatch(/^[0-9a-f-]{36}$/);
+  fireEvent.change(screen.getByLabelText('计划类型'),{target:{value:'interval'}});
+  fireEvent.keyDown(screen.getByRole('button',{name:'添加地图航点 gate'}),{key:'Enter'});
+  fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
+  await screen.findByText('车端已确认保存任务。');
+  expect(stored).toMatchObject({task_id:id,name:'东区巡检',waypoint_ids:['gate']});
+  const original={...stored};
+  page.rerender(<TaskList snapshot={{...snapshot,tasks:[{task_id:id,name:'东区巡检',revision:1,enabled:true}]}} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button',{name:`编辑 ${id}`}));
+  await waitFor(()=>expect(screen.getByLabelText('任务名称')).toHaveProperty('value','东区巡检'));
+  fireEvent.change(screen.getByLabelText('任务名称'), {
+    target: { value: ' \u0085夜班巡检\uFEFF ' },
+  });
+  fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
+  await screen.findByText('车端已确认保存任务。');
+  expect(stored).toEqual({...original,name:'夜班巡检'});
+  expect(robotLink.request).toHaveBeenLastCalledWith('task.update',expect.objectContaining({expected_revision:1}));
+  page.rerender(<TaskList snapshot={{...snapshot,tasks:[{task_id:id,name:'夜班巡检',revision:2,enabled:true}]}} link={robotLink} workspace={workspace} />);
+  fireEvent.click(screen.getByRole('button',{name:`查看路线 ${id}`}));
+  expect(await screen.findByRole('heading',{name:'任务路线 · 夜班巡检'})).toBeTruthy();
+});
+
+it("N9 locks names on an old empty vehicle and preserves non-name editing", async () => {
+  const robotLink=link();
+  vi.mocked(robotLink.request).mockResolvedValue({ok:true,data:{robot_id:snapshot.robot_id,map_ref:snapshot.map_ref,grid_id:workspace.grid_id,task_id:'daily',waypoint_ids:['gate'],schedule:{kind:'cron',expression:'0 9 * * *'},timezone:'Asia/Shanghai',enabled:true,revision:4,created_at:'2026-11-24T00:00:00Z'}} as never);
+  const old={...snapshot,vehicle_ui:{...snapshot.vehicle_ui!,capabilities:[]},tasks:[{task_id:'daily',name:'ignored',revision:4,enabled:true}]};
+  const page=render(<TaskList snapshot={old} link={robotLink} workspace={workspace} />);
+  expect(screen.getByText(/车端需升级/)).toBeTruthy();
+  expect(screen.queryByText('ignored')).toBeNull();
+  expect(screen.getByLabelText('任务名称')).toHaveProperty('readOnly',true);
+  expect(screen.getByRole('button',{name:'新建任务'})).toHaveProperty('disabled',true);
+  expect(screen.getByRole('button',{name:'提交任务'})).toHaveProperty('disabled',true);
+  fireEvent.click(screen.getByRole('button',{name:'编辑 daily'}));
+  await waitFor(()=>expect(screen.getByLabelText('内部编号')).toHaveProperty('value','daily'));
+  fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
+  await screen.findByText('车端已确认保存任务。');
+  const body=(vi.mocked(robotLink.request).mock.calls.at(-1)?.[1] as {body:object}).body;
+  expect(body).not.toHaveProperty('name');
+  page.rerender(<TaskList snapshot={{...old,tasks:[]}} link={robotLink} workspace={workspace} />);
+  expect(screen.getByText(/车端需升级/)).toBeTruthy();
+  page.rerender(<TaskList snapshot={{...snapshot,tasks:[]}} link={robotLink} workspace={workspace} />);
+  expect(screen.getByLabelText('任务名称')).toHaveProperty('readOnly',false);
+});
+
+it("N10 trims names preserving internal spaces and identifies duplicate names by ID", async () => {
+  const robotLink=link();
+  render(<TaskList snapshot={{...snapshot,tasks:[{task_id:'one',name:'东区  巡检',revision:1,enabled:true},{task_id:'two',name:'东区  巡检',revision:1,enabled:true}]}} link={robotLink} workspace={workspace} />);
+  expect(screen.getAllByText('东区  巡检', {exact:true,normalizer:value=>value})).toHaveLength(2);
+  expect(screen.getByRole('button',{name:'编辑 one'})).toBeTruthy();
+  expect(screen.getByRole('button',{name:'编辑 two'})).toBeTruthy();
+  fireEvent.click(screen.getAllByRole('button',{name:'删除'})[1]!);
+  await screen.findByText('车端已确认任务变更。');
+  expect(robotLink.request).toHaveBeenCalledWith('task.delete',expect.objectContaining({body:{task_id:'two'}}));
+  fireEvent.keyDown(screen.getByRole('button',{name:'添加地图航点 gate'}),{key:'Enter'});
+  for (const value of ['   ', '\uFEFF', '\u0085']) {
+    fireEvent.change(screen.getByLabelText('任务名称'), { target: { value } });
+    expect(screen.getByRole('button', { name: '提交任务' })).toHaveProperty('disabled', true);
+  }
+  fireEvent.change(screen.getByLabelText('任务名称'),{target:{value:'  东区  巡检  '}});
+  fireEvent.click(screen.getByRole('button',{name:'提交任务'}));
+  await screen.findByText('车端已确认保存任务。');
+  expect(robotLink.request).toHaveBeenCalledWith('task.create',expect.objectContaining({body:expect.objectContaining({name:'东区  巡检'})}));
+});
+
+it("rejects an explicitly invalid name from task.get while accepting omitted legacy names", async () => {
+  const robotLink=link();
+  for (const name of [null, '\uFEFF', '\u0085']) {
+    const details = { ...taskDetails, waypoint_ids: ['gate'], name };
+    vi.mocked(robotLink.request).mockResolvedValue({ ok: true, data: details } as never);
+    await expect(getTaskDetails(robotLink, snapshot.robot_id, snapshot.map_ref!, 'daily')).rejects.toThrow();
+  }
+  vi.mocked(robotLink.request).mockResolvedValue({ok:true,data:{...taskDetails,waypoint_ids:["gate"]}} as never);
+  expect((await getTaskDetails(robotLink,snapshot.robot_id,snapshot.map_ref!,'daily')).task_id).toBe('daily');
 });

@@ -8,16 +8,20 @@ interface ScheduleEditorProps {
   value: TaskDraft;
   onChange: (draft: TaskDraft) => void;
   editing: boolean;
+  namesSupported?: boolean;
 }
-export function ScheduleEditor({ value, onChange, editing }: ScheduleEditorProps): ReactElement {
+export function ScheduleEditor({ value, onChange, editing, namesSupported = true }: ScheduleEditorProps): ReactElement {
   function changeSchedule(patch: Partial<ScheduleDraft>): void {
     onChange({ ...value, ...patch, scheduleEdited: true });
   }
   return <div className={styles.editor}>
-    <label>任务名称（编号）
-      <input value={value.task_id} readOnly={editing} onChange={event => onChange({ ...value, task_id: event.target.value })} />
+    <label>任务名称
+      <input value={namesSupported ? value.name : value.task_id} readOnly={!namesSupported} onChange={event => onChange({ ...value, name: event.target.value })} />
     </label>
-    <p className={styles.note}>创建后任务名称（编号）不可修改。</p>
+    <label className={styles.note}>内部编号
+      <input value={value.task_id} readOnly />
+    </label>
+    <p className={styles.note}>名称可修改、可重复；{editing ? '编辑时编号保持不变。' : '编号用于区分同名任务。'}</p>
     <label>时区
       <input value={value.timezone} onChange={event => onChange({ ...value, timezone: event.target.value })} />
     </label>
