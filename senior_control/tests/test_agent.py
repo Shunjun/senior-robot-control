@@ -1557,21 +1557,20 @@ def test_named_summaries_roundtrip_through_cloud_cache() -> None:
         collected_at=time.time(),
         tasks=(TaskSummary("route-01", 1, True, name="东区巡检"),),
     )
-    for name, revision in (("东区巡检", 1), ("夜班巡检", 2)):
-        current = replace(
-            snapshot,
-            task_revision=revision,
-            tasks=(TaskSummary("route-01", revision, True, name=name),),
-        )
-        wire = cache_frame(current)
-        decoded = SnapshotEnvelope.model_validate_json(wire.model_dump_json())
-        cache.store(decoded)
-        cached = cache.get(ROBOT)
-        assert cached is not None
-        restored = snapshot_from_envelope(
-            decoded.model_copy(update={"payload": cached.snapshot}), map_reference=MapRef
-        )
-        assert restored.tasks == current.tasks
+    current = replace(
+        snapshot,
+        task_revision=2,
+        tasks=(TaskSummary("route-01", 2, True, name="夜班巡检"),),
+    )
+    wire = cache_frame(current)
+    decoded = SnapshotEnvelope.model_validate_json(wire.model_dump_json())
+    cache.store(decoded)
+    cached = cache.get(ROBOT)
+    assert cached is not None
+    restored = snapshot_from_envelope(
+        decoded.model_copy(update={"payload": cached.snapshot}), map_reference=MapRef
+    )
+    assert restored.tasks == current.tasks
     raw = cache_frame(snapshot).model_dump()
     del raw["payload"]["tasks"][0]["name"]
     legacy = snapshot_from_envelope(SnapshotEnvelope.model_validate(raw), map_reference=MapRef)

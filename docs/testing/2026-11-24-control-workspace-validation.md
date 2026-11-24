@@ -307,7 +307,7 @@ PYTHONPATH=contracts/src:senior_control/src:cloud/src:. PYTHONDONTWRITEBYTECODE=
 
 下表以真实独立输入或连续使用流程计数，不按it块或for循环合并独立参数。创建→同ID改名→预览、同请求重放可作为连续流程；互不依赖的创建支线、不同坏值分别计数。原标签迁移、旧安全保护不计为名称新增。下列覆盖属于名称功能整体，**本次证据校正新增测试输入0**。
 
-核心覆盖共 **21条独立输入/连续流程：后端11、前端10**。中文summary/cache循环中的“东区巡检”revision1与“夜班巡检”revision2没有执行真实改名，各自从snapshot构造，因此独立计2条；真实创建后重开与旧API省名创建支线也分别列出。路径均相对父工作区：
+核心覆盖共 **20条独立输入/连续流程：后端10、前端10**。缓存单元路径仅测单个命名快照“夜班巡检”revision2；本次确实删除“东区巡检”revision1的重复正向输入（原B6），不是改变独立输入计数口径。原两次独立快照构造没有执行真实改名；真正创建→改名→数据库重开→cache/decoder更新沿用已审生产probe及B2/B3/N7/browser链路证据。真实创建后重开与旧API省名创建支线仍分别列出，原行号保留以便追溯。路径均相对父工作区：
 
 | # | 独立输入/连续流程 | 真实测试路径与定位 | 来源 |
 |---|---|---|---|
@@ -316,9 +316,8 @@ PYTHONPATH=contracts/src:senior_control/src:cloud/src:. PYTHONDONTWRITEBYTECODE=
 | B3 | old-api省name创建→改名“夜班巡检”→省name更新→禁用保名，重开summary读取 | 同B2，独立old-api支线 | 名称新增 |
 | B4 | 接纳执行后“东区巡检”改“夜班巡检”，冻结路线/实例/版本/effect不变并重放 | `senior_control/tests/test_task_lifecycle_store.py::test_rename_keeps_accepted_execution_and_fingerprint` | 名称新增 |
 | B5 | 读到期定义→改名→领取/同请求重放，仅一次effect | `senior_control/tests/test_task_runner.py::test_due_claim_accepts_only_a_concurrent_name_change_once`；生产事务另见历史`/tmp/task-names-integration-2026-11-25/review-probe.py::main`的LifecycleStore.submit链 | 名称新增；不把兼容executor冒称生产链 |
-| B6 | “东区巡检”revision1，经完整envelope/cloud cache往返 | `senior_control/tests/test_agent.py::test_named_summaries_roundtrip_through_cloud_cache`，循环第一输入 | 名称新增 |
-| B7 | “夜班巡检”revision2，经完整envelope/cloud cache往返 | 同B6，循环第二独立输入 | 名称新增 |
-| B8 | 旧summary省name，经完整envelope/cache投影往返且不补字段 | 同B6，删除raw.payload.tasks[0].name后的分支 | 名称兼容输入 |
+| B7 | “夜班巡检”revision2，经完整envelope/cloud cache往返 | `senior_control/tests/test_agent.py::test_named_summaries_roundtrip_through_cloud_cache`，唯一命名快照输入 | 名称新增 |
+| B8 | 旧summary省name，经完整envelope/cache投影往返且不补字段 | 同B7，删除raw.payload.tasks[0].name后的分支 | 名称兼容输入 |
 | B9 | API显式`None`创建拒绝，最终目录无写入 | `senior_control/tests/test_workspace_data.py::test_task_names_reject_explicit_null_or_blank_without_writing`，invalid第一输入 | 名称新增 |
 | B10 | API普通全空白`   `创建拒绝，最终目录无写入 | 同B9，invalid第二独立输入 | 名称新增 |
 | B11 | one/two不同ID分别以`  夜班  巡检  `及`夜班  巡检`创建，同名且保留双内部空格 | 同B9，两ID共同构成重复名称流程 | 名称新增 |
@@ -333,7 +332,7 @@ PYTHONPATH=contracts/src:senior_control/src:cloud/src:. PYTHONDONTWRITEBYTECODE=
 | F9 | N8执行改名后pause→resume→cancel始终发送实例ID及实际version3→4→5 | `web/src/features/devices/vehicleState.test.tsx`，`runs one real execution…` | 既有执行流程增强 |
 | F10 | 1440安全fixture命名创建→改名“夜班巡检”→预览 | `web/e2e/control.spec.ts`，1440条件分支 | 既有fixture增强，仅历史本版证据；此次未重跑 |
 
-**R1/R2实际bug输入另列19条覆盖记录**，不是“4个it/专题=4个输入”。其中R1共18条，R2共1条连续请求流程。R1-15/16是F3同一连续流程中的两个实际输入，已与核心表重叠，不能相加宣称40个不重复场景；其余列明确具体值与独立数量。
+**R1/R2实际bug输入另列19条覆盖记录**，不是“4个it/专题=4个输入”。其中R1共18条，R2共1条连续请求流程。R1-15/16是F3同一连续流程中的两个实际输入，已与核心表重叠，不能相加宣称39个不重复场景；其余列明确具体值与独立数量。
 
 | # | 实际输入与预期 | 测试定位 |
 |---|---|---|
@@ -392,6 +391,25 @@ git diff --check
 
 本次没有运行全量、build、typecheck、三尺寸e2e、生产probe或实车；上表B1/B4/B5/F9/F10等未重跑入口明确复用前文已审同一产品树证据。机械比对确认原Agent SQLite用例整体等于119dc4c，其他Agent函数除指定R1整理外等于ac2bd10，R2原样，前端119dc4c全部测试体原样，normalize四断言原样；`tasks.test.tsx`（含F1七分支、N9/N10与task.get）逐字节未改。
 
+### 正式交付：单个缓存快照收敛（task_9a73b3b42e9c）
+
+负责人已亲阅309c707相对ac2bd10的全部小diff并完成产品、交互、R1/R2及同版链路/视觉验收。本次起点为干净`309c7074db48aed60aea87c9e6f6468d724db1fa`，仅修改`senior_control/tests/test_agent.py`和本文档，产品/其他测试/配置改动0，新增输入0，删除一个重复缓存正向输入。直接构造“夜班巡检”revision2的current并走原wire/model/cache/get/恢复/assert路径，不留单参数循环；末尾旧summary省name分支原样保留，其余测试、R1/R2/F1与119dc4c原保护不改。
+
+核心实际输入数由21降为20（后端11降为10，前端10不变），删除原B6行并保留B7。真实BUG表仍为R1的18条及R2的1条覆盖记录，N7两输入与核心流程重叠；复用保护与三尺寸说明不变。缓存单测只验证单个命名快照的序列化往返，真实改名更新不以参数构造冒充，沿用前文生产probe和真实使用链路证据。
+
+```sh
+# 父工作区；harness只执行该pytest并核对本进程真实导入路径。
+PYTHONPATH=contracts/src:senior_control/src:cloud/src:senior_control/tests:tests/integration:. \
+PYTHONDONTWRITEBYTECODE=1 .venv/bin/python \
+  /tmp/task-names-ready-final-2026-11-25/run_cache_test.py
+# pytest.main(['senior_control/tests/test_agent.py::test_named_summaries_roundtrip_through_cloud_cache', '-q'])
+# 1 passed in 0.25s；exit 0；91个项目/测试模块均来自准确父树。
+git diff --check
+# exit 0；19/19产品blob与309c707相同；其他测试函数及省字段分支逐字节未变。
+```
+
+依赖仍为Python3.11.2、pytest8.4.2、pytest-asyncio0.26.0、pydantic2.14.4、aiosqlite0.22.1；版本实录、单测日志、实际两文件diff、机械比较、准确最终HEAD/远端/PR状态与清洁状态见`/tmp/task-names-ready-final-2026-11-25.md`及同名证据目录。此次不重跑70/42、build、e2e或实车，不启动服务。总负责人已授权在本次范围、单测、产品未变及远端/PR同HEAD全部满足后将原PR40转Ready for review；实际转换结果以交付报告为准，不合main、不新建PR。
+
 ### 三尺寸视觉、安全边界与清理
 
 只更新批准的 `/tmp/control-workspace-static-preview` 构建/fixture，复用原 **4147纯静态预览**，没有启动开发/业务服务器。三尺寸保留原控制、小地图/唯一owner、底部容器与间距/触控目标、急停滚动可达、日志安全、设置SI保存、任务编辑/路线重排/cron/timezone、未实现能力零请求检查。**命名创建→改名→命名预览仅1440执行**；390/844仍完成全部原任务编辑/布局流程，不把未运行名称操作写成小屏验证。
@@ -400,4 +418,4 @@ browser-final有**13张本版截图**：每尺寸drive/mini-map/estop-scrolled/t
 
 合并后再次确认两子树干净、两HEAD相对父HEAD独有提交均0，检查Orca全部子树会话均在空闲shell/已完成worker提示，没有另行运行的开发/返修任务或明确keep-open要求。使用Orca `worktree rm --delete-branch --json` 正常移除两子worktree（无force）；机制保留了本地分支，随后基于当前父HEAD已包含全部提交以普通 `git branch -d` 删除。前后worktree/sessions清单及两个cleanup收据保存在证据目录；父工作区、原main工作区和main分支均保留。
 
-**未验证**：真实HTTP/WS服务集成、实车、ROS、真实视频/WebRTC/TURN、真实配对兑换。原control.integration.spec.ts保留且默认不连接服务器，此轮只类型检查。缺实际轮廓仍箭头fallback并提示尺寸不可用；FIFO/run-now缺失仍提示暂未实现。需要contracts/cloud与车端协同部署，不能宣传任意版本双向兼容或新数据库可直接降级。PR40保持Draft，等待负责人最终同版验收；最终发布结果见交付报告，不能以本地验证代替已推送声明。
+**未验证**：真实HTTP/WS服务集成、实车、ROS、真实视频/WebRTC/TURN、真实配对兑换。原control.integration.spec.ts保留且默认不连接服务器，此轮只类型检查。缺实际轮廓仍箭头fallback并提示尺寸不可用；FIFO/run-now缺失仍提示暂未实现。需要contracts/cloud与车端协同部署，不能宣传任意版本双向兼容或新数据库可直接降级。集成交付时PR40保持Draft；负责人已完成同版验收，本次授权在前置检查满足后转Ready，最终发布结果见本次交付报告，不能以本地验证代替已推送声明。
