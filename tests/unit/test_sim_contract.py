@@ -219,7 +219,7 @@ def test_sim_footprints_cover_chassis_and_every_wheel_collision_projection() -> 
     assert len(body_boxes) == 2  # chassis plus the default rear attachment
     required = [*body_boxes, *wheel_boxes]
     generic = yaml.safe_load((ROOT / "config/simulation.yaml").read_text())["footprint"]
-    motion_config = ROOT / "ros2/src/senior_robot/config/simulation_motion.yaml"
+    motion_config = ROOT / "ros2/src/senior_sim/config/simulation_motion.yaml"
     params = yaml.safe_load(motion_config.read_text())
     flat = params["safety_gate"]["ros__parameters"]["footprint_xy"]
     motion = list(zip(flat[::2], flat[1::2], strict=True))

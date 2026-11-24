@@ -168,7 +168,7 @@ else:
         os.pathsep.join(
             str(ROOT / path)
             for path in (
-                "src",
+                ".",
                 "senior_control/src",
                 "contracts/src",
                 "ros2/src/senior_robot",

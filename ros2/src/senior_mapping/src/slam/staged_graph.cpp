@@ -14,7 +14,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 namespace
 {
@@ -132,4 +132,4 @@ StagedGraph::~StagedGraph()
 {
   remove_private_copy(directory_);
 }
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping

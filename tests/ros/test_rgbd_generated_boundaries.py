@@ -4,13 +4,13 @@ import pytest
 
 pytest.importorskip("rclpy")
 import numpy as np  # noqa: E402
-from senior_motion_msgs.msg import (  # noqa: E402
+from senior_interfaces.msg import (  # noqa: E402
     BoundedRawCameraInfo,
     BoundedRawImage,
     BoundedStaticTf,
     StaticTransformEdge,
 )
-from senior_motion_msgs.msg import (
+from senior_interfaces.msg import (
     RawCaptureHeader as RosHeader,
 )
 from senior_perception.vision.raw_capture import capture_from_message  # noqa: E402

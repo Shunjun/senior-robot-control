@@ -7,25 +7,25 @@
 #include <cstdint>
 
 #include "rclcpp/rclcpp.hpp"
-#include "senior_motion_msgs/msg/bounded_static_tf.hpp"
-#include "senior_motion_msgs/msg/raw_capture_header.hpp"
+#include "senior_interfaces/msg/bounded_static_tf.hpp"
+#include "senior_interfaces/msg/raw_capture_header.hpp"
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 // All state is owned by the graph's single-threaded executor.
 class StaticLidarTfIngress
 {
 public:
-  using Receipt = senior_motion_msgs::msg::BoundedStaticTf;
+  using Receipt = senior_interfaces::msg::BoundedStaticTf;
 
   StaticLidarTfIngress(
     rclcpp::Node & node, std::string topic, std::string relay_node,
     std::string raw_topic, std::string raw_node, std::string base, std::string lidar);
 
   bool source_active();
-  bool admits(const senior_motion_msgs::msg::RawCaptureHeader & scan);
+  bool admits(const senior_interfaces::msg::RawCaptureHeader & scan);
   Receipt::ConstSharedPtr verify_mount(
-    const senior_motion_msgs::msg::RawCaptureHeader & scan, LaserTransform actual);
+    const senior_interfaces::msg::RawCaptureHeader & scan, LaserTransform actual);
 
 private:
   bool current_owners(const Receipt & receipt) const;
@@ -42,6 +42,6 @@ private:
   rclcpp::Subscription<Receipt>::SharedPtr subscription_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 #endif  // SENIOR_SLAM_BRIDGE__STATIC_LIDAR_TF_INGRESS_HPP_

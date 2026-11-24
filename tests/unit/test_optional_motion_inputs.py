@@ -3,8 +3,8 @@ from types import SimpleNamespace as N
 import numpy as np
 import pytest
 from control_process_test_support import generic_motion_profile
-from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-from senior_robot.optional_motion_inputs import rgbd_observation, static_matrix
+from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
+from senior_motion_estimation.optional_motion_inputs import rgbd_observation, static_matrix
 from sensor_time_test_support import capture_fields, sample_time
 
 from vehicle_core.diagnostics import RuntimeDiagnostics
@@ -110,7 +110,7 @@ def test_gps_body_twist_does_not_need_absolute_heading_or_other_motion_axes(monk
     import sys
     from types import ModuleType
 
-    from senior_robot.optional_motion_inputs import OptionalMotionInputs
+    from senior_motion_estimation.optional_motion_inputs import OptionalMotionInputs
 
     time_module = ModuleType("rclpy.time")
     time_module.Time = N(from_msg=lambda x: x)
@@ -118,7 +118,9 @@ def test_gps_body_twist_does_not_need_absolute_heading_or_other_motion_axes(monk
     tf_module.TransformException = type("TransformException", (Exception,), {})
     monkeypatch.setitem(sys.modules, "rclpy.time", time_module)
     monkeypatch.setitem(sys.modules, "tf2_ros", tf_module)
-    monkeypatch.setattr("senior_robot.optional_motion_inputs.time", N(monotonic=lambda: 20.0))
+    monkeypatch.setattr(
+        "senior_motion_estimation.optional_motion_inputs.time", N(monotonic=lambda: 20.0)
+    )
     s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     adapter = object.__new__(OptionalMotionInputs)
     adapter.node = N(get_clock=lambda: N(now=lambda: N(nanoseconds=10_000_000_000)))

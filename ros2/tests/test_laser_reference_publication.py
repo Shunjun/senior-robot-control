@@ -8,15 +8,16 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+import senior_motion_control.motion_core_output as motion_core_output
 from control_process_test_support import (
     capture_inputs,
     generic_motion_profile,
     make_core,
     publish_inputs,
+    read_inputs,
 )
 from motion_reference_test_support import ReadySubscription
 from senior_motion_estimation.motion_observation_adapter import NativeObservationRosBridge
-from senior_robot import motion_core_output
 from sensor_time_test_support import capture_fields, sample_time
 
 from vehicle_core.sample_time import SampleTime
@@ -137,10 +138,10 @@ def phase(monkeypatch):
         "rclpy.qos": {"qos_profile_sensor_data": N()},
         "rclpy.time": {"Time": N},
         "sensor_msgs.msg": {"Imu": N},
-        "senior_motion_msgs.msg": {"ScanMotion": N},
+        "senior_interfaces.msg": {"ScanMotion": N},
         "std_msgs.msg": {"String": lambda: N(data="")},
         "tf2_ros": {"TransformException": type("TransformException", (Exception,), {})},
-        "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
+        "senior_sensor_ingress.ros_lifecycle": {"with_dds_info": lambda callback: callback},
     }.items():
         module = ModuleType(name)
         vars(module).update(fields)
@@ -267,7 +268,7 @@ def test_accepted_laser_is_published_after_handler_return_before_next_timer(phas
     phase.clock.steady, phase.clock.ros = phase.case["tick"].values()
     # Explicit offline raw replay: production has no fused-snapshot subscription.
     capture_inputs(phase.consumer, N(data=json.dumps(phase.node.packets[-1])))
-    _, body, _ = phase.consumer._inputs(phase.clock.steady)
+    _, body, _ = read_inputs(phase.consumer, phase.clock.steady)
     assert body is not None, "handler accepted; consumer still has old end_ros=1.5 at ROS1.661"
     assert len(phase.node.packets) == before + 1
     assert phase.node.events[1][0] == "publish"
@@ -343,7 +344,7 @@ def test_completion_after_control_sample_cannot_retroactively_supply_body(phase)
         # Producer handler has not returned to its own callback; consumer runs independently.
         phase.clock.steady, phase.clock.ros = phase.case["tick"].values()
         publish_inputs(phase.consumer)
-        earlier_body.append(phase.consumer._inputs(phase.clock.steady)[1])
+        earlier_body.append(read_inputs(phase.consumer, phase.clock.steady)[1])
 
     phase.before_return.append(independent_consumer_tick)
     phase.callback(
@@ -351,12 +352,17 @@ def test_completion_after_control_sample_cannot_retroactively_supply_body(phase)
         phase.laser_info,
     )
     assert phase.accepted == [True] and earlier_body[0] is not None
-    old_sequence = phase.consumer.sensors.estimator._frontiers["laser"].roots[0].sequence
+    old_sequence = (
+        phase.consumer.node._reception_test.sensors.estimator._frontiers["laser"].roots[0].sequence
+    )
     assert old_sequence < phase.node.packets[-1]["sources"][0]["sample"]["sequence"]
     assert phase.node.events[-1] == ("publish", phase.case["handler_finished"]["steady"])
     capture_inputs(phase.consumer, N(data=json.dumps(phase.node.packets[-1])))
-    assert phase.consumer._inputs(phase.clock.steady)[1] is not None
-    assert phase.consumer.sensors.estimator._frontiers["laser"].roots[0].sequence > old_sequence
+    assert read_inputs(phase.consumer, phase.clock.steady)[1] is not None
+    assert (
+        phase.consumer.node._reception_test.sensors.estimator._frontiers["laser"].roots[0].sequence
+        > old_sequence
+    )
 
 
 def test_periodic_and_immediate_publications_share_sequence_and_original_deadline(phase):

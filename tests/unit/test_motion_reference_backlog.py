@@ -13,6 +13,7 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+import senior_motion_control.motion_core_output as module
 from control_process_test_support import (
     capture_inputs,
     generic_motion_profile,
@@ -22,7 +23,6 @@ from control_process_test_support import (
     read_inputs,
 )
 from motion_reference_test_support import ReadySubscription
-from senior_robot import motion_core_output as module
 
 from vehicle_core.config import DeviceProfile
 from vehicle_core.values import Velocity
@@ -84,7 +84,7 @@ class Node:
 def replay(monkeypatch):
     message = ModuleType("std_msgs.msg")
     message.String = lambda: N(data="")
-    lifecycle = ModuleType("senior_robot.motion_lifecycle")
+    lifecycle = ModuleType("senior_sensor_ingress.ros_lifecycle")
     lifecycle.with_dds_info = lambda callback: callback
     monkeypatch.setitem(sys.modules, message.__name__, message)
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)
@@ -92,13 +92,16 @@ def replay(monkeypatch):
     old = case["packets"][0]
     clock = N(steady=old["sampled_steady"], ros=old["sampled_ros"])
     monkeypatch.setattr(module, "time", N(monotonic=lambda: clock.steady))
+    import senior_motion_control.vehicle_arbitration as arbitration
+
+    monkeypatch.setattr(arbitration, "time", N(monotonic=lambda: clock.steady))
     node = Node(case, clock)
     local_resources(monkeypatch)
     core = make_core(monkeypatch, node, generic_motion_profile())
     capture_inputs(core, N(data=json.dumps(old)))
     # Restore the captured one-way phase checkpoint; never invent body speed.
     core._startup_motion_unconfirmed = case["tick"]["startup_unconfirmed"]
-    core.controller._last_now = case["previous_tick"]["sampled_steady"]
+    core._last_tick = case["previous_tick"]["sampled_steady"]
     clock.steady = case["tick"]["sampled_steady"]
     clock.ros = case["tick"]["projection_clocks"][0]["ros_now"]
     yield N(core=core, node=node, clock=clock, case=case)
@@ -157,17 +160,19 @@ def test_fresh_snapshot_never_renews_original_expired_sensor(replay):
     replay.clock.steady = prior.deadline_steady
     read_inputs(replay.core, replay.clock.steady)
     assert replay.core.sensors.independent is None
-    assert replay.core.sensors.tracking is not None  # newer wheel/IMU still available
+    assert (
+        replay.core.node._reception_test.sensors.tracking is not None
+    )  # newer wheel/IMU still available
 
 
 def test_repeated_packet_is_not_new_evidence_or_extra_queued_work(replay):
     packet = replay.case["packets"][-1]
     offer(replay, packet)
     read_inputs(replay.core, replay.clock.steady)
-    sequence = replay.core.sensors.tracking.sequence
+    sequence = replay.core.node._reception_test.sensors.tracking.sequence
     for _ in range(100):
         offer(replay, packet)
         publish_inputs(replay.core)
     read_inputs(replay.core, replay.clock.steady)
-    assert replay.core.sensors.tracking.sequence == sequence
+    assert replay.core.node._reception_test.sensors.tracking.sequence == sequence
     assert len(replay.core.node._reception_test.sensors.estimator._frontiers) == 3

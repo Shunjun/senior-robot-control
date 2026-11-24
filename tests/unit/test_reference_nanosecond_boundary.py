@@ -7,6 +7,7 @@ from types import ModuleType
 from types import SimpleNamespace as N
 
 import pytest
+import senior_motion_control.motion_core_output as module
 from control_process_test_support import (
     capture_inputs,
     generic_motion_profile,
@@ -14,7 +15,6 @@ from control_process_test_support import (
     make_core,
     read_inputs,
 )
-from senior_robot import motion_core_output as module
 from sensor_time_test_support import sample_time
 from test_motion_reference_backlog import Node
 
@@ -25,12 +25,15 @@ CASE = json.loads(Path("tests/fixtures/reference_nanosecond_boundary.json").read
 def replay(monkeypatch):
     message = ModuleType("std_msgs.msg")
     message.String = lambda: N(data="")
-    lifecycle = ModuleType("senior_robot.motion_lifecycle")
+    lifecycle = ModuleType("senior_sensor_ingress.ros_lifecycle")
     lifecycle.with_dds_info = lambda callback: callback
     monkeypatch.setitem(sys.modules, message.__name__, message)
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)
     clock = N(steady=CASE["tick"]["sampled_steady"], ros=5.15, ns=5_150_000_000)
     monkeypatch.setattr(module, "time", N(monotonic=lambda: clock.steady))
+    import senior_motion_control.vehicle_arbitration as arbitration
+
+    monkeypatch.setattr(arbitration, "time", N(monotonic=lambda: clock.steady))
     node = Node({"scan": CASE["scan"]["body"]}, clock)
     node.get_clock = lambda: N(now=lambda: N(nanoseconds=clock.ns))
     scan = CASE["scan"]["body"]
@@ -39,7 +42,7 @@ def replay(monkeypatch):
     core = make_core(monkeypatch, node, generic_motion_profile())
     capture_inputs(core, N(data=json.dumps(CASE["packet"])))
     core._startup_motion_unconfirmed = False
-    core.controller._last_now = clock.steady - 0.05
+    core._last_tick = clock.steady - 0.05
     yield N(core=core, clock=clock, node=node)
     core.close()
 

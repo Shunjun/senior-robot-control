@@ -2,6 +2,8 @@
 #include "candidate_stationary_match.hpp"
 #include "graph_commit_history.hpp"
 #include "native_capture.hpp"
+#include "mapping_navigation.hpp"
+#include <tbb/global_control.h>
 #include "snapshot.hpp"
 #include "staged_graph.hpp"
 #include "static_lidar_tf_ingress.hpp"
@@ -23,16 +25,17 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include "rclcpp/rclcpp.hpp"
-#include "senior_slam_bridge/srv/capture_graph.hpp"
-#include "senior_slam_bridge/srv/match_stationary_scan.hpp"
-#include "senior_slam_bridge/srv/read_graph.hpp"
-#include "senior_slam_bridge/srv/read_graph_commit.hpp"
-#include "senior_slam_bridge/srv/read_loaded_graph.hpp"
+#include "senior_interfaces/srv/capture_graph.hpp"
+#include "senior_interfaces/srv/match_stationary_scan.hpp"
+#include "senior_interfaces/srv/read_graph.hpp"
+#include "senior_interfaces/srv/mapping_gate.hpp"
+#include "senior_interfaces/srv/read_graph_commit.hpp"
+#include "senior_interfaces/srv/read_loaded_graph.hpp"
 //Compatible: the Humble slam_toolbox 2.6.10 subclass exposes the mapper and its mutex.
 #include "slam_toolbox/slam_toolbox_async.hpp"
 #include "slam_toolbox/serialization.hpp"
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 class SlamGraphNode final : public slam_toolbox::AsynchronousSlamToolbox
 {
@@ -52,6 +55,23 @@ public:
 
   void start()
   {
+    const bool production = declare_parameter<bool>("production_session", false);
+    const auto production_boot = declare_parameter<std::string>("production_boot_id", "");
+    if (production) {
+      if (production_boot.size() != 36) {
+        throw std::invalid_argument("Production owner must supply its new boot identity");
+      }
+      boot_id_ = production_boot;
+      const auto threads = declare_parameter<int>("mapping_worker_threads", 1);
+      if (threads < 1 || threads > 4) {throw std::invalid_argument("Invalid mapping thread budget");}
+      compute_budget_ = std::make_unique<tbb::global_control>(
+        tbb::global_control::max_allowed_parallelism, threads);
+    }
+    const auto live_prefix = declare_parameter<std::string>("production_graph_prefix", "");
+    const auto live_digest = declare_parameter<std::string>("production_graph_digest", "");
+    if ((!live_prefix.empty() || !live_digest.empty()) && !production) {
+      throw std::invalid_argument("Production graph requires an explicit session owner");
+    }
     const auto prefix = declare_parameter<std::string>("candidate_graph_prefix", "");
     const auto digest = declare_parameter<std::string>("candidate_graph_digest", "");
     const auto attempt = declare_parameter<std::string>("candidate_load_attempt", "");
@@ -79,6 +99,47 @@ public:
         capture_directory_ = std::make_unique<CaptureDirectory>(capture_root);
       }
       configure();
+      if (production) {
+        if (bounded_topic.empty() || capture_root.empty()) {
+          throw std::invalid_argument("Production mapping requires bounded input and capture");
+        }
+        accepting_ = false;
+        production_ = true;
+        if (!live_prefix.empty()) {
+          const StagedGraph staged(live_prefix, live_digest);
+          auto request = std::make_shared<slam_toolbox::srv::DeserializePoseGraph::Request>();
+          auto response = std::make_shared<slam_toolbox::srv::DeserializePoseGraph::Response>();
+          request->filename = staged.prefix().string();
+          request->match_type = request->START_AT_GIVEN_POSE;
+          const auto seed = declare_parameter<std::vector<double>>("production_seed", std::vector<double>{0., 0., 0.});
+          if (seed.size() != 3 || !std::all_of(seed.begin(), seed.end(),
+              [](double value) {return std::isfinite(value);})) {
+            throw std::invalid_argument("Invalid production map seed");
+          }
+          request->initial_pose.x = seed[0];
+          request->initial_pose.y = seed[1];
+          request->initial_pose.theta = seed[2];
+          //Compatible: use the supported Humble loader before spinning any scan callback.
+          if (!deserializePoseGraphCallback(nullptr, request, response)) {
+            throw std::runtime_error("Could not load production graph");
+          }
+          rclcpp::Time stamp;
+          const auto frames = copy_graph(ReadGraph::Response{}.keyframes.max_size(), stamp);
+          if (!frames || frames->empty()) {
+            throw std::runtime_error("Production graph load returned no vertices");
+          }
+        }
+        mapping_gate_ = create_service<senior_interfaces::srv::MappingGate>("/senior/slam/mapping_gate",
+          [this](const senior_interfaces::srv::MappingGate::Request::SharedPtr request,
+                 senior_interfaces::srv::MappingGate::Response::SharedPtr response) {
+            const std::lock_guard<std::mutex> lock(scan_ingress_mutex_);
+            if (request->boot_id != boot_id_) {return;}
+            accepting_ = request->accepting;
+            input_floor_ = now();
+            response->graph_commit_sequence = graph_commit_.sequence;
+            response->ok = true;
+          });
+      }
       if (!capture_root.empty() || !bounded_topic.empty()) {
         disable_stock_mutations();
       }
@@ -99,14 +160,28 @@ public:
       load_candidate(prefix, digest, attempt, stationary_diagnostic);
     }
     start_graph_service();
+    if (production_) {
+      const auto maximum = declare_parameter<int>("mapping_max_grid_cells", 1048576);
+      if (maximum < 1 || maximum > 1048576) {throw std::invalid_argument("Invalid map raster budget");}
+      navigation_ = std::make_unique<MappingNavigation>(*this, boot_id_,
+        [this] {return graph_commit_.sequence > 0 && bounded_ingress_->source_active();},
+        [this, maximum](std::uint64_t sequence) -> std::optional<nav_msgs::msg::OccupancyGrid> {
+          const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
+          boost::mutex::scoped_lock lock(smapper_mutex_);
+          if (sequence != graph_commit_.sequence) {return std::nullopt;}
+          auto grid = bounded_native_raster(*smapper_->getMapper(), resolution_, maximum);
+          if (grid) {grid->header.frame_id = map_frame_; grid->header.stamp = now();}
+          return grid;
+        });
+    }
   }
 
 private:
-  using CaptureGraph = srv::CaptureGraph;
-  using ReadGraph = srv::ReadGraph;
-  using ReadGraphCommit = srv::ReadGraphCommit;
-  using ReadLoadedGraph = srv::ReadLoadedGraph;
-  using MatchStationaryScan = srv::MatchStationaryScan;
+  using CaptureGraph = senior_interfaces::srv::CaptureGraph;
+  using ReadGraph = senior_interfaces::srv::ReadGraph;
+  using ReadGraphCommit = senior_interfaces::srv::ReadGraphCommit;
+  using ReadLoadedGraph = senior_interfaces::srv::ReadLoadedGraph;
+  using MatchStationaryScan = senior_interfaces::srv::MatchStationaryScan;
 
   struct GraphCommitWatermark
   {
@@ -138,6 +213,7 @@ private:
     BoundedScanIngress::BoundedScan::ConstSharedPtr scan;
     StaticReceipt::ConstSharedPtr static_receipt;
     std::vector<Keyframe> keyframes;
+    NativeLaserOffset original_odom;
   };
 
   template<typename Response>
@@ -200,6 +276,9 @@ private:
         StaticReceipt::ConstSharedPtr static_receipt)
       {
         const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
+        if (production_ && (!accepting_ || rclcpp::Time(scan->header.stamp) <= input_floor_)) {
+          return;
+        }
         // Check the cached mount even if the vendor later throttles this scan.
         const auto cached = lasers_.find(scan->header.frame_id);
         if (cached != lasers_.end() &&
@@ -211,6 +290,11 @@ private:
         in_flight_ = InFlightScan{std::move(original), mount, std::move(static_receipt)};
         try {
           AsynchronousSlamToolbox::laserCallback(std::move(scan));
+          karto::Pose2 odometry;
+          if (navigation_ && pose_helper_->getOdomPose(odometry, in_flight_->scan->capture.stamp)) {
+            navigation_->observe(in_flight_->scan->capture, odometry,
+              in_flight_->static_receipt != nullptr);
+          }
         } catch (...) {
           in_flight_.reset();
           throw;
@@ -310,7 +394,7 @@ private:
       if (in_flight_) {
         last_committed_ingress_ =
           CommittedIngressReceipt{in_flight_->scan->capture, in_flight_->static_receipt};
-        record_graph_commit(*committed, laser, ray_angle_sign);
+        record_graph_commit(*committed, laser, ray_angle_sign, odom_pose);
       }
     }
     return committed;
@@ -318,7 +402,7 @@ private:
 
   void record_graph_commit(
     const karto::LocalizedRangeScan & committed, karto::LaserRangeFinder * laser,
-    std::int8_t ray_angle_sign)
+    std::int8_t ray_angle_sign, const karto::Pose2 & original_odom)
   {
     // The bounded ingress already owns the outer lock. The vendor released its
     // mapper lock after applying the scan and any loop correction.
@@ -346,7 +430,8 @@ private:
       CommittedScanCut{
         graph_commit_.last_keyframe_id, now(),
         {sensor.GetX(), sensor.GetY(), sensor.GetHeading()}, ray_angle_sign,
-        in_flight_->scan, in_flight_->static_receipt, std::move(*frames)});
+        in_flight_->scan, in_flight_->static_receipt, std::move(*frames),
+        {original_odom.GetX(), original_odom.GetY(), original_odom.GetHeading()}});
   }
 
   void start_graph_commit_service()
@@ -384,6 +469,9 @@ private:
         result.corrected_sensor_y = cut->corrected_sensor.y;
         result.corrected_sensor_yaw = cut->corrected_sensor.yaw;
         result.raw_ray_angle_sign = cut->raw_ray_angle_sign;
+        result.original_odom_x = cut->original_odom.x;
+        result.original_odom_y = cut->original_odom.y;
+        result.original_odom_yaw = cut->original_odom.yaw;
         result.scan = *cut->scan;
         if (cut->static_receipt) {
           result.static_lidar_tf_receipt = *cut->static_receipt;
@@ -690,7 +778,7 @@ private:
   {
     keyframes.reserve(frames.size());
     for (const auto & frame : frames) {
-      msg::Keyframe output;
+      senior_interfaces::msg::Keyframe output;
       output.id = frame.id;
       output.x = frame.x;
       output.y = frame.y;
@@ -726,9 +814,15 @@ private:
     return frames;
   }
 
-  const std::string boot_id_{boost::uuids::to_string(boost::uuids::random_generator{}())};
+  std::string boot_id_{boost::uuids::to_string(boost::uuids::random_generator{}())};
   std::uint64_t snapshot_sequence_{0};
   std::mutex scan_ingress_mutex_;
+  std::unique_ptr<tbb::global_control> compute_budget_;
+  std::unique_ptr<MappingNavigation> navigation_;
+  bool production_{false};
+  bool accepting_{true};
+  rclcpp::Time input_floor_{0, 0, RCL_ROS_TIME};
+  rclcpp::Service<senior_interfaces::srv::MappingGate>::SharedPtr mapping_gate_;
   GraphCommitWatermark graph_commit_;
   std::optional<InFlightScan> in_flight_;
   std::optional<double> mount_height_;
@@ -744,12 +838,12 @@ private:
   rclcpp::Service<MatchStationaryScan>::SharedPtr stationary_match_service_;
   bool stationary_match_spent_{false};
 };
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
-  auto node = std::make_shared<senior_slam_bridge::SlamGraphNode>(rclcpp::NodeOptions{});
+  auto node = std::make_shared<senior_mapping::SlamGraphNode>(rclcpp::NodeOptions{});
   try {
     node->start();
     rclcpp::spin(node);

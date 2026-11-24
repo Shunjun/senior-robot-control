@@ -4,11 +4,11 @@
 #include <cmath>
 #include <vector>
 
-using senior_slam_bridge::LaserTransform;
-using senior_slam_bridge::StaticLidarEdge;
-using senior_slam_bridge::compose_static_lidar_chain;
-using senior_slam_bridge::matches_static_lidar_mount;
-using senior_slam_bridge::replaces_pending_static_lidar;
+using senior_mapping::LaserTransform;
+using senior_mapping::StaticLidarEdge;
+using senior_mapping::compose_static_lidar_chain;
+using senior_mapping::matches_static_lidar_mount;
+using senior_mapping::replaces_pending_static_lidar;
 
 int main()
 {

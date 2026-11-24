@@ -39,10 +39,10 @@ def dds(tmp_path, monkeypatch):
     rclpy = pytest.importorskip("rclpy")
     from geometry_msgs.msg import Twist
     from rclpy.parameter import Parameter
-    from senior_motion_msgs.msg import FinalCommand
-    from senior_robot.command_node import CommandNode
-    from senior_robot.motion_lifecycle import MotionExecutor
-    from senior_robot.safety_node import SafetyGate
+    from senior_interfaces.msg import FinalCommand
+    from senior_motion_control.command_node import CommandNode
+    from senior_motion_control.safety_node import SafetyGate
+    from senior_sensor_ingress.ros_lifecycle import MotionExecutor
 
     domain = os.environ.get("SENIOR_MOTION_DOMAIN", "")
     assert domain.isdecimal() and 0 <= int(domain) <= 232, "select an isolated ROS domain"
@@ -116,7 +116,7 @@ def dds(tmp_path, monkeypatch):
 
 def manual_frame(command, sequence=2):
     """Use the current authority owner, not a removed velocity/clock protocol."""
-    from senior_motion_msgs.msg import FinalCommand
+    from senior_interfaces.msg import FinalCommand
 
     now = time.monotonic()
     ingress = ManualIngress("paired-car", command._owner_boot, ttl=COMMAND_TTL_S)
@@ -162,7 +162,7 @@ def manual_frame(command, sequence=2):
     "fault", ["stop_barrier", "duplicate_expected", "duplicate_other", "sole_other", "guard_lost"]
 )
 def test_actual_dds_identity_and_generation_fence_reach_current_owner(dds, fault):
-    from senior_motion_msgs.msg import FinalCommand
+    from senior_interfaces.msg import FinalCommand
 
     command, gate, executor = dds.command, dds.gate, dds.executor
     original = manual_frame(command)

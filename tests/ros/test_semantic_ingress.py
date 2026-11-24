@@ -11,7 +11,7 @@ def fixture_detector(frame):
 
 def test_semantic_node_reports_missing_weights_disabled():
     rclpy = pytest.importorskip("rclpy")
-    from senior_robot.semantic_ingress import SemanticIngress
+    from senior_perception.semantic_ingress import SemanticIngress
 
     rclpy.init()
     node = SemanticIngress()
@@ -32,7 +32,7 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import (
+    from senior_interfaces.msg import (
         BoundedDepthEvidence,
         BoundedRawCameraInfo,
         BoundedRawImage,
@@ -40,8 +40,8 @@ def test_real_ros_rgb_depth_inference_returns_original_typed_frame(tmp_path):
         DepthSample,
         FencedDepthEvidence,
     )
+    from senior_perception.semantic_ingress import SemanticIngress
     from senior_perception.vision.spawn_detector import SpawnInferenceWorker
-    from senior_robot.semantic_ingress import SemanticIngress
 
     rclpy.init()
     weights = tmp_path / "fixture.pt"
@@ -216,7 +216,7 @@ def test_timer_accepts_advancing_clock_and_rejects_real_rollback(monkeypatch):
     rclpy = pytest.importorskip("rclpy")
     from types import SimpleNamespace
 
-    from senior_robot.semantic_ingress import SemanticIngress
+    from senior_perception.semantic_ingress import SemanticIngress
 
     rclpy.init()
     node = SemanticIngress()
@@ -252,12 +252,12 @@ def test_timer_accepts_advancing_clock_and_rejects_real_rollback(monkeypatch):
 
 def test_semantic_ingress_uses_bounded_bridge_and_embeds_four_capture_headers():
     rclpy = pytest.importorskip("rclpy")
-    from senior_motion_msgs.msg import (
+    from senior_interfaces.msg import (
         BoundedRawCameraInfo,
         BoundedRawImage,
         BoundedSemanticEvidence,
     )
-    from senior_robot.semantic_ingress import SemanticIngress
+    from senior_perception.semantic_ingress import SemanticIngress
 
     rclpy.init()
     node = SemanticIngress()
@@ -311,14 +311,14 @@ def test_native_bridge_semantic_egress_returns_fenced_original_frames(
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import (
+    from senior_interfaces.msg import (
         BoundedSemanticEvidence,
         FencedDepthEvidence,
         FencedSemanticEvidence,
     )
+    from senior_perception.depth_ingress import DepthIngress
+    from senior_perception.semantic_ingress import SemanticIngress
     from senior_perception.vision.spawn_detector import SpawnInferenceWorker
-    from senior_robot.depth_ingress import DepthIngress
-    from senior_robot.semantic_ingress import SemanticIngress
     from sensor_msgs.msg import CameraInfo, Image
 
     rclpy.init()

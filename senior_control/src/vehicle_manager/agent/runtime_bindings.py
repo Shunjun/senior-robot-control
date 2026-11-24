@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from senior_contracts.wire import HEARTBEAT_INTERVAL_MS, VideoEnvelope
+from senior_contracts.wire import HEARTBEAT_INTERVAL_MS, PerformancePayload, VideoEnvelope
 
 from vehicle_core.clock import Clock, SystemClock
 from vehicle_core.diagnostics import (
@@ -111,6 +111,7 @@ class Agent(_Agent[OperationResult]):
         map_root: Path = Path("map-transfer"),
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         cleanup: Callable[[], Awaitable[None]] | None = None,
+        cleanup_timeout_ms: float | None = None,
         background_fault: Callable[[str], Awaitable[None]] | None = None,
         heartbeat_ms: float = HEARTBEAT_INTERVAL_MS,
         retry_delay_ms: float = 1000,
@@ -119,6 +120,8 @@ class Agent(_Agent[OperationResult]):
         state_poll_ms: float = 250,
         metrics: Metrics | None = None,
         clock: Clock | None = None,
+        performance: Callable[[], PerformancePayload | None] = lambda: None,
+        mapping_protocol_version: int | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         super().__init__(
@@ -139,6 +142,7 @@ class Agent(_Agent[OperationResult]):
             map_root=map_root,
             background=background,
             cleanup=cleanup,
+            cleanup_timeout_ms=cleanup_timeout_ms,
             background_fault=background_fault,
             heartbeat_ms=heartbeat_ms,
             retry_delay_ms=retry_delay_ms,
@@ -148,6 +152,8 @@ class Agent(_Agent[OperationResult]):
             metrics=metrics,
             clock=clock,
             wall_clock=wall_clock,
+            performance=performance,
+            mapping_protocol_version=mapping_protocol_version,
             ports=AgentRuntimePorts(
                 error=DomainError,
                 status=OperationStatus,

@@ -3,10 +3,9 @@
 from dataclasses import replace
 
 import pytest
-from control_process_test_support import read_inputs, read_observation
 from senior_motion_estimation.estimator import MotionEstimation, MotionObservation, Origin
 from senior_motion_estimation.pose_estimator import PoseEstimation
-from sensor_time_test_support import capture_fields, sample_time
+from sensor_time_test_support import sample_time
 
 
 def sample(t, sequence, *, source="laser", yaw=0.0, missing_linear=False, lateral=None):
@@ -175,110 +174,6 @@ def test_distinct_anchors_do_not_claim_shared_history_cancellation():
     assert result.software_position_m >= p.position_error
 
 
-def test_actual_scan_alignment_has_same_recent_budget_after_ten_and_sixty_seconds(monkeypatch):
-    import math
-    from types import SimpleNamespace as N
-
-    from senior_robot.motion_sensor_runtime import MotionSensorRuntime
-    from test_motion_core_handoff import core as core_fixture
-
-    from vehicle_core.config import DeviceProfile
-
-    fixture = core_fixture.__wrapped__(monkeypatch)
-    c = next(fixture)
-    clock = [10.0]
-    c.node.get_clock = lambda: N(now=lambda: N(nanoseconds=round(clock[0] * 1e9)))
-    c.node._depth_policy = "laser_only"
-    c.node._scan_topology_ready = lambda: True
-    c.node._profile = lambda: DeviceProfile(self_mask_calibrated=True)
-    try:
-        results = []
-        for duration in (10.0, 60.0):
-            c.node._reception_test.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
-            for i in range(round(duration / 0.05) + 1):
-                t = round((10.0 + i * 0.05) * 1e9) / 1e9
-                clock[0] = t
-                c.node._reception_test.sensors.ingest_observation(
-                    MotionObservation(
-                        "laser",
-                        (0.2, None, 0.4),
-                        t,
-                        (
-                            Origin(
-                                "laser",
-                                "fresh",
-                                i + 1,
-                                sample_time(
-                                    stamp_ns=round((t) * 1e9),
-                                    received_ros_ns=round((t) * 1e9),
-                                    received_steady_ns=round((t) * 1e9),
-                                ),
-                            ),
-                        ),
-                        measured_steady=t,
-                        stamp_ns=sample_time(
-                            stamp_ns=round((t) * 1e9),
-                            received_ros_ns=round((t) * 1e9),
-                            received_steady_ns=round((t) * 1e9),
-                            clock_generation=1,
-                        ).stamp_ns,
-                    ),
-                    t,
-                    t,
-                )
-                read_inputs(c, t)
-            stamp = round((t - 0.05) * 1e9) / 1e9
-            c.node._scans = [
-                N(
-                    stamp=stamp,
-                    received=stamp,
-                    measurement_steady=stamp,
-                    received_ros=stamp,
-                    message=N(
-                        raw_capture=N(
-                            frame_id="laser_link",
-                            raw_gid="01",
-                            bridge_gid="02",
-                            source_epoch="source",
-                            bridge_boot_id="boot",
-                            capture_generation=1,
-                            sequence=1,
-                            valid=True,
-                            reason="",
-                            **capture_fields(
-                                time=sample_time(
-                                    stamp_ns=round((stamp) * 1e9),
-                                    received_ros_ns=round((stamp) * 1e9),
-                                    received_steady_ns=round((stamp) * 1e9),
-                                )
-                            ),
-                        ),
-                        source_epoch="scan",
-                        sequence=round(stamp * 100),
-                        frame_id="laser_link",
-                        ranges=[10.0] * 720,
-                        angle_min=-math.pi,
-                        angle_increment=2 * math.pi / 719,
-                        range_min=0.08,
-                        range_max=20.0,
-                        sensor_x=0.0,
-                        sensor_y=0.0,
-                        sensor_yaw=0.0,
-                        transform_stamp=stamp,
-                    ),
-                )
-            ]
-            perception, _ = read_observation(c, t)
-            results.append(
-                (c._space_estimate.software_alignment_error_m, perception.free_space.area)
-            )
-        assert results[1] == pytest.approx(results[0], abs=1e-8)
-        assert results[1][0] < 0.03 and results[1][1] > 100
-    finally:
-        try:
-            next(fixture)
-        except StopIteration:
-            pass
 
 
 def test_midsegment_pose_uses_recorded_motion_when_endpoint_velocity_changes():

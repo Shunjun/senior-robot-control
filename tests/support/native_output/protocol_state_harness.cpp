@@ -29,7 +29,7 @@ static int model_clock_gettime(clockid_t, timespec *value) {
   return 0;
 }
 #define clock_gettime model_clock_gettime
-#include "senior_motion_msgs/sample_time.hpp"
+#include "senior_sensor_ingress/sample_time.hpp"
 #undef clock_gettime
 #include "geometry_msgs/msg/twist.hpp"
 static std::deque<std::vector<unsigned char>> packets;

@@ -6,7 +6,12 @@ from typing import Any
 
 from pydantic import ValidationError
 from senior_contracts.errors import ErrorCode
-from senior_contracts.wire import MapRefPayload, WorkspaceEnvelope
+from senior_contracts.wire import (
+    MapCatalogEnvelope,
+    MapCatalogReply,
+    MapRefPayload,
+    WorkspaceEnvelope,
+)
 
 from vehicle_manager.agent.request_ports import Requester, WorkspacePorts
 from vehicle_manager.tasks.models import TaskDefinition
@@ -133,9 +138,17 @@ class WorkspaceReader:
         if (await self._manifest(ref)).grid_id != grid_id:
             raise self._ports.error(ErrorCode.CONFLICT, "map changed during task editing")
 
-    async def read(self, envelope: WorkspaceEnvelope) -> dict[str, Any]:
+    async def read(self, envelope: WorkspaceEnvelope | MapCatalogEnvelope) -> dict[str, Any]:
         if envelope.robot_id != self._robot_id:
             raise self._ports.error(ErrorCode.VALIDATION, "workspace belongs to another robot")
+        if isinstance(envelope, MapCatalogEnvelope):
+            try:
+                reply = MapCatalogReply.model_validate(await self._maps.request("map.catalog"))
+            except (self._ports.ipc_error, OSError, ValidationError) as exc:
+                raise self._ports.error(ErrorCode.UNAVAILABLE, "map catalog unavailable") from exc
+            if reply.robot_id != self._robot_id:
+                raise self._ports.error(ErrorCode.CONFLICT, "catalog belongs to another robot")
+            return reply.model_dump(exclude={"v", "ok"})
         payload = envelope.payload
         ref = payload.map_ref
         base = {"robot_id": self._robot_id, "map_ref": ref.model_dump()}

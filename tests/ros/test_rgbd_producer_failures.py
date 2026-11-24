@@ -7,7 +7,7 @@ import pytest
 rclpy = pytest.importorskip("rclpy")
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
-from senior_robot.rgbd_candidate_producer import RgbdCandidateProducer  # noqa: E402
+from senior_perception.rgbd_candidate_producer import RgbdCandidateProducer  # noqa: E402
 
 
 @pytest.mark.parametrize("sim_time", [False, True])
@@ -165,7 +165,7 @@ def test_transient_tf_retried_when_graph_discovery_arrives_later(monkeypatch, ol
 
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-    from senior_motion_msgs.msg import BoundedStaticTf, StaticTransformEdge
+    from senior_interfaces.msg import BoundedStaticTf, StaticTransformEdge
 
     rclpy.init(
         args=["--ros-args", "-p", "static_background_declared:=true", "-p", "camera_frame:=optical"]
@@ -246,7 +246,7 @@ def test_transient_tf_retried_when_graph_discovery_arrives_later(monkeypatch, ol
 
 def test_commit_rejects_missing_raw_owner_in_real_dds_graph(monkeypatch):
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import BoundedRawCameraInfo, BoundedRawImage, BoundedStaticTf
+    from senior_interfaces.msg import BoundedRawCameraInfo, BoundedRawImage, BoundedStaticTf
 
     rclpy.init()
     producer, result, output, published, invalid = _commit_fixture(monkeypatch)
@@ -318,7 +318,7 @@ def test_raw_owner_lost_before_final_query_is_rejected_with_real_graph(monkeypat
     import threading
 
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import BoundedRawCameraInfo, BoundedRawImage, BoundedStaticTf
+    from senior_interfaces.msg import BoundedRawCameraInfo, BoundedRawImage, BoundedStaticTf
 
     rclpy.init()
     producer, result, output, published, invalid = _commit_fixture(monkeypatch)
@@ -389,7 +389,7 @@ def test_tf_pending_cannot_cross_overflow_dropping_newer_invalid(monkeypatch):
 
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-    from senior_motion_msgs.msg import BoundedStaticTf, StaticTransformEdge
+    from senior_interfaces.msg import BoundedStaticTf, StaticTransformEdge
 
     rclpy.init(
         args=["--ros-args", "-p", "static_background_declared:=true", "-p", "camera_frame:=optical"]
@@ -534,7 +534,7 @@ def test_overflow_reacquires_latched_valid_tf_without_relabeling_or_old_epoch():
 
     from rclpy.executors import MultiThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-    from senior_motion_msgs.msg import BoundedStaticTf, StaticTransformEdge
+    from senior_interfaces.msg import BoundedStaticTf, StaticTransformEdge
 
     rclpy.init(
         args=["--ros-args", "-p", "static_background_declared:=true", "-p", "camera_frame:=optical"]

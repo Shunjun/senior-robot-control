@@ -1,0 +1,5 @@
+#!/usr/bin/env python3
+from senior_perception.safety_scan_ingress import main
+
+if __name__ == "__main__":
+    main()

@@ -32,7 +32,7 @@ bool stamp_ok(const builtin_interfaces::msg::Time & value)
 
 double steady_now()
 {
-  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
+  return static_cast<double>(senior_sensor_ingress::time::monotonic_ns()) / 1e9;
 }
 
 bool layout_ok(const sensor_msgs::msg::LaserScan & scan)
@@ -69,20 +69,20 @@ ScanReceipt::ScanReceipt(const rclcpp::NodeOptions & options, BeforeVerify befor
   epoch_ = new_epoch();
   const auto qos = rclcpp::SensorDataQoS().keep_last(4);
   publisher_ = create_publisher<Bounded>(output, qos);
-  safety_publisher_ = create_publisher<senior_motion_msgs::msg::FencedSafetyScan>(safety_output, 10);
-  filter_publisher_ = create_publisher<senior_motion_msgs::msg::FencedFilteredScan>(filter_output, qos);
+  safety_publisher_ = create_publisher<senior_interfaces::msg::FencedSafetyScan>(safety_output, 10);
+  filter_publisher_ = create_publisher<senior_interfaces::msg::FencedFilteredScan>(filter_output, qos);
   rclcpp::SubscriptionOptions options_for_scan;
   if (test_reentrant_callbacks) {
     test_group_ = create_callback_group(rclcpp::CallbackGroupType::Reentrant);
     options_for_scan.callback_group = test_group_;
   }
-  safety_subscription_ = create_subscription<senior_motion_msgs::msg::BoundedSafetyScan>(
+  safety_subscription_ = create_subscription<senior_interfaces::msg::BoundedSafetyScan>(
     safety_owner_.topic, 10,
-    [this](senior_motion_msgs::msg::BoundedSafetyScan::ConstSharedPtr message,
+    [this](senior_interfaces::msg::BoundedSafetyScan::ConstSharedPtr message,
            const rclcpp::MessageInfo & info) {on_safety(*message, info);}, options_for_scan);
-  filter_subscription_ = create_subscription<senior_motion_msgs::msg::BoundedFilteredScan>(
+  filter_subscription_ = create_subscription<senior_interfaces::msg::BoundedFilteredScan>(
     filter_owner_.topic, qos,
-    [this](senior_motion_msgs::msg::BoundedFilteredScan::ConstSharedPtr message,
+    [this](senior_interfaces::msg::BoundedFilteredScan::ConstSharedPtr message,
            const rclcpp::MessageInfo & info) {on_filtered(*message, info);}, options_for_scan);
   subscription_ = create_subscription<sensor_msgs::msg::LaserScan>(
     input_topic_, qos, [this](sensor_msgs::msg::LaserScan::ConstSharedPtr message, const rclcpp::MessageInfo & info) {
@@ -140,7 +140,7 @@ void ScanReceipt::invalidate(const std::string & reason, const Scan * source,
 
 bool ScanReceipt::clock_ok(int64_t ros_ns, uint64_t steady_ns)
 {
-  senior_motion_msgs::time::ClockObservation observed;
+  senior_sensor_ingress::time::ClockObservation observed;
   try {
     observed = clock_.observe(ros_ns, steady_ns);
   } catch (const std::invalid_argument & error) {
@@ -160,7 +160,7 @@ std::optional<ReceiptClock> ScanReceipt::begin_receipt()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   const auto ros = get_clock()->now().nanoseconds();
-  const auto steady = senior_motion_msgs::time::monotonic_ns();
+  const auto steady = senior_sensor_ingress::time::monotonic_ns();
   if (!clock_ok(ros, steady)) return std::nullopt;
   return ReceiptClock{ros, steady, clock_generation_};
 }
@@ -169,7 +169,7 @@ std::optional<ReceiptClock> ScanReceipt::begin_receipt()
 // its coordinates are never retaken or mapped into the replacement segment.
 bool ScanReceipt::current_receipt(const ReceiptClock & receipt)
 {
-  return clock_ok(get_clock()->now().nanoseconds(), senior_motion_msgs::time::monotonic_ns()) &&
+  return clock_ok(get_clock()->now().nanoseconds(), senior_sensor_ingress::time::monotonic_ns()) &&
     receipt.generation == clock_generation_;
 }
 
@@ -177,7 +177,7 @@ void ScanReceipt::inspect_topology()
 {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!clock_ok(get_clock()->now().nanoseconds(),
-                senior_motion_msgs::time::monotonic_ns())) return;
+                senior_sensor_ingress::time::monotonic_ns())) return;
   inspect_owner(safety_owner_, 0);
   inspect_owner(filter_owner_, 1);
   if (!active_) return;
@@ -232,7 +232,7 @@ void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rcl
     stamps_.reset();
     invalid_ = false;
   }
-  std::optional<senior_motion_msgs::time::SampleTime> sample;
+  std::optional<senior_sensor_ingress::time::SampleTime> sample;
   try {
     sample = stamps_.accept(message.header.stamp, received_ros, received_steady_ns,
                             receipt->generation);
@@ -325,12 +325,12 @@ void ScanReceipt::inspect_owner(Owner & owner, size_t index)
 
 void ScanReceipt::invalidate_owner(
   Owner & owner, size_t index, const std::string & reason, bool owner_lost,
-  bool upstream_invalid, const senior_motion_msgs::msg::BoundedSafetyScan * safety,
-  const senior_motion_msgs::msg::BoundedFilteredScan * filtered)
+  bool upstream_invalid, const senior_interfaces::msg::BoundedSafetyScan * safety,
+  const senior_interfaces::msg::BoundedFilteredScan * filtered)
 {
   if (failed_ || (owner.invalid && !owner_lost)) return;
   if (owner.relay_sequence == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
-  senior_motion_msgs::msg::EgressHeader header;
+  senior_interfaces::msg::EgressHeader header;
   header.relay_gid = index == 0 ? gid_hex(safety_publisher_->get_gid()) :
                                   gid_hex(filter_publisher_->get_gid());
   header.relay_boot = boot_;
@@ -344,19 +344,19 @@ void ScanReceipt::invalidate_owner(
   header.reason = reason.substr(0, 64);
   owner.invalid = true;
   if (index == 0) {
-    senior_motion_msgs::msg::FencedSafetyScan output;
+    senior_interfaces::msg::FencedSafetyScan output;
     output.owner = header;
     if (safety != nullptr) output.body = *safety;
     safety_publisher_->publish(output);
   } else {
-    senior_motion_msgs::msg::FencedFilteredScan output;
+    senior_interfaces::msg::FencedFilteredScan output;
     output.owner = header;
     if (filtered != nullptr) output.body = *filtered;
     filter_publisher_->publish(output);
   }
 }
 
-void ScanReceipt::on_safety(const senior_motion_msgs::msg::BoundedSafetyScan & message,
+void ScanReceipt::on_safety(const senior_interfaces::msg::BoundedSafetyScan & message,
                             const rclcpp::MessageInfo & info)
 {
   const auto incoming = info.get_rmw_message_info().publisher_gid;
@@ -386,7 +386,7 @@ void ScanReceipt::on_safety(const senior_motion_msgs::msg::BoundedSafetyScan & m
     return;
   }
   if (safety_owner_.relay_sequence == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
-  senior_motion_msgs::msg::FencedSafetyScan output;
+  senior_interfaces::msg::FencedSafetyScan output;
   output.body = message;
   auto & h = output.owner;
   h.relay_gid = gid_hex(safety_publisher_->get_gid()); h.relay_boot = boot_;
@@ -398,7 +398,7 @@ void ScanReceipt::on_safety(const senior_motion_msgs::msg::BoundedSafetyScan & m
   safety_publisher_->publish(output);
 }
 
-void ScanReceipt::on_filtered(const senior_motion_msgs::msg::BoundedFilteredScan & message,
+void ScanReceipt::on_filtered(const senior_interfaces::msg::BoundedFilteredScan & message,
                               const rclcpp::MessageInfo & info)
 {
   const auto incoming = info.get_rmw_message_info().publisher_gid;
@@ -425,7 +425,7 @@ void ScanReceipt::on_filtered(const senior_motion_msgs::msg::BoundedFilteredScan
     return;
   }
   if (filter_owner_.relay_sequence == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
-  senior_motion_msgs::msg::FencedFilteredScan output;
+  senior_interfaces::msg::FencedFilteredScan output;
   output.body = message;
   auto & h = output.owner;
   h.relay_gid = gid_hex(filter_publisher_->get_gid()); h.relay_boot = boot_;

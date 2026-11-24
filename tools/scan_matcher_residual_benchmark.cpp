@@ -1,5 +1,5 @@
 // Native benchmark of the production residual search, not the Karto matcher.
-// Build: clang++ -std=c++17 -O3 -DNDEBUG -Iros2/src/senior_scan_matcher/src \
+// Build: clang++ -std=c++17 -O3 -DNDEBUG -Iros2/src/senior_motion_estimation/src \
 //   tools/scan_matcher_residual_benchmark.cpp -o /tmp/scan-residual-benchmark
 #include "point_index.hpp"
 
@@ -12,7 +12,7 @@
 #include <stdexcept>
 #include <vector>
 
-using senior_scan_matcher::detail::PointIndex;
+using senior_motion_estimation::scan_matching::detail::PointIndex;
 using Point = PointIndex::Point;
 using Clock = std::chrono::steady_clock;
 

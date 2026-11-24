@@ -10,11 +10,11 @@
 #include <gtest/gtest.h>
 #include <openssl/sha.h>
 #include <rclcpp/rclcpp.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_camera_info.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_image.hpp>
-#include <senior_motion_msgs/msg/bounded_static_tf.hpp>
-#include <senior_motion_msgs/msg/fenced_rgbd_candidate.hpp>
-#include <senior_motion_msgs/msg/rgbd_motion_candidate.hpp>
+#include <senior_interfaces/msg/bounded_raw_camera_info.hpp>
+#include <senior_interfaces/msg/bounded_raw_image.hpp>
+#include <senior_interfaces/msg/bounded_static_tf.hpp>
+#include <senior_interfaces/msg/fenced_rgbd_candidate.hpp>
+#include <senior_interfaces/msg/rgbd_motion_candidate.hpp>
 #include "senior_sensor_ingress/rgbd_candidate_receipt.hpp"
 
 namespace senior_sensor_ingress {
@@ -33,7 +33,7 @@ public:
     return node.clocks_ok(ros, steady);
   }
   static std::optional<int64_t> capture_age(RgbdCandidateReceipt & node,
-    const senior_motion_msgs::msg::RawCaptureHeader & header, double steady) {
+    const senior_interfaces::msg::RawCaptureHeader & header, double steady) {
     std::lock_guard<std::mutex> lock(node.mutex_);
     return node.capture_age(header, steady);
   }
@@ -86,11 +86,11 @@ double steady_now()
 
 TEST(RgbdCandidateReceipt, RealOwnersBindBothPixelBodiesAndRejectTampering)
 {
-  using Image = senior_motion_msgs::msg::BoundedRawImage;
-  using Info = senior_motion_msgs::msg::BoundedRawCameraInfo;
-  using Static = senior_motion_msgs::msg::BoundedStaticTf;
-  using Candidate = senior_motion_msgs::msg::RgbdMotionCandidate;
-  using Fenced = senior_motion_msgs::msg::FencedRgbdCandidate;
+  using Image = senior_interfaces::msg::BoundedRawImage;
+  using Info = senior_interfaces::msg::BoundedRawCameraInfo;
+  using Static = senior_interfaces::msg::BoundedStaticTf;
+  using Candidate = senior_interfaces::msg::RgbdMotionCandidate;
+  using Fenced = senior_interfaces::msg::FencedRgbdCandidate;
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_egress_test"),
@@ -142,7 +142,7 @@ TEST(RgbdCandidateReceipt, RealOwnersBindBothPixelBodiesAndRejectTampering)
   calibration.received_steady = calibration.first_received_steady = steady - .15;
   calibration.admitted_from_ros = static_cast<builtin_interfaces::msg::Time>(now_ros - rclcpp::Duration::from_seconds(.1));
   calibration.admitted_from_steady = steady - .1;
-  senior_motion_msgs::msg::StaticTransformEdge edge;
+  senior_interfaces::msg::StaticTransformEdge edge;
   edge.parent_frame = "base_link";
   edge.child_frame = "camera";
   edge.rotation_xyzw[3] = 1;
@@ -202,7 +202,7 @@ TEST(RgbdCandidateReceipt, RealOwnersBindBothPixelBodiesAndRejectTampering)
     rgb.step = 240; rgb.encoding = "rgb8"; rgb.data.assign(size_t(80*240), uint8_t(42));
     depth.step = 320; depth.encoding = "32FC1"; depth.data.assign(size_t(80*320), uint8_t(0));
     auto layout = [](const Image & image) {
-      senior_motion_msgs::msg::RawImageLayout value;
+      senior_interfaces::msg::RawImageLayout value;
       value.capture = image.capture;
       value.width = image.width; value.height = image.height; value.step = image.step;
       value.encoding = image.encoding; value.is_bigendian = image.is_bigendian;
@@ -316,8 +316,8 @@ TEST(RgbdCandidateReceipt, RealOwnersBindBothPixelBodiesAndRejectTampering)
 
 TEST(RgbdCandidateReceipt, ProducerBootChangeOnSameGidRevokesImmediately)
 {
-  using Candidate = senior_motion_msgs::msg::RgbdMotionCandidate;
-  using Fenced = senior_motion_msgs::msg::FencedRgbdCandidate;
+  using Candidate = senior_interfaces::msg::RgbdMotionCandidate;
+  using Fenced = senior_interfaces::msg::FencedRgbdCandidate;
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_boot_test")});
@@ -370,8 +370,8 @@ TEST(RgbdCandidateReceipt, ProducerBootChangeOnSameGidRevokesImmediately)
 
 TEST(RgbdCandidateReceipt, NewBridgeBootCanRequalifyAfterObservedGraphLoss)
 {
-  using Image = senior_motion_msgs::msg::BoundedRawImage;
-  using Fenced = senior_motion_msgs::msg::FencedRgbdCandidate;
+  using Image = senior_interfaces::msg::BoundedRawImage;
+  using Fenced = senior_interfaces::msg::FencedRgbdCandidate;
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_raw_restart")});
@@ -448,8 +448,8 @@ TEST(RgbdCandidateReceipt, NewBridgeBootCanRequalifyAfterObservedGraphLoss)
 
 TEST(RgbdCandidateReceipt, SameCurrentHeaderWithDifferentPixelsRevokes)
 {
-  using Image = senior_motion_msgs::msg::BoundedRawImage;
-  using Fenced = senior_motion_msgs::msg::FencedRgbdCandidate;
+  using Image = senior_interfaces::msg::BoundedRawImage;
+  using Fenced = senior_interfaces::msg::FencedRgbdCandidate;
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_duplicate_raw")});
@@ -515,8 +515,8 @@ TEST(RgbdCandidateReceipt, SameCurrentHeaderWithDifferentPixelsRevokes)
 
 TEST(RgbdCandidateReceipt, InvalidTfGenerationRejectsDelayedOlderValid)
 {
-  using Static = senior_motion_msgs::msg::BoundedStaticTf;
-  using Fenced = senior_motion_msgs::msg::FencedRgbdCandidate;
+  using Static = senior_interfaces::msg::BoundedStaticTf;
+  using Fenced = senior_interfaces::msg::FencedRgbdCandidate;
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
   options.parameter_overrides({rclcpp::Parameter("topic_prefix", "/d2a_tf_fence"),
@@ -552,7 +552,7 @@ TEST(RgbdCandidateReceipt, InvalidTfGenerationRejectsDelayedOlderValid)
   body.received_ros = body.first_received_ros = body.admitted_from_ros =
     static_cast<builtin_interfaces::msg::Time>(observer->now());
   body.received_steady = body.first_received_steady = body.admitted_from_steady = steady_now();
-  senior_motion_msgs::msg::StaticTransformEdge edge;
+  senior_interfaces::msg::StaticTransformEdge edge;
   edge.parent_frame = "base_link"; edge.child_frame = "camera"; edge.rotation_xyzw[3] = 1;
   body.edges.push_back(edge);
   pub->publish(body);
@@ -575,7 +575,7 @@ TEST(RgbdCandidateReceipt, InvalidTfGenerationRejectsDelayedOlderValid)
 
 TEST(RgbdCandidateReceipt, ReconsidersSingleTransientStatusWhenOwnerBecomesUnique)
 {
-  using Static = senior_motion_msgs::msg::BoundedStaticTf;
+  using Static = senior_interfaces::msg::BoundedStaticTf;
   using Peer = senior_sensor_ingress::RgbdCandidateReceiptTestPeer;
   rclcpp::init(0, nullptr);
   rclcpp::NodeOptions options;
@@ -620,7 +620,7 @@ TEST(RgbdCandidateReceipt, ReconsidersSingleTransientStatusWhenOwnerBecomesUniqu
   sample.received_ros = sample.first_received_ros = sample.admitted_from_ros =
     static_cast<builtin_interfaces::msg::Time>(source->now());
   sample.received_steady = sample.first_received_steady = sample.admitted_from_steady = steady_now();
-  senior_motion_msgs::msg::StaticTransformEdge edge;
+  senior_interfaces::msg::StaticTransformEdge edge;
   edge.parent_frame = "base_link";
   edge.child_frame = "camera_color_optical_frame";
   edge.rotation_xyzw[3] = 1;
@@ -652,7 +652,7 @@ TEST(RgbdCandidateReceipt, ClockRollbackRevokesWindowThenAcceptsNewSegment)
 TEST(RgbdCandidateReceipt, HeaderAgeBoundaryRejectsInputWithoutThrowingOrFakeAge)
 {
   using Peer = senior_sensor_ingress::RgbdCandidateReceiptTestPeer;
-  using Header = senior_motion_msgs::msg::RawCaptureHeader;
+  using Header = senior_interfaces::msg::RawCaptureHeader;
   rclcpp::init(0, nullptr);
   auto cleanup = [](int *) {rclcpp::shutdown();};
   int sentinel = 0;

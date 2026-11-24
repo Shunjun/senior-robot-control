@@ -11,7 +11,8 @@ from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from senior_motion_msgs.msg import BoundedFilteredScan, BoundedRawLaserScan
+from senior_interfaces.msg import BoundedFilteredScan, BoundedRawLaserScan
+from senior_sensor_ingress.ros_lifecycle import run
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from senior_perception.external_motion_features import external_feature_ranges
@@ -186,3 +187,8 @@ class ScanAdapter(Node):
         if self._learning_client is not None:
             self._learning_client.close()
         return super().destroy_node()
+
+
+def main():
+    """Assemble the shared functional node with the existing bounded ROS lifecycle."""
+    run(ScanAdapter, cli=True)

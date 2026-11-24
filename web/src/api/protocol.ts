@@ -37,6 +37,11 @@ export const OPERATION_REQUEST_TYPES = [
   "map.export",
   "map.import",
   "map.clear",
+  "map.create",
+  "map.activate",
+  "map.delete",
+  "map.calibrate",
+  "map.home",
   "operation.query",
 ] as const;
 
@@ -45,6 +50,7 @@ export const WORKSPACE_REQUEST_TYPES = [
   "waypoint.list",
   "map.manifest",
   "map.tile",
+  "map.catalog",
 ] as const;
 export type WorkspaceRequestType = (typeof WORKSPACE_REQUEST_TYPES)[number];
 
@@ -85,6 +91,8 @@ export const ENVELOPE_FIELDS = [
 ] as const;
 
 export const SNAPSHOT_FIELDS = [
+  "performance",
+  "mapping_protocol_version",
   "connected",
   "localized",
   "map_ref",
@@ -195,7 +203,32 @@ export interface RobotPose extends MapPoint {
   yaw: number;
 }
 
+export interface ModulePerformance {
+  name: "video" | "navigation" | "mapping";
+  status: "running" | "inactive" | "unavailable";
+  cpu_percent: number | null;
+  rss_bytes: number | null;
+  process_count: number;
+}
+
+export interface PerformanceReading {
+  sequence: number;
+  sampled_at: number;
+  interval_s: number | null;
+  scope: "procfs_visible";
+  cpu_count: number;
+  cpu_percent: number | null;
+  memory_total_bytes: number | null;
+  memory_used_bytes: number | null;
+  modules: ModulePerformance[];
+}
+
 export interface SnapshotPayload {
+  //Compatible: older vehicles omit resource telemetry.
+  performance?: PerformanceReading;
+  //Compatible: absence means the manager cannot accept new catalog/lifecycle frames.
+  mapping_protocol_version?: 1 | 2;
+
   //Compatible: legacy map/video snapshots omit the UI extension and never enable intent driving.
   vehicle_ui?: VehicleFrame;
   connected: boolean;
@@ -386,6 +419,7 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
     parseRouteProgress(value["route_progress"]);
   if (route === null) return null;
   if (mapGeneration !== undefined && !isText(mapGeneration, 128)) return null;
+  const performance = parsePerformance(value["performance"]);
   let vehicle: VehicleFrame | undefined;
   if (value["vehicle_ui"] !== undefined) {
     try {
@@ -395,6 +429,9 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
     }
   }
   return {
+    ...(performance === undefined ? {} : { performance }),
+    ...((value["mapping_protocol_version"] === 1 || value["mapping_protocol_version"] === 2)
+      ? { mapping_protocol_version: value["mapping_protocol_version"] as 1 | 2 } : {}),
     ...(vehicle === undefined ? {} : { vehicle_ui: vehicle }),
     ...(mapGeneration === undefined ? {} : { map_generation: mapGeneration }),
     ...(mapGridId === undefined ? {} : { map_grid_id: mapGridId }),
@@ -583,4 +620,28 @@ export function parseControlConnection(raw: unknown): { robot_id: string; connec
   } catch {
     return null;
   }
+}
+
+/** Malformed diagnostics never replace a valid control observation. */
+function parsePerformance(value: unknown): PerformanceReading | undefined {
+  if (!isRecord(value) || !isCount(value["sequence"]) || value["sequence"] < 1 ||
+      !isFiniteNumber(value["sampled_at"]) || value["scope"] !== "procfs_visible" ||
+      !isCount(value["cpu_count"])) return undefined;
+  const nullable = (v: unknown, max = Number.MAX_SAFE_INTEGER): boolean =>
+    v === null || isFiniteNumber(v) && v >= 0 && v <= max;
+  if (!nullable(value["cpu_percent"], 100) || !nullable(value["memory_total_bytes"]) ||
+      !nullable(value["memory_used_bytes"]) || !(value["interval_s"] === null ||
+      isFiniteNumber(value["interval_s"]) && value["interval_s"] > 0)) return undefined;
+  const modules = value["modules"];
+  if (!Array.isArray(modules) || modules.length > 3) return undefined;
+  const names = new Set<string>();
+  for (const row of modules) {
+    if (!isRecord(row) || typeof row["name"] !== "string" ||
+        !["video", "navigation", "mapping"].includes(row["name"]) || names.has(row["name"]) ||
+        typeof row["status"] !== "string" || !["running", "inactive", "unavailable"].includes(row["status"]) ||
+        !nullable(row["cpu_percent"], 100) || !nullable(row["rss_bytes"]) ||
+        !isCount(row["process_count"]) || row["process_count"] > 128) return undefined;
+    names.add(row["name"]);
+  }
+  return value as unknown as PerformanceReading;
 }

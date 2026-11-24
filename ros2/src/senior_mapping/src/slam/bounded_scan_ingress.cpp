@@ -1,4 +1,4 @@
-#include <senior_motion_msgs/sample_time.hpp>
+#include <senior_sensor_ingress/sample_time.hpp>
 #include "bounded_scan_ingress.hpp"
 
 #include "scan_receipt_admission.hpp"
@@ -6,13 +6,13 @@
 
 #include <utility>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 namespace
 {
 using namespace std::chrono_literals;
 using Receipt = BoundedScanIngress::Receipt;
-using Message = senior_motion_msgs::msg::BoundedRawLaserScan;
+using Message = senior_interfaces::msg::BoundedRawLaserScan;
 constexpr std::size_t pending_limit = 8;
 using scan_receipt_admission::fresh;
 using scan_receipt_admission::gid_hex;
@@ -91,7 +91,7 @@ bool BoundedScanIngress::current_owner(const Receipt & receipt)
 
 bool BoundedScanIngress::source_active()
 {
-  if (!observe_clock(senior_motion_msgs::time::monotonic_ns()) || !source_) {
+  if (!observe_clock(senior_sensor_ingress::time::monotonic_ns()) || !source_) {
     return false;
   }
   if (!current_owner(source_->capture)) {
@@ -103,7 +103,7 @@ bool BoundedScanIngress::source_active()
 
 void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info)
 {
-  if (!observe_clock(senior_motion_msgs::time::monotonic_ns())) {
+  if (!observe_clock(senior_sensor_ingress::time::monotonic_ns())) {
     return;
   }
   if (source_ && !current_owner(source_->capture)) {
@@ -224,4 +224,4 @@ void BoundedScanIngress::poll()
   scan->intensities.assign(input->intensities.begin(), input->intensities.end());
   submit_(std::move(scan), input, mount, std::move(static_receipt));
 }
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping

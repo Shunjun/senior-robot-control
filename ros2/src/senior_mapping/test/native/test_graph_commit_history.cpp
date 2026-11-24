@@ -4,8 +4,8 @@
 
 namespace
 {
-using senior_slam_bridge::CommitLookup;
-using senior_slam_bridge::GraphCommitHistory;
+using senior_mapping::CommitLookup;
+using senior_mapping::GraphCommitHistory;
 
 void require(bool condition)
 {

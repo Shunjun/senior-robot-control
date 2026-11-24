@@ -215,7 +215,7 @@ async def test_existing_ipc_receiver_records_actions_and_task_epoch(
     from vehicle_core.values import MapRef, OperationResult, OperationStatus, Pose2D
 
     monkeypatch.syspath_prepend(str(Path("ros2/src/senior_robot").resolve()))
-    ros_nav = importlib.import_module("senior_robot.navigation_adapter")
+    ros_nav = importlib.import_module("senior_navigation.navigation_adapter")
     ros_ipc = importlib.import_module("senior_robot.agent_adapter")
     goals: list[asyncio.Future[bool]] = []
     arbiter = Arbiter("robot", 300)

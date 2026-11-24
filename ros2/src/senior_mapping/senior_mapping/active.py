@@ -1,16 +1,19 @@
-"""Fresh in-process map session with a conservative, read-only raster view.
+"""Verified in-process map session with a conservative, read-only raster view.
 
-This is not a ROS source verifier, transport, or an old-map activation path.
+This does not verify ROS sources, load a graph, or localize a vehicle.
 Only the upstream owner that has already verified its source may bind it here.
 Production transport must provide that verification and an opaque session token;
 backend boot/source strings alone never confer map or localization authority.
 All methods run synchronously on the owning loop, without concurrent writers.
 """
 
+from __future__ import annotations
+
 import uuid
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
-from senior_mapping.references import AnchorSnapshot, CellBinding
+from senior_mapping.references import AnchorSnapshot, CellBinding, SlamSnapshot, WaypointBinding
 from senior_mapping.store import (
     MapReferenceStore,
     OccupancyIngestBinding,
@@ -20,13 +23,18 @@ from senior_mapping.workspace import WorkspaceGrid, render_stable_grid
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef
 
+if TYPE_CHECKING:
+    from senior_mapping.catalog import CatalogEntry
+    from senior_mapping.checkpoints import MapCheckpoints
+
 
 class ActiveMap:
-    """Own one fresh store; a terminal session must be replaced, never rebound.
+    """Own one store; a terminal session must be replaced, never rebound.
 
     A caller can expose ``WorkspaceMap(session.grid)`` without gaining store
     mutation access. The view contains stable occupied cells and unknown only;
-    it grants no navigation, waypoint writes, persistence, or trusted pose.
+    it grants no navigation, waypoint writes, or trusted pose. Checkpoint
+    delegation retains the archive and catalog guards.
     """
 
     def __init__(self, map_ref: MapRef, odom_owner: str, cell_size_m: float) -> None:
@@ -36,6 +44,43 @@ class ActiveMap:
         self._binding: OccupancyIngestBinding | None = None
         self._closed = False
         self._grid: WorkspaceGrid | None = None
+        self._restored_cut = False
+
+    @classmethod
+    def resume_verified(
+        cls, snapshot: SlamSnapshot, source: object, *, backend_boot: str, source_epoch: str
+    ) -> ActiveMap:
+        """Use only after the caller verified the loaded graph, source and localization.
+
+        This reconstructs an in-process writer and a display view, not that
+        external proof. In particular, a serialized boot/source name is no proof.
+        """
+        if source is None or isinstance(source, (str, bytes, int, float, bool)):
+            raise DomainError(ErrorCode.VALIDATION, "active map source requires an opaque token")
+        store, binding = MapReferenceStore.resume_verified(
+            snapshot, backend_boot=backend_boot, source_epoch=source_epoch
+        )
+        active = cls(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
+        active._store, active._source, active._binding = store, source, binding
+        active._grid = render_stable_grid(
+            snapshot.map_ref,
+            f"{active._session_id}:restored",
+            snapshot.grid,
+            snapshot.cell_size_m,
+            snapshot.occupancy,
+        )
+        active._restored_cut = True
+        return active
+
+    @property
+    def change_sequence(self) -> int:
+        """Dirty checkpoint watermark, including canonical waypoint binding edits."""
+        return self._store.change_sequence
+
+    @property
+    def observation_sequence(self) -> int:
+        progress = self._store.ingest_progress
+        return 0 if progress is None else progress.sequence
 
     @property
     def map_generation(self) -> str:
@@ -92,9 +137,48 @@ class ActiveMap:
             self._grid = candidate
         return progress
 
+    def update_waypoints(
+        self,
+        source: object,
+        *,
+        expected_sequence: int,
+        changes: tuple[WaypointBinding, ...],
+    ) -> None:
+        """Canonical waypoint owner updates a binding on its exact current cut."""
+        binding = self._require_source(source)
+        self._store.commit_waypoints(binding, expected_sequence=expected_sequence, changes=changes)
+
+    def waypoint_bindings(self, source: object) -> tuple[WaypointBinding, ...]:
+        self._require_source(source)
+        return self._store.waypoint_bindings()
+
+    async def save_checkpoint(
+        self,
+        source: object,
+        repository: MapCheckpoints,
+        *,
+        home_id: str,
+        expected: str | None,
+        session_token: str | None = None,
+    ) -> CatalogEntry:
+        """Production owner serializes this with observation intake/retirement.
+
+        Ordered observations must wait upstream while the archive's graph/store
+        capture fence is held. They must never be dropped to make a save succeed.
+        """
+        self._require_source(source)
+        return await repository.save(
+            self._store, home_id=home_id, expected=expected, session_token=session_token
+        )
+
     def grid(self) -> WorkspaceGrid | None:
         """Narrow provider for WorkspaceMap; revoked views immediately disappear."""
-        if self._closed or self._store.review_required or self._store.ingest_progress is None:
+        if (
+            self._closed
+            or self._store.review_required
+            or self._store.ingest_progress is None
+            and not self._restored_cut
+        ):
             return None
         return self._grid
 
@@ -112,4 +196,5 @@ class ActiveMap:
         if self._binding is not None and not fenced:
             self._store.revoke_ingest(self._binding)
         self._closed = True
+        self._restored_cut = False
         self._source = self._binding = self._grid = None

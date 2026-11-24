@@ -50,12 +50,18 @@ def _ros_launch_command(
     return _platform._ros_launch_command(profile, robot_id, package, filename, *arguments)
 
 
-def _camera_command(profile: "VehicleProfile", robot_id: str) -> list[str]:
+def _camera_command(
+    profile: "VehicleProfile", robot_id: str, *, component: str = "capture"
+) -> list[str]:
     """//Compatible: inject this invocation's real recovery and launch effects."""
     from vehicle_core.launch_recovery import restart_prefix
 
     return _platform._camera_command(
-        profile, robot_id, restart_prefix=restart_prefix, launch_command=_ros_launch_command
+        profile,
+        robot_id,
+        restart_prefix=restart_prefix,
+        launch_command=_ros_launch_command,
+        component=component,
     )
 
 

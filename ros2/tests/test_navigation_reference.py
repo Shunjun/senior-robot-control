@@ -18,11 +18,12 @@ from vehicle_core.values import Pose2D
 
 @pytest.fixture
 def reference(monkeypatch):
-    lifecycle = ModuleType("senior_robot.motion_lifecycle")
+    lifecycle = ModuleType("senior_sensor_ingress.ros_lifecycle")
     lifecycle.with_dds_info = lambda callback: callback
     monkeypatch.setitem(sys.modules, lifecycle.__name__, lifecycle)
-    receipt = ModuleType("senior_robot.native_receipt")
+    receipt = ModuleType("senior_sensor_ingress.native_receipt")
     # Recording boundary for B's mandatory metadata accessor; no time remapping.
+    receipt.with_dds_info = lifecycle.with_dds_info
     receipt.received_sample = lambda info: info["sample_time"]
     monkeypatch.setitem(sys.modules, receipt.__name__, receipt)
     path = Path("ros2/src/senior_localization/senior_localization/hardware_reference.py")

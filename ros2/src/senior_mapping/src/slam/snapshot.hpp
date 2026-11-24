@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <vector>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 struct Keyframe
 {
@@ -43,6 +43,6 @@ inline SnapshotStatus validate_snapshot(std::vector<Keyframe> & frames, std::siz
   }
   return SnapshotStatus::ok;
 }
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 #endif  // SENIOR_SLAM_BRIDGE__SNAPSHOT_HPP_

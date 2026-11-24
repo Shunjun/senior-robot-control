@@ -23,12 +23,12 @@ from rclpy.clock import ClockType
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from senior_motion_msgs.msg import (
+from senior_interfaces.msg import (
     BoundedDepthEvidence,
     FencedDepthEvidence,
     FencedSafetyScan,
 )
-from senior_motion_msgs.msg import (
+from senior_interfaces.msg import (
     DriveExecutionFeedback as DriveFeedbackMessage,
 )
 from senior_perception.freshness import SafetyFreshness
@@ -41,9 +41,9 @@ from senior_perception.vision.egress_receipt import (
 )
 from senior_perception.vision.raw_capture import RawCaptureAdmission, capture_from_message
 from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
+from senior_sensor_ingress.ros_lifecycle import MotionExecutor, run
 
 from senior_motion_control.arbiter import FinalCommandFence
-from senior_motion_control.motion_lifecycle import MotionExecutor, run
 from senior_motion_control.native import native_executable
 from senior_motion_control.source_fences import ProducerTopology, SourceEpochFence
 from vehicle_core.sensor_policy import default_policy

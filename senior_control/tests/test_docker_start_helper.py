@@ -130,6 +130,21 @@ def test_adapter_command_sources_runtime_overlay_without_motion_launch(service_r
     assert not (service_root / "estop-state.json").exists()
     assert "launch" not in command
 
+    # Active SLAM supplies the reference later; controller parameters still launch now.
+    from senior_robot.real_runtime import validate_navigation
+
+    parameters = service_root / "navigation.yaml"
+    parameters.write_text(
+        "controller_server:\n  ros__parameters:\n    use_sim_time: false\n"
+        "planner_server:\n  ros__parameters:\n    use_sim_time: false\n"
+        "bt_navigator:\n  ros__parameters:\n    use_sim_time: false\n"
+    )
+    validate_navigation(None, parameters)
+    live = profile.model_copy(update={"navigation_parameters": parameters})
+    command = _adapter_command(live, "robot-a")
+    assert f"navigation_controller_params:={parameters}" in command
+    assert not any(item.startswith("hardware_navigation_reference:=") for item in command)
+
 
 def test_motion_launch_uses_project_python_for_env_shebang(service_root):
     from senior_robot.platform_runtime import _motion_command
@@ -263,7 +278,7 @@ async def test_camera_leaf_recovers_without_restarting_helper_owners(service_roo
     import senior_robot.service_runtime as helper
 
     profile = real_profile(service_root)
-    monkeypatch.setenv("PYTHONPATH", str(Path("src").resolve()))
+    monkeypatch.setenv("PYTHONPATH", str(Path.cwd()))
     sleeper = """
 import json, os, sys, time
 from pathlib import Path
@@ -284,6 +299,8 @@ with (root / 'camera-attempts').open('a') as file:
     file.write(json.dumps(record) + '\\n')
 if not os.environ.get('SENIOR_LAUNCH_RECOVERED'):
     os.kill(os.getpid(), signal.SIGSEGV)
+# The recovered leaf remains healthy until the owner shuts it down.
+time.sleep(60)
 """
     launcher = """
 import json, os, shlex, subprocess, sys
@@ -298,7 +315,7 @@ raise SystemExit(subprocess.call([*prefix, sys.executable, '-c', LEAF_CODE, str(
     launch_arguments = []
 
     def launch_command(profile, robot_id, package, filename, *arguments):
-        assert (package, filename) == ("turn_on_wheeltec_robot", "wheeltec_camera.launch.py")
+        assert (package, filename) == ("senior_robot", "camera_demand.launch.py")
         launch_arguments.extend(arguments)
         return [sys.executable, "-c", launcher, str(service_root), *arguments]
 
@@ -324,6 +341,16 @@ raise SystemExit(subprocess.call([*prefix, sys.executable, '-c', LEAF_CODE, str(
     )
     try:
         await wait_for_socket(service_root, task)
+        client = IpcClient(service_root / "service.sock")
+        try:
+            assert (await client.request("camera.acquire", token="recovery-test"))["ok"] is True
+            for _ in range(500):
+                if (service_root / "camera-attempts").exists():
+                    break
+                assert (await client.request("camera.renew", token="recovery-test"))["ok"] is True
+                await asyncio.sleep(0.01)
+        finally:
+            await client.close()
         for _ in range(500):
             assert not task.done()
             path = service_root / "camera-attempts"
@@ -348,7 +375,7 @@ raise SystemExit(subprocess.call([*prefix, sys.executable, '-c', LEAF_CODE, str(
             os.kill(pid, 0)
         assert any(argument.startswith("launch-prefix:=") for argument in launch_arguments)
         assert (
-            "launch-prefix-filter:=^(?:astra_camera_node|usb_cam_node_exe|republish)$"
+            "launch-prefix-filter:=^(?:astra_camera_node|usb_cam_node_exe|republish|camera_rate_limit)$"
             in launch_arguments
         )
         await asyncio.sleep(2.1)
@@ -360,7 +387,8 @@ raise SystemExit(subprocess.call([*prefix, sys.executable, '-c', LEAF_CODE, str(
             assert (await client.request("stop"))["ok"] is True
         finally:
             await client.close()
-        assert await asyncio.wait_for(task, 8) == 0
+        # Camera group cleanup has a 10s budget; include the other fixture owners.
+        assert await asyncio.wait_for(task, 20) == 0
         for pid, _ in owners:
             with pytest.raises(ProcessLookupError):
                 os.kill(pid, signal.SIGCONT)

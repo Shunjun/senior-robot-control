@@ -23,8 +23,6 @@ def test_navigation_overlimits_reach_real_core_output_without_downstream_rejecti
     assert core.command(msg)
     rig.clock.steady += 0.01
     core.tick()
-    if core.scheduler._flight is not None:
-        core.scheduler._flight.future.result(timeout=2)
     rig.clock.steady += 0.01
     core.tick()
     output, _reason = rig.node.output[-1]

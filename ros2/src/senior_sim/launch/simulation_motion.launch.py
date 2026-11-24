@@ -65,11 +65,10 @@ def environment_assets(context):
 
 def _simulation_nodes(context):
     sim = FindPackageShare("senior_sim")
-    robot = FindPackageShare("senior_robot")
     nav = FindPackageShare("senior_navigation")
     sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
     navigation = IfCondition(LaunchConfiguration("navigation_enabled"))
-    params = PathJoinSubstitution([robot, "config", "simulation_motion.yaml"])
+    params = PathJoinSubstitution([sim, "config", "simulation_motion.yaml"])
     common = {"use_sim_time": sim_time}
     profile = ParameterValue(LaunchConfiguration("hardware_motion_profile"), value_type=str)
     controller_params = RewrittenYaml(
@@ -139,10 +138,10 @@ def _simulation_nodes(context):
                 parameters=[params, ros_sensor_parameters(), common],
             )
             for package, executable in (
-                ("senior_robot", "scan_adapter"),
-                ("senior_scan_matcher", "scan_motion_node"),
+                ("senior_perception", "scan_adapter"),
+                ("senior_motion_estimation", "scan_motion_node"),
                 ("senior_sensor_ingress", "scan_receipt_node"),
-                ("senior_robot", "safety_scan_ingress"),
+                ("senior_perception", "safety_scan_ingress"),
             )
         ],
         Node(

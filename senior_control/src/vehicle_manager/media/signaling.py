@@ -36,6 +36,7 @@ class VideoSignaling:
         self._make_session = make_session
         self._viewer: str | None = None
         self._task: asyncio.Task[None] | None = None
+        self._tasks: set[asyncio.Task[None]] = set()
         self._refusal: asyncio.Task[None] | None = None
         self._candidates: asyncio.Queue[str] = self._queue_factory(
             "vision.signaling.candidates", VideoLimits().max_candidates
@@ -53,18 +54,21 @@ class VideoSignaling:
         if isinstance(frame, VideoSdpEnvelope):
             if frame.type != "video.offer":
                 return
-            if self._task is not None and not self._task.done():
+            if self._viewer is not None and self._task is not None and not self._task.done():
                 if frame.session_id != self._viewer and (
                     self._refusal is None or self._refusal.done()
                 ):
                     metadata = frame.model_dump(exclude={"type", "payload"})
                     self._refusal = asyncio.create_task(self._notify_closed(metadata))
                 return
+            previous = self._task
             self._viewer = frame.session_id
             self._candidates = self._queue_factory(
                 "vision.signaling.candidates", VideoLimits().max_candidates
             )
-            self._task = asyncio.create_task(self._serve(frame))
+            self._task = asyncio.create_task(self._serve_after(previous, frame, self._candidates))
+            self._tasks.add(self._task)
+            self._task.add_done_callback(self._tasks.discard)
         elif frame.session_id == self._viewer and self._task is not None:
             if isinstance(frame, VideoCloseEnvelope):
                 self._viewer = None
@@ -83,12 +87,23 @@ class VideoSignaling:
 
     async def close(self) -> None:
         self.retire()
-        tasks = {task for task in (self._task, self._refusal) if task is not None}
+        tasks = self._tasks | {task for task in (self._refusal,) if task is not None}
         if tasks:
             # A caller's cleanup deadline must not send a second cancellation into peer.close().
             await asyncio.wait(tasks)
 
-    async def _serve(self, offer: VideoSdpEnvelope) -> None:
+    async def _serve_after(
+        self,
+        previous: asyncio.Task[None] | None,
+        offer: VideoSdpEnvelope,
+        candidates: asyncio.Queue[str],
+    ) -> None:
+        if previous is not None and not previous.done():
+            # Do not propagate a second cancellation into the old peer's cleanup.
+            await asyncio.wait({previous})
+        await self._serve(offer, candidates)
+
+    async def _serve(self, offer: VideoSdpEnvelope, candidates: asyncio.Queue[str]) -> None:
         session = None
         metadata = offer.model_dump(exclude={"type", "payload"})
         try:
@@ -105,7 +120,7 @@ class VideoSignaling:
                 )
             )
             while True:
-                await session.add_ice_candidate(await self._candidates.get())
+                await session.add_ice_candidate(await candidates.get())
         except (VideoError, ValueError) as error:
             logger.info("video session refused: %s", error)
             await self._notify_closed(metadata)
@@ -113,7 +128,8 @@ class VideoSignaling:
             logger.warning("video signaling failed", exc_info=True)
             await self._notify_closed(metadata)
         finally:
-            self._viewer = None
+            if self._task is asyncio.current_task():
+                self._viewer = None
             if session is not None:
                 try:
                     await session.close()

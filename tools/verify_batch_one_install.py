@@ -220,24 +220,18 @@ def verify_production_entry(*, compatible: bool = False) -> None:
 
 
 def verify_navigation() -> None:
-    """Verify the real SDK aliases, then ROS prefix paths when ROS is installed."""
-    import senior_navigation.route as old_route
+    """Verify canonical navigation contracts and the functional ROS installation."""
     from senior_navigation import navigation_adapter, route
-    from senior_robot import navigation_adapter as old_adapter
 
     from vehicle_core.errors import DomainError, ErrorCode
     from vehicle_core.values import MapRef, Pose2D
 
-    for name in ("RoutePlan", "QualifiedRoute", "RouteRejected", "RouteProgress", "RouteStatus"):
-        assert getattr(old_route, name) is getattr(route, name)
-    for name in ("NavigationAdapter", "RouteService", "MapGoal", "NavigationRejected", "main"):
-        assert getattr(old_adapter, name) is getattr(navigation_adapter, name)
     assert route.MapRef is MapRef and route.Pose2D is Pose2D
     assert issubclass(route.RouteRejected, DomainError)
     assert route.RouteRejected().code is ErrorCode.UNAVAILABLE
     assert route.RoutePlan.__module__ == "vehicle_core.route_plan"
     assert navigation_adapter.RouteService.__module__ == "senior_navigation.navigation_adapter"
-    print("installed navigation canonical route and historical SDK identities: PASS")
+    print("installed navigation canonical route contracts: PASS")
     try:
         from ament_index_python.packages import get_package_prefix, get_package_share_directory
     except ModuleNotFoundError as exc:
@@ -246,24 +240,22 @@ def verify_navigation() -> None:
         print("navigation ROS executable/share installation: UNVERIFIED (ament/ROS prefix absent)")
         return
     from senior_navigation.dedicated_controller import DedicatedController
-    from senior_robot.dedicated_controller import DedicatedController as OldController
 
-    assert OldController is DedicatedController
+    assert DedicatedController.__module__ == "senior_navigation.dedicated_controller"
     nav = Path(get_package_share_directory("senior_navigation"))
-    robot = Path(get_package_share_directory("senior_robot"))
-    for package in ("senior_navigation", "senior_robot"):
-        executable = Path(get_package_prefix(package)) / "lib" / package / "navigation_adapter"
-        assert executable.is_file() and executable.stat().st_mode & 0o111, executable
+    executable = (
+        Path(get_package_prefix("senior_navigation")) / "lib/senior_navigation/navigation_adapter"
+    )
+    assert executable.is_file() and executable.stat().st_mode & 0o111, executable
     for asset in (
         "config/nav2.yaml",
         "config/lattice_diff.json",
         "behavior_trees/navigate.xml",
         "behavior_trees/navigate_through_poses.xml",
+        "launch/navigation.launch.py",
     ):
-        assert (nav / asset).read_bytes() == (robot / asset).read_bytes(), asset
-    for share in (nav, robot):
-        assert (share / "launch/navigation.launch.py").is_file()
-    print("installed navigation new/old ROS executable and byte-identical share assets: PASS")
+        assert (nav / asset).is_file(), asset
+    print("installed navigation canonical executable and assets: PASS")
 
 
 def verify_platform_runtime() -> None:
@@ -1364,26 +1356,18 @@ def verify_route_execution(*, compatible: bool = False) -> None:
     with tempfile.TemporaryDirectory(prefix="installed-execution-", dir="/tmp") as directory:
         asyncio.run(verify(Path(directory)))
     if compatible:
-        import senior_navigation.route as old_route
         import vehicle_manager.agent.local_adapters as ports
         import vehicle_manager.agent.production as composition
         import vehicle_manager.tasks.execution_bindings as old_effects
         import vehicle_manager.tasks.executor as old_executor
         from senior_navigation import navigation_adapter, route
         from senior_robot import agent_adapter
-        from senior_robot import navigation_adapter as old_adapter
         from vehicle_manager.storage.domain_bindings import TaskStore as LegacyStore
         from vehicle_manager.storage.domain_bindings import WaypointStore
 
-        for owner in (old_route, route):
-            assert owner.RoutePlan is RoutePlan and owner.RouteRejected is RouteRejected
+        assert route.RoutePlan is RoutePlan and route.RouteRejected is RouteRejected
         assert route.QualifiedRoute.__module__ == "senior_navigation.route"
-        assert (
-            navigation_adapter.RoutePlan
-            is agent_adapter.RoutePlan
-            is old_adapter.RoutePlan
-            is RoutePlan
-        )
+        assert navigation_adapter.RoutePlan is agent_adapter.RoutePlan is RoutePlan
         assert ports.IpcNavigation is composition.IpcNavigation is IpcNavigation
         assert (
             old_executor.TaskExecutor is composition.TaskExecutor is execution_bindings.TaskExecutor
@@ -2003,21 +1987,15 @@ def verify_manager_media(*, backend: bool = False) -> None:
 
 def verify_real_preflight() -> None:
     """The existing hardware preflight requires the original SDK safety extra."""
-    import senior_robot.real_runtime as old_preflight
     from senior_robot import real_runtime as preflight
 
-    for name in (
-        "real_parameter_defaults",
-        "load_real_parameters",
-        "validate_real_runtime",
-        "validate_navigation",
-        "REQUIRED_PARAMETERS",
-        "RETIRED_PARAMETERS",
-    ):
-        assert getattr(old_preflight, name) is getattr(preflight, name)
+    defaults = preflight.real_parameter_defaults()
+    assert defaults["scan_receipt"]["scan_topic"] == "/scan"
+    assert defaults["scan_receipt"]["use_sim_time"] is False
+    # Exercise the actual read-only validation port without starting ROS.
+    preflight.validate_navigation(None, None)
     assert "rclpy" not in sys.modules
-
-    print("installed ROS-free real preflight and original public identities: PASS")
+    print("installed ROS-free real preflight policies and validation: PASS")
 
 
 def verify_home_database(*, compatible: bool = False) -> None:

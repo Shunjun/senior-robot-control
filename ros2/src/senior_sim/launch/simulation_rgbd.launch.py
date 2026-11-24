@@ -15,7 +15,7 @@ from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
-from senior_robot.rgbd_transport import transport_environment
+from senior_sim.rgbd_transport import transport_environment
 
 from vehicle_core.launch_recovery import restart_prefix
 
@@ -38,8 +38,9 @@ def _transport_actions(context):
 
 
 def generate_launch_description():
-    robot = FindPackageShare("senior_robot")
-    profile = PathJoinSubstitution([robot, "config", "simulation_rgbd.yaml"])
+    profile = PathJoinSubstitution(
+        [FindPackageShare("senior_sim"), "config", "simulation_rgbd.yaml"]
+    )
     clock = {"use_sim_time": ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)}
     return LaunchDescription(
         [
@@ -50,7 +51,9 @@ def generate_launch_description():
             DeclareLaunchArgument("enable_rgbd_transport", default_value="true"),
             DeclareLaunchArgument(
                 "rgbd_transport_profile",
-                default_value=PathJoinSubstitution([robot, "config", "rgbd_transport.xml"]),
+                default_value=PathJoinSubstitution(
+                    [FindPackageShare("senior_sim"), "config", "rgbd_transport.xml"]
+                ),
             ),
             GroupAction(
                 scoped=True,
@@ -80,13 +83,13 @@ def generate_launch_description():
                         parameters=[profile, clock],
                     ),
                     Node(
-                        package="senior_robot",
+                        package="senior_perception",
                         executable="depth_ingress",
                         prefix=restart_prefix(),
                         parameters=[profile, clock],
                     ),
                     Node(
-                        package="senior_robot",
+                        package="senior_perception",
                         executable="semantic_ingress",
                         prefix=restart_prefix(),
                         parameters=[profile, clock],

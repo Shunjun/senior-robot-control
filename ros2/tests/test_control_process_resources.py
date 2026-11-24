@@ -219,7 +219,7 @@ def test_reception_child_inherits_typed_sensor_remaps_without_twist_or_untyped_f
 ):
     from types import SimpleNamespace as N
 
-    from senior_robot import control_inputs
+    import senior_motion_control.control_inputs as control_inputs
 
     captured = {}
 

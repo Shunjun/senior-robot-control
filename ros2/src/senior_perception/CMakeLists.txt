@@ -3,9 +3,10 @@ project(senior_perception)
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
-# Executable composition stays in senior_robot/senior_sim; no duplicate ROS loop.
+
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(perception_algorithms test)
 endif()
+install(PROGRAMS scripts/scan_adapter scripts/safety_scan_ingress scripts/depth_ingress scripts/semantic_ingress scripts/rgbd_candidate_producer scripts/perception_node DESTINATION lib/${PROJECT_NAME})
 ament_package()

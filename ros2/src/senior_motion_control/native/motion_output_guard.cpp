@@ -19,7 +19,7 @@
 #include <unistd.h>
 
 #include "geometry_msgs/msg/twist.hpp"
-#include "senior_motion_msgs/sample_time.hpp"
+#include "senior_sensor_ingress/sample_time.hpp"
 #include "rclcpp/rclcpp.hpp"
 
 using namespace std::chrono_literals;
@@ -46,7 +46,7 @@ class MotionOutput : public rclcpp::Node {
   bool moving_ = false, disconnected_ = false;
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr publisher_;
   rclcpp::TimerBase::SharedPtr timer_;
-  static uint64_t steady_ns() { return senior_motion_msgs::time::monotonic_ns(); }
+  static uint64_t steady_ns() { return senior_sensor_ingress::time::monotonic_ns(); }
   // Finite diagnostic data only. Neither this buffer nor its fd carries actuator packets.
   struct TraceRow {
     const char *event, *reason;

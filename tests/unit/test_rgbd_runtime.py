@@ -23,7 +23,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def node_module():
-    path = ROOT / "ros2/src/senior_robot/senior_robot/perception_node.py"
+    path = ROOT / "ros2/src/senior_perception/senior_perception/perception_node.py"
     spec = importlib.util.spec_from_file_location("rgbd_runtime_node_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

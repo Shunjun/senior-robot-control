@@ -94,7 +94,7 @@ def lifecycle(monkeypatch):
         "rclpy.node": node_module,
     }.items():
         monkeypatch.setitem(sys.modules, name, module)
-    path = Path("ros2/src/senior_motion_control/senior_motion_control/motion_lifecycle.py")
+    path = Path("ros2/src/senior_sensor_ingress/senior_sensor_ingress/ros_lifecycle.py")
     spec = importlib.util.spec_from_file_location("cli_lifecycle_under_test", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

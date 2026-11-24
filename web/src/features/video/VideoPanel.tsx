@@ -23,10 +23,26 @@ export function VideoPanel({
 }: VideoPanelProps): ReactElement {
   const [remoteStream, setRemoteStream] = useState<MediaStream | null>(suppliedStream);
   const stream = suppliedStream ?? remoteStream;
+  const [page, setPage] = useState(() => ({ visible: document.visibilityState === "visible", generation: 0 }));
+
+  useEffect(() => {
+    const update = (visible: boolean) => setPage((previous) => previous.visible === visible
+      ? previous : { visible, generation: previous.generation + 1 });
+    const visible = () => update(document.visibilityState === "visible");
+    const hidden = () => update(false);
+    document.addEventListener("visibilitychange", visible);
+    window.addEventListener("pagehide", hidden);
+    window.addEventListener("pageshow", visible);
+    return () => {
+      document.removeEventListener("visibilitychange", visible);
+      window.removeEventListener("pagehide", hidden);
+      window.removeEventListener("pageshow", visible);
+    };
+  }, []);
 
   useEffect(() => {
     if (
-      !live ||
+      !live || !page.visible ||
       link?.sendVideoSignal === undefined ||
       link.subscribeVideo === undefined ||
       typeof RTCPeerConnection === "undefined"
@@ -58,6 +74,11 @@ export function VideoPanel({
       }
     }
 
+    const onVisibility = () => { if (document.visibilityState !== "visible") finish(); };
+    // Release synchronously before a hidden page can be frozen in the back-forward cache.
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", finish);
+
     peer.addTransceiver("video", { direction: "recvonly" });
     peer.ontrack = (event) => {
       if (active) setRemoteStream(event.streams[0] ?? new MediaStream([event.track]));
@@ -88,6 +109,7 @@ export function VideoPanel({
     });
     void peer.createOffer()
       .then(async (offer) => {
+        if (!active) return;
         await peer.setLocalDescription(offer);
         if (!active || !offer.sdp) return;
         link.sendVideoSignal?.("video.offer", { sdp: offer.sdp });
@@ -99,10 +121,12 @@ export function VideoPanel({
       })
       .catch(finish);
     return () => {
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", finish);
       off();
       finish();
     };
-  }, [link, live]);
+  }, [link, live, page]);
 
   return (
     <section className={styles.panel} data-compact={compact} aria-label="实时视频">

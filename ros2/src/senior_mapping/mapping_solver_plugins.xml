@@ -1,0 +1,5 @@
+<library path="senior_mapping_ceres">
+  <class name="senior_mapping/BoundedCeresSolver" type="senior_mapping_solver::CeresSolver" base_class_type="karto::ScanSolver">
+    <description>SLAM Toolbox 2.6.10 Ceres solver with an explicit thread budget.</description>
+  </class>
+</library>

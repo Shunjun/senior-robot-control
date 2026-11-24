@@ -1,0 +1,15 @@
+{
+  "tag": "2.6.10",
+  "url": "https://raw.githubusercontent.com/SteveMacenski/slam_toolbox/2.6.10/",
+  "original_sha256": {
+    "ceres_solver.cpp": "e7e0dcab7c24e0105485215b111688ffd38750f73759f7eca5c50c558ed1e68f",
+    "ceres_solver.hpp": "be46116b51c808fc620df2c2a93c83ef2b735a4c867a1e0c5bd7c369d319f755",
+    "ceres_utils.h": "ea422e49743ccf0747667d120d7b07087a6f9b6ce56a12cdf3852c5aca106550",
+    "LICENSE": "20c17d8b8c48a600800dfd14f95d5cb9ff47066a9641ddeab48dc54aec96e331"
+  },
+  "changes": [
+    "plugin namespace",
+    "explicit mapping_solver_threads (default 1, max 4)",
+    "local include path; stdexcept include"
+  ]
+}

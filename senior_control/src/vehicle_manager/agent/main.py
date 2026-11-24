@@ -17,7 +17,9 @@ from senior_contracts.wire import (
     LearningStartEnvelope,
     LearningStatusEnvelope,
     ManualIntentEnvelope,
+    MapCatalogEnvelope,
     OperationEnvelope,
+    PerformancePayload,
     RecoveryEnvelope,
     ResponseEnvelope,
     ResponsePayload,
@@ -60,6 +62,7 @@ def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
     pose, route = snapshot.robot_pose, snapshot.route_progress
     return (
         snapshot.localized,
+        None if snapshot.performance is None else snapshot.performance.sequence,
         snapshot.map_ref,
         snapshot.map_generation,
         snapshot.map_grid_id,
@@ -106,6 +109,7 @@ class Agent(Generic[ResultT]):
         map_root: Path = Path("map-transfer"),
         background: Mapping[str, Callable[[], Awaitable[None]]] | None = None,
         cleanup: Callable[[], Awaitable[None]] | None = None,
+        cleanup_timeout_ms: float | None = None,
         background_fault: Callable[[str], Awaitable[None]] | None = None,
         heartbeat_ms: float = HEARTBEAT_INTERVAL_MS,
         retry_delay_ms: float = 1000,
@@ -114,10 +118,14 @@ class Agent(Generic[ResultT]):
         state_poll_ms: float = 250,
         metrics: Metrics | None = None,
         clock: Clock | None = None,
+        performance: Callable[[], PerformancePayload | None] = lambda: None,
+        mapping_protocol_version: int | None = None,
         wall_clock: Callable[[], float] = time.time,
     ) -> None:
         if not robot_id.strip():
             raise ValueError("robot id is required")
+        self._mapping_protocol_version = mapping_protocol_version
+        self._performance = performance
         self._ports = ports
         self.robot_id = robot_id
         self._settings = settings
@@ -138,6 +146,7 @@ class Agent(Generic[ResultT]):
         self._deadlines = deadlines if deadlines is not None else Deadlines()
         self._background = dict(background or {})
         self._cleanup = cleanup
+        self._cleanup_timeout_ms = cleanup_timeout_ms
         self._background_fault_handler = background_fault
         self.module_faults: dict[str, dict[str, Any]] = {}
         self._failed_modules: set[str] = set()
@@ -329,7 +338,9 @@ class Agent(Generic[ResultT]):
         if link is not None:
             await self._quietly(link.close())
         if self._cleanup is not None:
-            await self._quietly(self._cleanup())
+            await self._quietly(
+                self._cleanup(), context="persistence cleanup", timeout_ms=self._cleanup_timeout_ms
+            )
         await self._quietly(self._motion.exit())
         await self._quietly(self._motion.close())
         loop = asyncio.get_running_loop()
@@ -362,10 +373,20 @@ class Agent(Generic[ResultT]):
         if not task.cancelled():
             task.exception()
 
-    async def _quietly(self, call: Awaitable[Any], *, context: str = "shutdown step") -> None:
+    async def _quietly(
+        self,
+        call: Awaitable[Any],
+        *,
+        context: str = "shutdown step",
+        timeout_ms: float | None = None,
+    ) -> None:
         task = asyncio.ensure_future(call)
+        # //Compatible: ordinary cleanup retains the existing safety deadline.
         try:
-            done, _pending = await asyncio.wait({task}, timeout=self._deadlines.safety_ms / 1000)
+            done, _pending = await asyncio.wait(
+                {task},
+                timeout=(self._deadlines.safety_ms if timeout_ms is None else timeout_ms) / 1000,
+            )
         except BaseException:
             task.cancel()
             self._stragglers.add(task)
@@ -583,7 +604,7 @@ class Agent(Generic[ResultT]):
                 raise ConnectionError("agent command capacity exceeded")
             self._spawn(self._answer_settings(link, envelope))
             return
-        if isinstance(envelope, WorkspaceEnvelope):
+        if isinstance(envelope, (WorkspaceEnvelope, MapCatalogEnvelope)):
             # The relay bounds reads to one in flight. Dropping excess here reserves
             # the ordinary and safety lanes even when the relay violates that limit.
             if self._workspace_request is None or self._workspace_request.done():
@@ -826,7 +847,9 @@ class Agent(Generic[ResultT]):
         else:
             await self._reply(link, envelope, data=data)
 
-    async def _answer_workspace(self, link: Link, envelope: WorkspaceEnvelope) -> None:
+    async def _answer_workspace(
+        self, link: Link, envelope: WorkspaceEnvelope | MapCatalogEnvelope
+    ) -> None:
         try:
             self._admit(envelope)
             if self._workspace is None:
@@ -927,6 +950,7 @@ class Agent(Generic[ResultT]):
                 ResponseEnvelope,
                 SnapshotEnvelope,
                 WorkspaceEnvelope,
+                MapCatalogEnvelope,
                 SettingsGetEnvelope,
                 LearningStartEnvelope,
                 LearningStatusEnvelope,
@@ -1123,6 +1147,8 @@ class Agent(Generic[ResultT]):
             runnable_task_ids=tuple(i for i in live.runnable_task_ids if i not in deleted),
             execution_status=live.execution_status,
             collected_at=self._wall_clock(),
+            performance=self._performance(),
+            mapping_protocol_version=self._mapping_protocol_version,
             tasks=tuple(item for item in live.tasks if item.task_id not in deleted),
             home_revision=home_revision,
             map_generation=live.map_generation,

@@ -383,7 +383,9 @@ def test_ros_capture_uses_its_context_executor_and_humble_message_info(monkeypat
         return callback
 
     module(
-        "senior_robot.motion_lifecycle", MotionExecutor=Executor, with_dds_info=metadata_callback
+        "senior_sensor_ingress.ros_lifecycle",
+        MotionExecutor=Executor,
+        with_dds_info=metadata_callback,
     )
     module("rclpy.qos", qos_profile_sensor_data=object())
     module("rosidl_runtime_py.convert", message_to_ordereddict=lambda msg: msg)

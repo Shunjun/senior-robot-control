@@ -449,7 +449,7 @@ class NativeObservationRosBridge:
     ):
         from nav_msgs.msg import Odometry
         from rclpy.clock import Clock, ClockType
-        from senior_motion_msgs.msg import ScanMotion
+        from senior_interfaces.msg import ScanMotion
         from sensor_msgs.msg import Imu
         from std_msgs.msg import String
 

@@ -16,8 +16,8 @@ rclpy = pytest.importorskip("rclpy")
 from geometry_msgs.msg import TransformStamped  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.qos import qos_profile_sensor_data  # noqa: E402
+from senior_interfaces.msg import BoundedRawLaserScan, FencedFilteredScan, ScanMotion  # noqa: E402
 from senior_motion_control.source_fences import SourceEpochFence  # noqa: E402
-from senior_motion_msgs.msg import BoundedRawLaserScan, FencedFilteredScan, ScanMotion  # noqa: E402
 from sensor_msgs.msg import LaserScan  # noqa: E402
 from tf2_ros import StaticTransformBroadcaster  # noqa: E402
 
@@ -99,13 +99,13 @@ class ControlledFencedScanPublisher:
 def test_unrelated_invalid_owner_cannot_revoke_active_matcher(tmp_path, monkeypatch):
     monkeypatch.setenv("ROS_DOMAIN_ID", "100")
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
-    params = Path(__file__).parents[2] / "ros2/src/senior_robot/config/simulation_motion.yaml"
+    params = Path(__file__).parents[2] / "ros2/src/senior_sim/config/simulation_motion.yaml"
     with (tmp_path / "owner-invalid.log").open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             [
                 "ros2",
                 "run",
-                "senior_scan_matcher",
+                "senior_motion_estimation",
                 "scan_motion_node",
                 "--ros-args",
                 "--params-file",
@@ -196,14 +196,14 @@ def test_invalid_stream_does_not_exhaust_epochs_and_recovers(tmp_path, monkeypat
     assert domain.isdecimal() and 0 <= int(domain) <= 101, "choose an isolated ROS domain"
     monkeypatch.setenv("ROS_DOMAIN_ID", domain)
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
-    params = Path(__file__).parents[2] / "ros2/src/senior_robot/config/simulation_motion.yaml"
+    params = Path(__file__).parents[2] / "ros2/src/senior_sim/config/simulation_motion.yaml"
     log_path = tmp_path / "scan-motion.log"
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             [
                 "ros2",
                 "run",
-                "senior_scan_matcher",
+                "senior_motion_estimation",
                 "scan_motion_node",
                 "--ros-args",
                 "--params-file",

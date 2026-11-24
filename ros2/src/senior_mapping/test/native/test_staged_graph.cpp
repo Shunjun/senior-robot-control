@@ -17,7 +17,7 @@ int main(int argc, char ** argv)
   std::ofstream(graph) << "graph";
   std::ofstream(data) << "dataset";
   const std::string digest = "16fce5d6611d61b39ddc8834a112271930b3cbdbf1313bc9da35e125ff0bbfb5";
-  senior_slam_bridge::StagedGraph staged(input, digest);
+  senior_mapping::StagedGraph staged(input, digest);
   if (staged.digest() != digest || staged.prefix() == input) {
     throw std::runtime_error("Expected a private, verified copy");
   }
@@ -31,7 +31,7 @@ int main(int argc, char ** argv)
 
   const auto reject = [&](const std::string & expected) {
       try {
-        senior_slam_bridge::StagedGraph invalid(input, expected);
+        senior_mapping::StagedGraph invalid(input, expected);
       } catch (const std::exception &) {
         return;
       }

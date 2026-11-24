@@ -4,8 +4,8 @@ from dataclasses import replace
 from types import SimpleNamespace as N
 
 import pytest
+from senior_navigation.navigation_adapter import RouteService
 from senior_robot.agent_adapter import AdapterCore
-from senior_robot.navigation_adapter import RouteService
 from test_motion_core_exit_deadline import start
 from test_task_terminal_release import intent
 from test_terminal_release_collection import gate_for

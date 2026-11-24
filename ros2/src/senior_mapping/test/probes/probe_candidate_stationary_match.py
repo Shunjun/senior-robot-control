@@ -34,7 +34,7 @@ from probe_read_graph import (
     transform,
 )
 from rclpy.qos import qos_profile_sensor_data
-from senior_slam_bridge.srv import MatchStationaryScan, ReadGraph, ReadLoadedGraph
+from senior_interfaces.srv import MatchStationaryScan, ReadGraph, ReadLoadedGraph
 from sensor_msgs.msg import LaserScan
 from slam_toolbox.srv import SerializePoseGraph
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster

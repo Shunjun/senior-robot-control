@@ -1,8 +1,8 @@
 #pragma once
 
 #include <optional>
-#include <senior_motion_msgs/sample_time.hpp>
-#include <senior_motion_msgs/msg/raw_capture_header.hpp>
+#include <senior_sensor_ingress/sample_time.hpp>
+#include <senior_interfaces/msg/raw_capture_header.hpp>
 
 namespace senior_sensor_ingress {
 // Receipt coordinates and their serialized owner clock segment travel together.
@@ -24,14 +24,14 @@ inline int64_t stamp_ns(const builtin_interfaces::msg::Time & stamp)
 // Check it before mapping so a retransmission never acquires a new receipt.
 class StampFrontier {
 public:
-  std::optional<senior_motion_msgs::time::SampleTime> accept(
+  std::optional<senior_sensor_ingress::time::SampleTime> accept(
     const builtin_interfaces::msg::Time & stamp, int64_t ros, uint64_t steady,
     uint64_t generation)
   {
     const auto ns = stamp_ns(stamp);
     if (latest_ && ns == *latest_) return std::nullopt;
     if (latest_ && ns < *latest_) throw std::invalid_argument("raw_stamp_out_of_order");
-    auto sample = senior_motion_msgs::time::map_sample(ns, ros, steady, generation);
+    auto sample = senior_sensor_ingress::time::map_sample(ns, ros, steady, generation);
     latest_ = ns;
     return sample;
   }
@@ -40,8 +40,8 @@ private:
   std::optional<int64_t> latest_;
 };
 
-inline void set_sample(senior_motion_msgs::msg::RawCaptureHeader & header,
-                       const senior_motion_msgs::time::SampleTime & sample)
+inline void set_sample(senior_interfaces::msg::RawCaptureHeader & header,
+                       const senior_sensor_ingress::time::SampleTime & sample)
 {
   header.received_steady_ns = sample.received_steady_ns;
   header.sample_steady_ns = sample.sample_steady_ns;

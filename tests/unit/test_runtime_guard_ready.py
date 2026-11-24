@@ -28,6 +28,14 @@ def ready(request, monkeypatch):
     node._runtime_subscription = ReadySubscription(object, node._on_motion_runtime, depth=5)
     node._consuming_runtime = False
     node._motion_runtime = MotionRuntimeReceiver()
+    node._output_incarnation = None
+    node._output_handoff_boot = None
+    node._pending_output_handoff = None
+    node._output_handoff_missing_estop = False
+    node._pending_estop_request = None
+    node._latched_estop_request = None
+    node._latched_estop_revision = 0
+    node._pending_estop_reset = None
     node._arbiter = Arbiter("route-sim", 300)
     node._manual_ingress = ManualIngress("route-sim", "command-boot", ttl=0.3)
     node._manual_target = None
@@ -43,6 +51,9 @@ def ready(request, monkeypatch):
     barriers = []
     node._final_publisher = N(publish=barriers.append)
     old = CASE["packets"][0]
+    # This fixture represents an already established output incarnation.
+    # Output boot handoff has separate lifecycle regression coverage.
+    node._output_incarnation = (b"gate", old["boot_id"])
     rig.clock.mono = CASE["receptions"][0]["admission_now"]
     node._on_motion_runtime(N(data=json.dumps(old)), {})
     assert node._motion_runtime.value.sequence == 198

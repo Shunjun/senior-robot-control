@@ -119,6 +119,7 @@ class MapArchive:
         sensor_summary: tuple[tuple[str, str], ...] = (),
         max_uncompressed_bytes: int = MAX_BUNDLE_BYTES,
         capture_timeout_ms: float = 1000,
+        verification_timeout_ms: float = 250,
     ) -> None:
         self._pose_graph = pose_graph
         self._source_robot_id = source_robot_id
@@ -129,6 +130,9 @@ class MapArchive:
         if not math.isfinite(capture_timeout_ms) or capture_timeout_ms <= 0:
             raise ValueError("map capture timeout must be finite and positive")
         self._capture_timeout_seconds = capture_timeout_ms / 1000
+        if not math.isfinite(verification_timeout_ms) or verification_timeout_ms <= 0:
+            raise ValueError("map verification timeout must be finite and positive")
+        self._verification_timeout_seconds = verification_timeout_ms / 1000
         self._capture_work: asyncio.Task[tuple[SlamSnapshot, dict[str, bytes]]] | None = None
 
     async def export_bundle(
@@ -272,17 +276,19 @@ class MapArchive:
     ) -> dict[str, bytes]:
         if not callable(getattr(self._pose_graph, "verify_consistent", None)):
             raise DomainError(ErrorCode.UNAVAILABLE, "map snapshot verification is unavailable")
-        original = _file_bytes(directory, self._max_uncompressed_bytes)
+        original = await asyncio.to_thread(_file_bytes, directory, self._max_uncompressed_bytes)
         verifier = cast(ConsistentSnapshotVerifier, self._pose_graph)
         try:
             verified = await asyncio.wait_for(
-                verifier.verify_consistent(directory, snapshot), timeout=0.25
+                verifier.verify_consistent(directory, snapshot),
+                timeout=self._verification_timeout_seconds,
             )
         except asyncio.TimeoutError as exc:  # //Compatible: Python 3.10 timeout type.
             raise DomainError(
                 ErrorCode.OPERATION_UNKNOWN, "map snapshot verification timed out"
             ) from exc
-        if verified is not True or original != _file_bytes(directory, self._max_uncompressed_bytes):
+        current = await asyncio.to_thread(_file_bytes, directory, self._max_uncompressed_bytes)
+        if verified is not True or original != current:
             raise DomainError(ErrorCode.OPERATION_UNKNOWN, "map snapshot generation is unconfirmed")
         return original
 

@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(senior_mapping)
 find_package(ament_cmake REQUIRED)
+find_package(senior_sensor_ingress REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS scripts/slam_adapter DESTINATION lib/${PROJECT_NAME})
@@ -14,13 +15,23 @@ endif()
 find_package(Boost REQUIRED COMPONENTS serialization thread)
 find_package(OpenSSL REQUIRED)
 find_package(rclcpp REQUIRED)
-find_package(senior_slam_bridge REQUIRED)
-find_package(senior_motion_msgs 0.3.0 REQUIRED)
+find_package(senior_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(slam_toolbox 2.6.8 EXACT REQUIRED)
+find_package(nav_msgs REQUIRED)
+find_package(slam_toolbox 2.6.10 EXACT REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(TBB REQUIRED)
 find_package(Threads REQUIRED)
+find_package(Ceres REQUIRED)
+find_package(pluginlib REQUIRED)
+
+add_library(senior_mapping_ceres SHARED src/solver/ceres_solver.cpp)
+target_compile_features(senior_mapping_ceres PRIVATE cxx_std_17)
+ament_target_dependencies(senior_mapping_ceres rclcpp slam_toolbox pluginlib)
+target_link_libraries(senior_mapping_ceres Ceres::ceres Boost::thread TBB::tbb)
+pluginlib_export_plugin_description_file(slam_toolbox mapping_solver_plugins.xml)
+install(TARGETS senior_mapping_ceres LIBRARY DESTINATION lib)
+install(DIRECTORY src/solver/ DESTINATION share/${PROJECT_NAME}/solver_source)
 
 # //Compatible: Humble ament uses the exported RViz target and skips the legacy library exports.
 set(slam_toolbox_library_dir "${slam_toolbox_DIR}/../../../lib")
@@ -35,7 +46,7 @@ add_executable(slam_graph_node
   src/slam/slam_graph_node.cpp src/slam/staged_graph.cpp src/slam/native_capture.cpp src/slam/bounded_scan_ingress.cpp
   src/slam/static_lidar_tf_ingress.cpp)
 target_compile_features(slam_graph_node PRIVATE cxx_std_17)
-ament_target_dependencies(slam_graph_node rclcpp senior_slam_bridge senior_motion_msgs sensor_msgs slam_toolbox tf2_ros)
+ament_target_dependencies(slam_graph_node rclcpp senior_interfaces sensor_msgs nav_msgs slam_toolbox tf2_ros senior_sensor_ingress)
 target_link_libraries(slam_graph_node
   "${SLAM_TOOLBOX_ASYNC_LIBRARY}"
   "${SLAM_TOOLBOX_COMMON_LIBRARY}"
@@ -44,7 +55,7 @@ target_link_libraries(slam_graph_node
 )
 add_executable(acquire_scan_receipt src/slam/acquire_scan_receipt.cpp)
 target_compile_features(acquire_scan_receipt PRIVATE cxx_std_17)
-ament_target_dependencies(acquire_scan_receipt rclcpp senior_motion_msgs)
+ament_target_dependencies(acquire_scan_receipt rclcpp senior_interfaces senior_sensor_ingress)
 install(TARGETS slam_graph_node acquire_scan_receipt DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS scripts/candidate_preflight.py DESTINATION lib/${PROJECT_NAME}
   RENAME candidate_preflight)
@@ -111,6 +122,12 @@ if(BUILD_TESTING)
   ament_add_test(staged_graph
     COMMAND "$<TARGET_FILE:test_staged_graph>" "${CMAKE_CURRENT_BINARY_DIR}"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+  )
+  ament_add_test(production_session_runtime
+    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_production_session.py"
+      "$<TARGET_FILE:slam_graph_node>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 90
   )
   ament_add_test(read_graph_runtime
     COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_read_graph.py"
@@ -193,4 +210,5 @@ if(BUILD_TESTING)
   )
 endif()
 
+install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
 ament_package()

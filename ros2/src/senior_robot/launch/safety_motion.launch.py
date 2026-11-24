@@ -78,19 +78,19 @@ def _nodes(context):
             parameters=[runtime["scan_receipt"], shared],
         ),
         Node(
-            package="senior_robot",
+            package="senior_perception",
             executable="scan_adapter",
             prefix=restart_prefix(),
             parameters=[runtime["scan_adapter"], shared],
         ),
         Node(
-            package="senior_robot",
+            package="senior_perception",
             executable="safety_scan_ingress",
             prefix=restart_prefix(),
             parameters=[runtime["safety_scan_ingress"], shared],
         ),
         Node(
-            package="senior_scan_matcher",
+            package="senior_motion_estimation",
             executable="scan_motion_node",
             prefix=restart_prefix(),
             parameters=[runtime["scan_motion_node"], shared],

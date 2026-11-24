@@ -9,11 +9,11 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include "senior_sensor_ingress/sample_record.hpp"
-#include <senior_motion_msgs/msg/bounded_raw_laser_scan.hpp>
-#include <senior_motion_msgs/msg/bounded_safety_scan.hpp>
-#include <senior_motion_msgs/msg/bounded_filtered_scan.hpp>
-#include <senior_motion_msgs/msg/fenced_safety_scan.hpp>
-#include <senior_motion_msgs/msg/fenced_filtered_scan.hpp>
+#include <senior_interfaces/msg/bounded_raw_laser_scan.hpp>
+#include <senior_interfaces/msg/bounded_safety_scan.hpp>
+#include <senior_interfaces/msg/bounded_filtered_scan.hpp>
+#include <senior_interfaces/msg/fenced_safety_scan.hpp>
+#include <senior_interfaces/msg/fenced_filtered_scan.hpp>
 #include "senior_sensor_ingress/scan_ledger.hpp"
 
 namespace senior_sensor_ingress {
@@ -27,7 +27,7 @@ public:
 
 private:
   using Scan = sensor_msgs::msg::LaserScan;
-  using Bounded = senior_motion_msgs::msg::BoundedRawLaserScan;
+  using Bounded = senior_interfaces::msg::BoundedRawLaserScan;
   std::string new_epoch();
   bool retire(const std::string & gid);
   bool clock_ok(int64_t ros_ns, uint64_t steady_ns);
@@ -49,25 +49,25 @@ private:
   void inspect_owner(Owner & owner, size_t index);
   void invalidate_owner(Owner & owner, size_t index, const std::string & reason,
                         bool owner_lost, bool upstream_invalid = false,
-                        const senior_motion_msgs::msg::BoundedSafetyScan * safety = nullptr,
-                        const senior_motion_msgs::msg::BoundedFilteredScan * filtered = nullptr);
-  void on_safety(const senior_motion_msgs::msg::BoundedSafetyScan & message,
+                        const senior_interfaces::msg::BoundedSafetyScan * safety = nullptr,
+                        const senior_interfaces::msg::BoundedFilteredScan * filtered = nullptr);
+  void on_safety(const senior_interfaces::msg::BoundedSafetyScan & message,
                  const rclcpp::MessageInfo & info);
-  void on_filtered(const senior_motion_msgs::msg::BoundedFilteredScan & message,
+  void on_filtered(const senior_interfaces::msg::BoundedFilteredScan & message,
                    const rclcpp::MessageInfo & info);
 
   BeforeVerify before_verify_;
   ScanLedger ledger_;
   Owner safety_owner_, filter_owner_;
-  rclcpp::Publisher<senior_motion_msgs::msg::FencedSafetyScan>::SharedPtr safety_publisher_;
-  rclcpp::Publisher<senior_motion_msgs::msg::FencedFilteredScan>::SharedPtr filter_publisher_;
-  rclcpp::Subscription<senior_motion_msgs::msg::BoundedSafetyScan>::SharedPtr safety_subscription_;
-  rclcpp::Subscription<senior_motion_msgs::msg::BoundedFilteredScan>::SharedPtr filter_subscription_;
+  rclcpp::Publisher<senior_interfaces::msg::FencedSafetyScan>::SharedPtr safety_publisher_;
+  rclcpp::Publisher<senior_interfaces::msg::FencedFilteredScan>::SharedPtr filter_publisher_;
+  rclcpp::Subscription<senior_interfaces::msg::BoundedSafetyScan>::SharedPtr safety_subscription_;
+  rclcpp::Subscription<senior_interfaces::msg::BoundedFilteredScan>::SharedPtr filter_subscription_;
   std::mutex mutex_;
   rclcpp::CallbackGroup::SharedPtr test_group_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr subscription_;
   StampFrontier stamps_;
-  senior_motion_msgs::time::ClockTracker clock_;
+  senior_sensor_ingress::time::ClockTracker clock_;
   uint64_t clock_generation_ = 1;
   rclcpp::Publisher<Bounded>::SharedPtr publisher_;
   rclcpp::TimerBase::SharedPtr timer_;

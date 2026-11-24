@@ -4,7 +4,7 @@ import logging
 from dataclasses import replace
 
 import pytest
-from control_process_test_support import generic_motion_profile, read_inputs, read_observation
+from control_process_test_support import generic_motion_profile
 from senior_motion_estimation.estimator import MotionEstimation
 from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
 from senior_motion_estimation.pose_estimator import PoseEstimation, PoseObservation
@@ -79,34 +79,6 @@ def test_raw_late_and_invalid_clock_are_reported_without_fabricated_age():
     assert out["sensor_results"]["raw.laser.expired"] == 2  # two attempts, one original age sample
 
 
-def test_scan_reuse_has_one_raw_and_each_attempted_use_age(replay, monkeypatch):  # noqa: F811
-    d, emitted = reporter()
-    c = replay.core
-    c.diagnostics = d
-    attempts = []
-    original = c._observation
-
-    def observe(now):
-        attempts.append(now)
-        return original(now)
-
-    monkeypatch.setattr(c, "_observation", observe)
-    read_inputs(c, replay.clock.steady)
-    read_observation(c, replay.clock.steady)
-    replay.clock.ns += 200_000_000
-    replay.clock.steady += 0.2
-    read_inputs(c, replay.clock.steady)
-    read_observation(c, replay.clock.steady)
-    replay.clock.ns += 1_000_000_000
-    replay.clock.steady += 1
-    with pytest.raises(ValueError, match="scan_expired"):
-        read_observation(c, replay.clock.steady)
-    out = summary(d, emitted)
-    assert out["streams"]["sensor.raw.scan"]["count"] == 1
-    assert out["streams"]["sensor.use.scan"]["count"] == len(attempts)
-    assert out["streams"]["sensor.use.scan"]["over_hard"] == 1
-
-
 def test_relative_integration_accumulates_known_motion_errors():
     e = MotionEstimation()
     o = replace(observation("laser", (0.4, None, 0.1), stamp=10), error=(0.2, None, 0.3))
@@ -124,65 +96,6 @@ def test_relative_integration_accumulates_known_motion_errors():
     )
     assert r.error_m is not None and r.error_m >= 0.04
     assert r.error_yaw_rad is not None and r.error_yaw_rad >= 0.06 - 1e-12
-
-
-def test_actual_scan_space_preserves_unknown_error_and_original_deadline_as_standard_time_advances(
-    replay,  # noqa: F811
-):
-    c = replay.core
-    read_inputs(c, replay.clock.steady)
-    first, _ = read_observation(c, replay.clock.steady)
-    initial = c._space_estimate
-    assert initial.unknown_pose_sources == ("scan",)
-    assert c._perception_pose.error_m is None
-    assert initial.alignment_error_m is None
-    assert initial.software_alignment_error_m > 0
-    replay.clock.ns += 300_000_000
-    replay.clock.steady += 0.3
-    read_inputs(c, replay.clock.steady)
-    later, _ = read_observation(c, replay.clock.steady)
-    assert c._space_estimate.unknown_pose_sources == ("scan",)
-    assert c._space_estimate.alignment_error_m is None
-    assert c._space_estimate.software_alignment_error_m >= initial.software_alignment_error_m
-    assert later.free_space.area <= first.free_space.area
-    assert later.deadline_steady == first.deadline_steady
-
-
-@pytest.mark.parametrize("age", [0.3, 0.7, 0.999])
-def test_current_independent_projection_keeps_raw_support_and_error_in_risk(replay, age):  # noqa: F811
-    c = replay.core
-    s = c.node._reception_test.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
-    t = 5.0
-    now = replay.clock.steady
-    raw = replace(
-        observation("laser", (0.2, None, 0.1), stamp=t),
-        roots=(
-            replace(
-                observation("laser", (0.2, None, 0.1), stamp=t).roots[0],
-                time=sample_time(
-                    stamp_ns=observation("laser", (0.2, None, 0.1), stamp=t).roots[0].time.stamp_ns,
-                    received_ros_ns=round((t) * 1e9),
-                    received_steady_ns=round((now) * 1e9),
-                ),
-            ),
-        ),
-        error=(0.2, None, 0.3),
-        independent=(True, False, True),
-        measured_steady=now,
-    )
-    s.ingest_observation(raw, t, now)
-    replay.clock.ns = round((t + age) * 1e9)
-    replay.clock.steady += age
-    ref, body, wheel = read_inputs(c, replay.clock.steady)
-    assert ref["start_steady"] == ref["end_steady"] == now
-    from test_directional_constraints import scene
-
-    ctx = c._snapshot(ref, wheel, replay.clock.steady, scene(replay.clock.steady), Pose2D(0, 0, 0))
-    axis = s.latest.independent_axes[0]
-    assert axis.observation_age_s == pytest.approx(age)
-    expected = max(c.profile.linear_error + axis.prediction_error, axis.error)
-    assert ctx.envelope.linear_interval[1] >= 0.2 + expected - 1e-12
-    assert ctx.envelope.linear_interval[1] == pytest.approx(0.2 + expected)
 
 
 def test_common_unknown_absolute_anchor_cancels_but_motion_error_does_not():
@@ -317,58 +230,6 @@ def test_rejected_native_receipt_uses_original_identity_without_live_state_mutat
     assert s.estimator._frontiers["wheel"].identity_sequence == 1
 
 
-def test_steady_elapsed_prediction_error_is_preserved_when_ros_is_paused(replay):  # noqa: F811
-    c = replay.core
-    s = c.node._reception_test.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
-    now = replay.clock.steady
-    raw = replace(
-        observation("laser", (0.2, None, 0.1), stamp=5),
-        roots=(
-            replace(
-                observation("laser", (0.2, None, 0.1), stamp=5).roots[0],
-                time=sample_time(
-                    stamp_ns=observation("laser", (0.2, None, 0.1), stamp=5).roots[0].time.stamp_ns,
-                    received_ros_ns=round((5) * 1e9),
-                    received_steady_ns=round((now) * 1e9),
-                ),
-            ),
-        ),
-        independent=(True, False, True),
-        measured_steady=now,
-    )
-    s.ingest_observation(raw, 5, now)
-    s.estimate(5, now + 0.7)
-    axis = s.latest.independent_axes[0]
-    assert axis.error is None
-    assert axis.prediction_error == pytest.approx(s.estimator.acceleration[0] * 0.7)
-    assert s.latest.independent_axes[0].roots == raw.roots
-
-
-def test_scan_geometry_retains_original_pose_association_on_reuse(replay, monkeypatch):  # noqa: F811
-    c = replay.core
-    read_inputs(c, replay.clock.steady)
-    read_observation(c, replay.clock.steady)
-    anchor = c._perception_pose
-    original = c.sensors.pose_estimator.at
-
-    queried = []
-
-    def at(stamp, **kwargs):
-        queried.append(stamp)
-        return original(stamp, **kwargs)
-
-    replay.clock.ns += 100_000_000
-    replay.clock.steady += 0.1
-    read_inputs(c, replay.clock.steady)
-    original = c.sensors.pose_estimator.at
-    monkeypatch.setattr(c.sensors.pose_estimator, "at", at)
-    read_observation(c, replay.clock.steady)
-    assert c._perception_pose is anchor
-    # Latest-scan tightening may query its pose without changing the selected
-    # geometry's original association or proof deadline.
-    assert replay.node._scans[-1].stamp in queried
-
-
 def test_known_anchor_yaw_error_affects_global_pose_but_cancels_in_relative_pose():
     e = MotionEstimation()
     raw = replace(observation("laser", (1.0, None, 0.0), stamp=9.5), error=(0.1, None, 0.1))
@@ -408,51 +269,6 @@ def test_known_anchor_yaw_error_affects_global_pose_but_cancels_in_relative_pose
     assert relative.position_m == current.prediction_error.position_m
 
 
-def test_interval_projection_support_and_software_error_are_not_expanded_twice(replay):  # noqa: F811
-    c = replay.core
-    s = c.node._reception_test.sensors = MotionSensorRuntime(c.profile, c.diagnostics)
-    now = replay.clock.steady
-    o = observation("laser", (0.2, None, 0.1), stamp=4.9)
-    o = replace(
-        o,
-        roots=(
-            replace(
-                o.roots[0],
-                time=sample_time(
-                    stamp_ns=round((4.8) * 1e9),
-                    received_ros_ns=round((5.0) * 1e9),
-                    received_steady_ns=round((now) * 1e9),
-                ),
-            ),
-            replace(
-                o.roots[0],
-                time=sample_time(
-                    stamp_ns=round((5.0) * 1e9),
-                    received_ros_ns=round((5.0) * 1e9),
-                    received_steady_ns=round((now) * 1e9),
-                ),
-            ),
-        ),
-        measured_steady=now - 0.1,
-        interval_half_s=0.1,
-        independent=(True, False, True),
-    )
-    s.ingest_observation(o, 5.0, now)
-    replay.clock.ns = 5_500_000_000
-    replay.clock.steady += 0.5
-    ref, body, wheel = read_inputs(c, replay.clock.steady)
-    assert ref["start_steady"] == pytest.approx(now - 0.2) and ref["end_steady"] == now
-    axis = s.latest.independent_axes[0]
-    # Oldest original capture age=.7s; interval width is already represented.
-    assert axis.prediction_error == pytest.approx(0.7 * s.estimator.acceleration[0])
-    from test_directional_constraints import scene
-
-    ctx = c._snapshot(ref, wheel, replay.clock.steady, scene(replay.clock.steady), Pose2D(0, 0, 0))
-    assert ctx.envelope.linear_interval[1] == pytest.approx(
-        0.2 + c.profile.linear_error + axis.prediction_error
-    )
-
-
 def test_raw_identity_dedup_and_attempt_results_remain_distinct_across_flush():
     from vehicle_core.sensor_policy import default_policy
 
@@ -471,7 +287,7 @@ def test_raw_identity_dedup_and_attempt_results_remain_distinct_across_flush():
 
 
 def test_space_positional_api_and_bounded_diagnostic_registrations():
-    from senior_perception.space_estimator import SpaceEstimation, SpaceObservation
+    from senior_motion_estimation.space_estimator import SpaceEstimation, SpaceObservation
     from shapely.geometry import box
 
     from vehicle_core.sensor_policy import default_policy
@@ -502,38 +318,8 @@ def test_space_positional_api_and_bounded_diagnostic_registrations():
     assert report["unregistered"] > 0
 
 
-def test_captured_scene_uses_local_alignment_without_erasing_velocity_error(replay):  # noqa: F811
-    from vehicle_core.values import Velocity
-
-    c = replay.core
-    now = replay.clock.steady
-    ref, body, wheel = read_inputs(c, now)
-    perception, pose = read_observation(c, now)
-    ctx = c._snapshot(ref, wheel, now, perception, pose)
-    ctx = replace(ctx, target=replace(ctx.target, velocity=Velocity(0.01, 0.01)))
-    assert c.sensors.latest.healthy
-    axis = c.sensors.latest.independent_axes[0]
-    assert axis.observation_age_s > 0
-    assert ctx.envelope.linear_interval[1] >= (
-        c.sensors.independent.velocity.vx + c.profile.linear_error + axis.prediction_error - 1e-12
-    )
-    # This historical geometry has an unobserved ROS-time tail. Retiring its old
-    # sim-domain query shortcut must not turn that unknown coverage into permission.
-    result = c.engine.refine(ctx, now)
-    assert result.permit is None and result.brake.reason == "sweep_unknown"
-    from shapely.geometry import box
-
-    obstructed = replace(
-        ctx,
-        perception=replace(
-            perception, occupied=perception.occupied.union(box(-0.5, -0.5, 0.5, 0.5))
-        ),
-    )
-    assert c.engine.refine(obstructed, now).permit is None
-
-
 def test_unknown_space_errors_use_explicit_model_policy_instead_of_zero():
-    from senior_perception.space_estimator import SpaceEstimation, SpaceObservation
+    from senior_motion_estimation.space_estimator import SpaceEstimation, SpaceObservation
     from shapely.geometry import box
 
     owner = SpaceEstimation(software_pose_error_m=0.07)

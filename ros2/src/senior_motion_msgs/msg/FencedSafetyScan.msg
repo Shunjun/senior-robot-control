@@ -1,2 +1,0 @@
-senior_motion_msgs/EgressHeader owner
-senior_motion_msgs/BoundedSafetyScan body

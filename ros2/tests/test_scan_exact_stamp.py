@@ -14,7 +14,7 @@ pytestmark = pytest.mark.skipif(
 rclpy = pytest.importorskip("rclpy")
 from geometry_msgs.msg import TransformStamped  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
-from senior_motion_msgs.msg import ScanMotion  # noqa: E402
+from senior_interfaces.msg import ScanMotion  # noqa: E402
 from test_scan_epoch_live import ControlledFencedScanPublisher, _room_scan  # noqa: E402
 from tf2_ros import StaticTransformBroadcaster  # noqa: E402
 
@@ -28,14 +28,14 @@ def test_native_matcher_interval_start_is_exact_original_scan_header(tmp_path, m
     assert domain.isdecimal() and 0 <= int(domain) <= 101
     monkeypatch.setenv("ROS_DOMAIN_ID", domain)
     monkeypatch.setenv("ROS_LOCALHOST_ONLY", "1")
-    params = Path(__file__).parents[2] / "ros2/src/senior_robot/config/simulation_motion.yaml"
+    params = Path(__file__).parents[2] / "ros2/src/senior_sim/config/simulation_motion.yaml"
     log_path = tmp_path / "scan-motion-exact-stamps.log"
     with log_path.open("w", encoding="utf-8") as log:
         process = subprocess.Popen(
             [
                 "ros2",
                 "run",
-                "senior_scan_matcher",
+                "senior_motion_estimation",
                 "scan_motion_node",
                 "--ros-args",
                 "--params-file",

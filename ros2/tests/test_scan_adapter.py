@@ -72,7 +72,7 @@ def test_simulated_self_and_wall_evidence():
     from nav_msgs.msg import Odometry
     from rclpy.qos import qos_profile_sensor_data
     from rclpy.time import Time
-    from senior_motion_msgs.msg import FencedFilteredScan
+    from senior_interfaces.msg import FencedFilteredScan
     from sensor_msgs.msg import LaserScan
     from tf2_ros import Buffer, TransformException, TransformListener
 

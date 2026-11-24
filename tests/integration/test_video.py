@@ -1033,3 +1033,86 @@ def test_encode_loop_close_joins_thread_and_closes_loop() -> None:
     encode.close()
     assert not encode._thread.is_alive()
     assert encode._loop.is_closed()
+
+
+async def test_preview_paces_latest_frame_before_peer_push() -> None:
+    session, factory, source, clock = make_session()
+    assert isinstance(source, FakeSource)
+    try:
+        await session.offer("robot-a", video_offer("VP8"))
+        peer = factory.peers[0]
+        source.feed(rgb_frame(clock.now))
+        for _ in range(100):
+            if peer.pushed:
+                break
+            await asyncio.sleep(0.001)
+        assert len(peer.pushed) == 1
+        started = time.monotonic()
+        for index in range(1, 11):
+            source.feed(rgb_frame(clock.now + index / 30))
+        await asyncio.sleep(0.02)
+        assert len(peer.pushed) == 1
+        for _ in range(150):
+            if len(peer.pushed) == 2:
+                break
+            await asyncio.sleep(0.001)
+        assert len(peer.pushed) == 2
+        assert time.monotonic() - started >= 0.05
+        assert peer.pushed[-1].stamp == clock.now + 10 / 30
+        from vehicle_manager.media.stream import _make_track
+
+        aiortc = pytest.importorskip("aiortc")
+        track = _make_track(aiortc)
+        try:
+            track.push(peer.pushed[0])
+            first = await track.recv()
+            track.push(peer.pushed[-1])
+            last = await track.recv()
+            assert first.pts == 0
+            assert last.pts == 30000
+            assert float(last.time_base) == 1 / 90000
+        finally:
+            track.stop()
+    finally:
+        await session.close()
+
+
+async def test_close_then_reopen_waits_for_previous_session_cleanup() -> None:
+    from senior_contracts.wire import validate_frame
+    from vehicle_manager.agent.runtime_bindings import VideoSignaling
+
+    first, first_factory, _, _ = make_session()
+    second, second_factory, _, _ = make_session()
+    closing = asyncio.Event()
+    release = asyncio.Event()
+    original_close = first.close
+
+    async def delayed_close():
+        closing.set()
+        await release.wait()
+        await original_close()
+
+    first.close = delayed_close
+    sessions = iter([first, second])
+    sent = asyncio.Queue()
+    signaling = VideoSignaling("robot-a", 1, send=sent.put, make_session=lambda: next(sessions))
+    offer = offer_frame()
+    try:
+        signaling.submit(validate_frame(offer, "robot-a"))
+        assert (await asyncio.wait_for(sent.get(), 1)).type == "video.answer"
+        close = {**json.loads(offer), "type": "video.close", "payload": {}}
+        signaling.submit(validate_frame(json.dumps(close).encode(), "robot-a"))
+        await asyncio.wait_for(closing.wait(), 1)
+        signaling.submit(validate_frame(offer_frame(session_id="replacement"), "robot-a"))
+        await asyncio.sleep(0.01)
+        assert second_factory.opened == 0
+        release.set()
+        answer = await asyncio.wait_for(sent.get(), 1)
+        assert answer.type == "video.answer"
+        assert answer.session_id == "replacement"
+        assert first_factory.encoders == 0
+        assert second_factory.encoders == 1
+    finally:
+        release.set()
+        await signaling.close()
+    assert second_factory.encoders == 0

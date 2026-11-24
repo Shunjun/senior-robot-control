@@ -1,3 +1,5 @@
+> **2026-11-22 当前状态：** ROS 消息和服务统一迁到 senior_interfaces；mapping.launch.py 和 slam.yaml 由本包安装。 下文 B 阶段记录中的旧包名、转发路径和保留承诺属于当时历史，不作为当前安装说明。当前清单及迁移步骤见 [ROS 包归属](../../PACKAGE_OWNERSHIP.md)。
+
 # senior_mapping
 
 当前已交付 B5.1–B5.3 的既有实现迁移；最新原生目录和验证见本文 B5.3 记录。下面保留 B5.2 批次记录，

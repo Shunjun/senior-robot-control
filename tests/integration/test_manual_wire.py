@@ -88,11 +88,11 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
         "rclpy.subscription": {"Subscription": object},
         "rclpy.qos": {"qos_profile_sensor_data": SimpleNamespace(depth=5)},
         "std_msgs.msg": {"String": object},
-        "senior_motion_msgs.msg": {
+        "senior_interfaces.msg": {
             "DriveExecutionFeedback": object,
             "FinalCommand": type("FinalCommand", (), {}),
         },
-        "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
+        "senior_sensor_ingress.ros_lifecycle": {"with_dds_info": lambda callback: callback},
     }
     for name, attributes in modules.items():
         stub = ModuleType(name)
@@ -120,6 +120,14 @@ def node(monkeypatch: pytest.MonkeyPatch) -> Any:
     value._consuming_runtime = False
     value._runtime_subscription = MagicMock(msg_type=object, raw=False)
     value._runtime_subscription.handle.take_message.return_value = None
+    value._output_incarnation = (b"t5", runtime(clock.now).boot_id)
+    value._output_handoff_boot = None
+    value._pending_output_handoff = None
+    value._output_handoff_missing_estop = False
+    value._pending_estop_request = None
+    value._latched_estop_request = None
+    value._latched_estop_revision = 0
+    value._pending_estop_reset = None
     value._motion_runtime = MotionRuntimeReceiver()
     value._motion_runtime.accept(runtime(clock.now), b"t5", clock.now)
     value._arbiter = Arbiter("robot", 300)

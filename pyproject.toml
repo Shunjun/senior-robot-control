@@ -67,7 +67,7 @@ python_version = "3.10"
 strict = true
 
 [tool.pytest.ini_options]
-pythonpath = ["senior_control/src", "senior_control/tests", "cloud/src", "cloud/tests", "tests/integration", "ros2/src/senior_mapping/scripts", "ros2/src/senior_mapping/test", "ros2/src/senior_localization", "ros2/src/senior_mapping", "ros2/src/senior_motion_estimation", "ros2/src/senior_motion_estimation/test", "ros2/src/senior_perception", "ros2/src/senior_perception/test", "ros2/tests", "tests/unit", "ros2/src/senior_sensor_ingress", ".", "contracts/src", "ros2/src/senior_robot", "ros2/src/senior_navigation", "ros2/src/senior_motion_control"]
+pythonpath = ["senior_control/src", "senior_control/tests", "cloud/src", "cloud/tests", "tests/integration", "ros2/src/senior_mapping/scripts", "ros2/src/senior_mapping/test", "ros2/src/senior_localization", "ros2/src/senior_mapping", "ros2/src/senior_motion_estimation", "ros2/src/senior_motion_estimation/test", "ros2/src/senior_perception", "ros2/src/senior_perception/test", "ros2/tests", "tests/unit", "ros2/src/senior_sensor_ingress", ".", "contracts/src", "ros2/src/senior_robot", "ros2/src/senior_sim", "ros2/src/senior_navigation", "ros2/src/senior_motion_control"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 

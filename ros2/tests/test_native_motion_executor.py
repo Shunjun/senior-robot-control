@@ -22,32 +22,32 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
     from nav_msgs.msg import Odometry
     from rclpy.node import Node
     from senior_motion_control.hardware_profile import load_hardware_profile
-    from senior_motion_estimation.observations import Source
-    from senior_robot.motion_lifecycle import MotionExecutor, run, with_dds_info
-    from senior_robot.motion_observation_adapter import (
+    from senior_motion_estimation.motion_observation_adapter import (
         NativeObservationRosBridge,
         NativeObservations,
     )
-    from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+    from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
+    from senior_motion_estimation.observations import Source
     from senior_sensor_ingress.native_receipt import subscribe
+    from senior_sensor_ingress.ros_lifecycle import MotionExecutor, run, with_dds_info
     from std_msgs.msg import String
 
     from vehicle_core.diagnostics import RuntimeDiagnostics
 
     assert os.environ.get("ROS_DOMAIN_ID") == "173" and os.environ.get("ROS_LOCALHOST_ONLY") == "1"
-    original = Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/senior_robot"
+    root = Path(__file__).resolve().parents[2]
+    owner = "senior_motion_estimation" if filename == "motion_fusion" else "senior_motion_control"
+    original = root / "ros2/src" / owner / owner
     directory = Path(os.environ.get("SENIOR_SMOKE_ENTRYPOINT_DIR", str(original)))
     tree = ast.parse((directory / (filename + ".py")).read_text())
     main = next(x for x in tree.body if isinstance(x, ast.FunctionDef) and x.name == "main")
     metadata = []
 
     class Consumer(Node):
-        def __init__(self):
+        def __init__(self, *, profile_factory=None):
             super().__init__("native_dds_smoke")
             self.declare_parameter("robot_id", "route-sim")
-            p = load_hardware_profile(
-                original.parents[3] / "tests/fixtures/generic_motion_profile.json"
-            )
+            p = load_hardware_profile(root / "tests/fixtures/generic_motion_profile.json")
             self.sensors = MotionSensorRuntime(p, RuntimeDiagnostics(lambda *_: None))
             self.bridge = object.__new__(NativeObservationRosBridge)
             self.bridge.node = self
@@ -140,4 +140,7 @@ def test_actual_entrypoint_dispatches_native_metadata(filename, factory_name):
         ),
         scope,
     )
-    scope["main"]()
+    if filename == "motion_fusion":
+        scope["main"](profile_factory=load_hardware_profile)
+    else:
+        scope["main"]()

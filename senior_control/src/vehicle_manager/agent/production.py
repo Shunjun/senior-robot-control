@@ -2,7 +2,7 @@
 
 import asyncio
 import logging
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from importlib.util import find_spec
 from pathlib import Path
@@ -27,6 +27,7 @@ from vehicle_manager.agent.local_adapters import (
     IpcState,
     TaskAwareMotion,
 )
+from vehicle_manager.agent.mapping_catalog import mapping_requests
 from vehicle_manager.agent.production_bindings import (
     AgentJournal,
     AgentLogConnection,
@@ -42,8 +43,14 @@ from vehicle_manager.agent.runtime_bindings import Agent
 from vehicle_manager.agent.snapshot_bindings import SnapshotState as SnapshotState
 from vehicle_manager.agent.snapshot_bindings import vehicle_frame as vehicle_frame
 from vehicle_manager.agent.workspace_bindings import WorkspaceReader
+from vehicle_manager.media.camera_lease import CameraLease
 from vehicle_manager.media.frame_bindings import LatestFrameFile as LatestFrameFile
-from vehicle_manager.media.stream import AiortcPeerFactory, VideoSession
+from vehicle_manager.media.stream import (
+    AiortcPeerFactory,
+    CameraSource,
+    SessionDescription,
+    VideoSession,
+)
 from vehicle_manager.storage.bindings import Database
 from vehicle_manager.storage.domain_bindings import TaskStore, WaypointStore
 from vehicle_manager.tasks.execution_bindings import NavigationEffects, TaskExecutor
@@ -86,52 +93,78 @@ def build_task_runtime(
 
 
 def _media_binding(config: AgentConfig) -> MediaBinding:
-    """Original media ownership; ROS camera and peer backends remain here."""
-    video_factory: AiortcPeerFactory | None = None
+    """Each preview owns its subscriber, camera demand and encoder worker."""
+    sessions: set[VideoSession] = set()
 
     def video_session() -> VideoSession | None:
-        nonlocal video_factory
         if config.ros_video_topic is None and config.simulation_video_frame is None:
             return None
         if find_spec("aiortc") is None:
             logger.warning("video disabled because the video extra is unavailable")
             return None
-        if video_factory is None:
-            video_factory = AiortcPeerFactory()
+        source: CameraSource
+        close_source: Callable[[], Awaitable[None]] | None = None
+        lease: CameraLease | None = None
         if config.ros_video_topic is not None:
             try:
-                from senior_robot.ros_video import RosCameraSource
+                from senior_sensor_ingress.ros_video import RosCameraSource
             except ModuleNotFoundError as exc:
-                if exc.name != "senior_robot":
+                if exc.name != "senior_sensor_ingress":
                     raise
                 logger.warning("video disabled because the ROS camera feature is unavailable")
                 return None
-            source = RosCameraSource(config.ros_video_topic, frame_factory=ImageFrame)
+            ros_source = RosCameraSource(config.ros_video_topic, frame_factory=ImageFrame)
+            source = ros_source
+            close_source = ros_source.close
+            lease = CameraLease(config.socket_path.with_name("service.sock"))
+        else:
+            assert config.simulation_video_frame is not None
+            source = LatestFrameFile(config.simulation_video_frame)
+        factory = AiortcPeerFactory()
+        closing = asyncio.Lock()
+        released = False
 
-            class RosVideoSession(VideoSession):
-                async def close(self) -> None:
+        class ManagedVideoSession(VideoSession):
+            async def offer(self, robot_id: str, offer: SessionDescription) -> SessionDescription:
+                try:
+                    if lease is not None:
+                        await lease.start(self.close)
+                    return await super().offer(robot_id, offer)
+                except BaseException:
+                    await self.close()
+                    raise
+
+            async def close(self) -> None:
+                nonlocal released
+                async with closing:
+                    if released:
+                        return
+                    released = True
                     try:
                         await super().close()
                     finally:
-                        await source.close()
+                        try:
+                            if close_source is not None:
+                                await close_source()
+                        finally:
+                            try:
+                                await asyncio.to_thread(factory.close)
+                            finally:
+                                if lease is not None:
+                                    await lease.close()
+                                sessions.discard(self)
 
-            return RosVideoSession(
-                robot_id=config.robot_id,
-                viewer=_ControlViewer(config.robot_id),
-                source=source,
-                factory=video_factory,
-            )
-        assert config.simulation_video_frame is not None
-        return VideoSession(
+        session = ManagedVideoSession(
             robot_id=config.robot_id,
             viewer=_ControlViewer(config.robot_id),
-            source=LatestFrameFile(config.simulation_video_frame),
-            factory=video_factory,
+            source=source,
+            factory=factory,
         )
+        sessions.add(session)
+        return session
 
     async def close() -> None:
-        if video_factory is not None:
-            await asyncio.to_thread(video_factory.close)
+        await asyncio.gather(*(session.close() for session in tuple(sessions)))
 
     return MediaBinding(video_session, close)
 
@@ -189,6 +222,7 @@ async def run_agent(config: AgentConfig) -> int:
             workspace=_workspace_reader,
             home=IpcHomePort,
             maps=IpcMapPort,
+            mapping_requests=mapping_requests,
             navigation=IpcNavigation,
             build_task_runtime=build_task_runtime,
             settings_runtime=SettingsRuntime,

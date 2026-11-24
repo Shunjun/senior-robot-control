@@ -12,8 +12,8 @@ from concurrent.futures import Future
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from senior_robot.control_inputs import ControlInputs
-from senior_robot.motion_sensor_runtime import MotionSensorRuntime
+from senior_motion_control.control_inputs import ControlInputs
+from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
 
 from vehicle_core.process_resources import LatestSnapshot
 
@@ -145,7 +145,7 @@ class Reception:
 
 
 def make_core(monkeypatch, node, profile):
-    from senior_robot.motion_core_output import MotionCoreOutput
+    from senior_motion_control.motion_core_output import MotionCoreOutput
 
     local_resources(monkeypatch)
     core = MotionCoreOutput(node, profile)
@@ -160,7 +160,7 @@ def publish_inputs(core, now=None, ros=None):
     receiver = core.node._reception_test
     ros = core.node.get_clock().now().nanoseconds / 1e9 if ros is None else ros
     if now is None:
-        import senior_robot.motion_core_output as output
+        import senior_motion_control.motion_core_output as output
 
         now = output.time.monotonic()
     return receiver.publish(ros, now)
@@ -175,8 +175,8 @@ def capture_inputs(core, packet):
 
 
 def read_inputs(core, now):
-    publish_inputs(core, now)
-    return core._inputs(now)
+    # Only reception owns estimation; the control reader consumes its snapshot.
+    return publish_inputs(core, now)
 
 
 def read_observation(core, now):

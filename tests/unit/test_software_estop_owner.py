@@ -8,7 +8,7 @@ from types import SimpleNamespace as N
 import pytest
 from control_process_test_support import generic_motion_profile
 from pydantic import ValidationError
-from senior_robot.motion_core_output import MotionCoreOutput
+from senior_motion_control.motion_core_output import MotionCoreOutput
 from test_motion_core_handoff import Node, barrier, core  # noqa: F401
 from test_navigation_command_clock import navigation  # noqa: F401
 from test_runtime_guard_ready import CASE, ready  # noqa: F401
@@ -106,7 +106,7 @@ def test_raw_wheel_imu_reset_without_independent_body_never_restores_old_target(
     reset.gesture = core.machine.state.estop_revision
     assert core.command(reset)
     assert core.machine.state.mode is MotionMode.IDLE
-    assert core.controller.trajectory.velocity == Velocity(0, 0)
+    assert core._output == Velocity(0, 0)
     assert core.target.source == "idle"
     old = barrier("intent", generation=2, request="retired-intent")
     old.sequence, old.steady_deadline = 1, 10.3

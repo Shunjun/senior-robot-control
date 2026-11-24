@@ -10,13 +10,13 @@
 #include <string>
 
 #include "rclcpp/rclcpp.hpp"
-#include <senior_motion_msgs/sample_time.hpp>
-#include "senior_motion_msgs/msg/bounded_raw_laser_scan.hpp"
+#include <senior_sensor_ingress/sample_time.hpp>
+#include "senior_interfaces/msg/bounded_raw_laser_scan.hpp"
 
-namespace senior_slam_bridge::scan_receipt_admission
+namespace senior_mapping::scan_receipt_admission
 {
-using Receipt = senior_motion_msgs::msg::RawCaptureHeader;
-using Message = senior_motion_msgs::msg::BoundedRawLaserScan;
+using Receipt = senior_interfaces::msg::RawCaptureHeader;
+using Message = senior_interfaces::msg::BoundedRawLaserScan;
 
 constexpr double max_age_seconds = 0.5;
 constexpr std::int64_t max_age_ns = 500000000;
@@ -57,7 +57,7 @@ inline bool fresh(const Receipt & receipt, double now_steady)
 
 inline double steady_seconds()
 {
-  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
+  return static_cast<double>(senior_sensor_ingress::time::monotonic_ns()) / 1e9;
 }
 
 inline bool same_source(const Receipt & lhs, const Receipt & rhs)
@@ -115,7 +115,7 @@ inline std::optional<ScanOwner> unique_scan_owner(
   const auto raw = node.get_publishers_info_by_topic(raw_topic);
   if (bridge.size() != 1 || raw.size() != 1 ||
     bridge.front().node_name() != "scan_receipt" || bridge.front().node_namespace() != "/" ||
-    bridge.front().topic_type() != "senior_motion_msgs/msg/BoundedRawLaserScan" ||
+    bridge.front().topic_type() != "senior_interfaces/msg/BoundedRawLaserScan" ||
     raw.front().topic_type() != "sensor_msgs/msg/LaserScan")
   {
     return std::nullopt;
@@ -126,5 +126,5 @@ inline std::optional<ScanOwner> unique_scan_owner(
   }
   return owner;
 }
-}  // namespace senior_slam_bridge::scan_receipt_admission
+}  // namespace senior_mapping::scan_receipt_admission
 #endif  // SENIOR_SLAM_BRIDGE__SCAN_RECEIPT_ADMISSION_HPP_

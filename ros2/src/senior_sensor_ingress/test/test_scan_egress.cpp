@@ -11,11 +11,11 @@
 #include <gtest/gtest.h>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
-#include <senior_motion_msgs/msg/bounded_filtered_scan.hpp>
-#include <senior_motion_msgs/msg/bounded_raw_laser_scan.hpp>
-#include <senior_motion_msgs/msg/bounded_safety_scan.hpp>
-#include <senior_motion_msgs/msg/fenced_filtered_scan.hpp>
-#include <senior_motion_msgs/msg/fenced_safety_scan.hpp>
+#include <senior_interfaces/msg/bounded_filtered_scan.hpp>
+#include <senior_interfaces/msg/bounded_raw_laser_scan.hpp>
+#include <senior_interfaces/msg/bounded_safety_scan.hpp>
+#include <senior_interfaces/msg/fenced_filtered_scan.hpp>
+#include <senior_interfaces/msg/fenced_safety_scan.hpp>
 
 #include "senior_sensor_ingress/scan_receipt.hpp"
 #include "senior_sensor_ingress/raw_receipt.hpp"
@@ -38,11 +38,11 @@ TEST(ScanEgress, RawSafetyAndFilteredBodiesRequireUnchangedSourceBeams)
   auto bridge = std::make_shared<senior_sensor_ingress::ScanReceipt>();
   auto fixture = std::make_shared<rclcpp::Node>("scan_egress_fixture");
   using Scan = sensor_msgs::msg::LaserScan;
-  using Raw = senior_motion_msgs::msg::BoundedRawLaserScan;
-  using Safety = senior_motion_msgs::msg::BoundedSafetyScan;
-  using Filtered = senior_motion_msgs::msg::BoundedFilteredScan;
-  using SafetyOut = senior_motion_msgs::msg::FencedSafetyScan;
-  using FilteredOut = senior_motion_msgs::msg::FencedFilteredScan;
+  using Raw = senior_interfaces::msg::BoundedRawLaserScan;
+  using Safety = senior_interfaces::msg::BoundedSafetyScan;
+  using Filtered = senior_interfaces::msg::BoundedFilteredScan;
+  using SafetyOut = senior_interfaces::msg::FencedSafetyScan;
+  using FilteredOut = senior_interfaces::msg::FencedFilteredScan;
   std::mutex mutex;
   std::vector<Raw> raw;
   std::vector<SafetyOut> safety;
@@ -144,13 +144,13 @@ TEST_P(ScanEgressRetiredOwner, RealOldMessageCannotRevokeQualifiedSuccessor)
     }, true);
   auto fixture = std::make_shared<rclcpp::Node>("scan_owner_replacement_fixture");
   using Scan = sensor_msgs::msg::LaserScan;
-  using Raw = senior_motion_msgs::msg::BoundedRawLaserScan;
-  using Safety = senior_motion_msgs::msg::BoundedSafetyScan;
-  using Filtered = senior_motion_msgs::msg::BoundedFilteredScan;
-  using SafetyOut = senior_motion_msgs::msg::FencedSafetyScan;
-  using FilteredOut = senior_motion_msgs::msg::FencedFilteredScan;
+  using Raw = senior_interfaces::msg::BoundedRawLaserScan;
+  using Safety = senior_interfaces::msg::BoundedSafetyScan;
+  using Filtered = senior_interfaces::msg::BoundedFilteredScan;
+  using SafetyOut = senior_interfaces::msg::FencedSafetyScan;
+  using FilteredOut = senior_interfaces::msg::FencedFilteredScan;
   std::vector<Raw> raws;
-  std::vector<senior_motion_msgs::msg::EgressHeader> headers;
+  std::vector<senior_interfaces::msg::EgressHeader> headers;
   auto source = fixture->create_publisher<Scan>("/scan", rclcpp::SensorDataQoS());
   auto safety_owner = fixture->create_publisher<Safety>("/safety/scan_candidate", 10);
   auto filter_owner = fixture->create_publisher<Filtered>("/perception/scan_candidate", 10);

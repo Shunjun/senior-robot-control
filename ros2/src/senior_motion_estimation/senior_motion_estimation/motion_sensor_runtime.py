@@ -396,7 +396,7 @@ class MotionSensorRuntime:
         wheel, imu = self.raw_feedback("wheel", now), self.raw_feedback("imu", now)
         if wheel is None or imu is None:
             return None
-        from senior_motion_control.state_machine import RecoveryObservation
+        from senior_motion_estimation.recovery_observation import RecoveryObservation
 
         return RecoveryObservation(
             wheel.epoch + "|" + imu.epoch,

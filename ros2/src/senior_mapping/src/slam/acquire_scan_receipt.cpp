@@ -11,7 +11,7 @@
 namespace
 {
 using namespace std::chrono_literals;
-namespace admission = senior_slam_bridge::scan_receipt_admission;
+namespace admission = senior_mapping::scan_receipt_admission;
 using admission::Message;
 
 Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
@@ -91,8 +91,9 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
     if (!owner) {
       owner = admission::unique_scan_owner(*node, bounded, raw);
       if (owner) {
-          ready_steady = admission::steady_seconds();
-        std::cerr << "Scan receipt armed at steady " << ready_steady << '\n';
+        ready_steady = admission::steady_seconds();
+        std::cerr << "Scan receipt armed at steady_ns " <<
+          static_cast<std::int64_t>(ready_steady * 1e9) << '\n';
       }
     }
   }

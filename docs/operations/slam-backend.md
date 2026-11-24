@@ -1,6 +1,6 @@
 # SLAM 后端：Humble 2.6.10 位姿图与长期占据层
 
-本文记录适配器要对接的 ROS 2 Humble 接口。这台 macOS 没有 Humble，`slam_toolbox` 没有被导入，节点和 launch 都没有执行。下面的服务字段来自 `slam_toolbox` 标签 `2.6.10` 的源文件，不是本机运行结果。
+前半部分保留初始适配阶段的接口记录；当前生产能力和验证范围以文末更新为准。本文记录适配器要对接的 ROS 2 Humble 接口。这台 macOS 没有 Humble，`slam_toolbox` 没有被导入，节点和 launch 都没有执行。下面的服务字段来自 `slam_toolbox` 标签 `2.6.10` 的源文件，不是本机运行结果。
 
 定位用位姿图。导航和显示用另一层长期占据。两层一起保存，回环时按关键帧锚点重投影，再按同一份记录恢复。清掉代价地图不能代替删除：位姿图里的旧扫描仍会被栅格化写回去。
 
@@ -119,3 +119,39 @@ ros2 launch senior_robot mapping.launch.py odom_frame:=odom_combined
 `ros2/src/senior_mapping/src/slam/`，`senior_slam_bridge` 保留消息/服务类型。
 本片只配置已有启动组合，不新增生产 transport 或来源认证，不开放导航/持久写图，
 亦不完成活动地图选择、独立 Home、WS 或网页刷新；没有手动保存步骤。
+
+## 活动建图生产组装（2026-11-23）
+
+当前生产路径为 `vehicle_manager.agent.mapping_catalog` → `senior_mapping.runtime/native_session` → 本地IPC → 共用 `agent_adapter` 的 `RosMappingBackend` → 自有 `slam_graph_node`。不需要在控制页面之外另起一个stock mapping launch；手动诊断launch与此所有者不能同时运行同名SLAM服务。运行入口不在导入时启动进程，只有明确新建或恢复地图才启动SLAM。
+
+切图要求停车、无在途路线，串行进入loading、关闭入口、flush、退出旧图、加载目标、匹配/待校准、再恢复更新。窗口中的扫描丢弃；新进程不消费旧窗口缓存。原生MappingGate是新增ROS服务，需要interfaces和mapping协同clean rebuild，不能仅更新Python wheel就认为原生端已升级。旧接口安装缺少该类型时，现有控制仍可启动，建图报告未就绪。
+
+Parallels Ubuntu 22.04 实际安装 ros-humble-slam-toolbox 2.6.10-1jammy.20260916.165114。CMake与包清单统一固定2.6.10，与存档BACKEND_VERSION及既有适配代码一致；不升级或安装另一个ROS环境。已有标准C++几何/历史测试通过不等于ROS新节点编译通过，隔离colcon验证结果另行记录。
+
+默认checkpoint最长延期10秒，停车优先，只有一个重计算/保存工作在途；100000个占据track、8MB临时图传输与既有16K原生图节点限制均有界。超限明确失败，不静默吞掉已接受的图commit。保存失败保留最后完整checkpoint，并阻止切到下一图；不会因此禁止手动驾驶。这些是实现边界，尚未测得四核设备的性能预算。
+
+图、稳定占据、参考与冻结Home一起保存。当前Home只有WaypointStore这一份实时真值；每图的冻结绑定随checkpoint恢复。加载不匹配进入待校准，Home仅作参考，不发布真实车辆位姿。自动初始化为Home附近局部匹配与稳定几何复核；任意位置全局重定位未实现。手动位姿提示、Home编辑和导航参考的后续实现见下面2026-11-24更新。
+
+Parallels Ubuntu 22.04 / Humble 2.6.10隔离构建现已通过，三个包均成功。senior_mapping的20个原生CTest分轮全部通过，另验证production gate暂停丢帧、图捕获、串行退出/加载和恢复后新commit；日志与源码哈希见/home/toby/senior-audit-20261031/active-mapping-20261123-native-v1。没有部署到车端。
+
+上游2.6.10 Ceres插件硬编码options_.num_threads=50，VM曾将其截为4；OMP_NUM_THREADS=1不能限制这个CXX线程池。生产默认现已改为下面的独立有界插件。上游依据：https://github.com/SteveMacenski/slam_toolbox/blob/2.6.10/solvers/ceres_solver.cpp#L114。
+
+## 手动校准、Home编辑与运行时导航参考（2026-11-24）
+
+生产使用`senior_mapping/BoundedCeresSolver`，同版2.6.10算法及许可证随包安装。`mapping_solver_threads`默认1、允许1–4；`mapping_worker_threads`另将TBB并行预算设为1。原生非空图重载已报告Ceres Threads Given=1/Used=1及收敛。线程上限不等于整个SLAM进程只有一个线程，也不代表车端CPU/时延已经达标。
+
+新版manager快照`mapping_protocol_version=2`开放`map.calibrate`和`map.home`。网页现有位姿选择器分别提交车辆位置/朝向提示和Home坐标；前者只作为新会话原生局部匹配的种子，成功匹配才恢复更新。失败继续待校准，不能直接把提示作为车辆位置。旧版协议仍不发送这些命令。操作走既有operation_id与查询链路，失去回执后查询同一操作，不重发编辑。
+
+Home仍只有WaypointStore一份实时真值。Home编辑与checkpoint共享Home事务和revision校验，保存途中发生的新编辑不会被旧绑定覆盖；图锚点修正后保留编辑点相对原锚点的位置和朝向。车辆位姿与Home互不代替。完整checkpoint保留该图的冻结Home绑定，重开后恢复。
+
+导航栅格由同一原生SLAM会话/commit重新生成，保留明确观测的free/occupied/unknown，不能把稳定显示层的unknown标成free。原生生成前检查尺寸，最多1,048,576格。导航栅格不回填长期占据记录；长期几何/删除证据及其checkpoint算法继续保留。运行期栅格最多每1秒（闲时）或5秒（行驶中）重绘；只合并栅格快照，不跳过已接受的观测序列。
+
+新增`ReadMappingGrid`/`ReadMappingPose`，`ReadGraphCommit`附加对应观测的原始odom位姿；必须协同重建interfaces、sensor_ingress、mapping，禁止只换Python包。物理适配器验证自有boot、commit及静态安装来源后，安装地图参考与map/odom配对；关键帧之间使用新鲜的原始观测/odom receipt推进车辆位置，不重新盖时间戳。超过0.5秒、来源变化或撤销后停止提供可信位姿；切图先撤销旧参考，不回退旧静态图。
+
+原生子进程的/map和metadata重映射到私有名称，原生map→odom定时发布关闭。物理适配器单独发布获准的/map及map→所选odom，已有接收侧路线资格、安全门和碰撞约束仍生效。新栅格id不代替参考generation；回环参考变化会使旧路线失效。
+
+实际启用导航仍需车辆profile配置绝对路径`navigation_parameters`及原有合格Nav2/运动安全条件；允许仅配参数、等待活动建图初始化参考，不再强制预置`navigation_reference`。没有这些配置时明确保持导航不可用，不能仅因网页有地图就宣称可以驾驶。
+
+macOS完整回归2479 passed / 116原有skip，网页182项测试及构建通过；本机六个改动核心模块定向类型检查、五个重建wheel及已有core的隔离安装/源哈希检查另行记录。Parallels原生三包构建与针对性生产会话/静态安装来源测试已通过。尚未部署到树莓派，四核地图增长、视频并行、控制时延和实车路线执行未验收。
+
+最终收尾复验：本机2480 passed / 116既有skip，ROS实际栅格/静态来源/新鲜odom→Python导航参考桥通过，正常刷新保留位姿、来源撤销后停止资格。21项原生建图CTest已通过，proof断言修正后的静态来源与drift两项另行通过；160个冻结源码hash一致，测试进程清理通过。proof按所有typed字段比较，避免将不稳定CDR填充字节当作来源变化；相机退出回归的等待预算覆盖现有10秒关闭策略，未修改相机启停行为。

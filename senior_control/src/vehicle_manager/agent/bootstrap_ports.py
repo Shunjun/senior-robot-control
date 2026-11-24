@@ -10,6 +10,7 @@ from vehicle_manager.agent.dispatcher import HomePort, LifecycleNavigationOperat
 from vehicle_manager.agent.journal import AgentJournal
 from vehicle_manager.agent.logs_wire import AgentLogConnection
 from vehicle_manager.agent.main import Agent
+from vehicle_manager.agent.request_ports import Requester
 from vehicle_manager.agent.settings_wire import SettingsRuntime
 from vehicle_manager.agent.snapshot_state import SnapshotState
 from vehicle_manager.agent.state_ports import StatePort
@@ -86,3 +87,4 @@ class AgentBootstrapPorts:
     observe: Callable[[int, Callable[[dict[str, Any]], None]], Awaitable[None]]
     read_fd: str
     error: type[Exception]
+    mapping_requests: Callable[..., Awaitable[Requester | None]] | None = None

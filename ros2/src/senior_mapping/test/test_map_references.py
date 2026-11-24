@@ -417,10 +417,10 @@ async def test_single_map_odom_owner() -> None:
     assert store.odom_owner == "wheel_odom"
     assert store.map_ref == MAP
 
-    slam_yaml = (ROOT / "ros2" / "src" / "senior_robot" / "config" / "slam.yaml").read_text(
+    slam_yaml = (ROOT / "ros2" / "src" / "senior_mapping" / "config" / "slam.yaml").read_text(
         encoding="utf-8"
     )
-    launch = (ROOT / "ros2" / "src" / "senior_robot" / "launch" / "mapping.launch.py").read_text(
+    launch = (ROOT / "ros2" / "src" / "senior_mapping" / "launch" / "mapping.launch.py").read_text(
         encoding="utf-8"
     )
     assert slam_yaml.count("odom_frame:") == 1
@@ -698,3 +698,44 @@ def test_malformed_ingest_metadata_cannot_advance_or_change_the_layer(invalid: s
     assert failure.value.code is ErrorCode.VALIDATION
     assert store.snapshot(Path("graph"), ()) == before
     assert store.ingest_progress is None
+
+
+def test_replacing_same_reference_retires_the_previous_ingest_binding() -> None:
+    store = MapReferenceStore(MAP, "wheel_odom", CELL)
+    binding = store.bind_ingest(MAP, backend_boot="old-graph", source_epoch="old-scanner")
+    pose = Pose2D(0, 0, 0)
+    first = AnchorSnapshot(
+        MAP, "wheel_odom", (AnchorPose("kf1", pose, True),), GridExtent(8, 8, 0, 0)
+    )
+    store.commit_ingest(binding, 1, "kf1", first, ())
+    saved = store.snapshot(Path("graph"), ())
+    store.replace(saved)
+    second = replace(first, anchors=(*first.anchors, AnchorPose("kf2", pose, True)))
+    with pytest.raises(DomainError):
+        store.commit_ingest(binding, 2, "kf2", second, ())
+
+
+def test_verified_resume_keeps_saved_home_and_continues_on_a_fresh_source() -> None:
+    from test_map_archive import filled_store
+
+    previous = filled_store(MAP)
+    saved = previous.snapshot(Path("graph"), ())
+    ordinary = MapReferenceStore(MAP, saved.odom_owner, saved.cell_size_m)
+    ordinary.restore(saved)
+    with pytest.raises(DomainError):
+        ordinary.bind_ingest(MAP, backend_boot="new-graph", source_epoch="new-scanner")
+    resumed, binding = MapReferenceStore.resume_verified(
+        saved, backend_boot="new-graph", source_epoch="new-scanner"
+    )
+    assert resumed.map_generation != previous.map_generation
+    assert resumed.occupancy() == saved.occupancy
+    assert resumed.snapshot(Path("graph"), ()).waypoint_bindings == saved.waypoint_bindings
+    anchors = AnchorSnapshot(
+        MAP,
+        saved.odom_owner,
+        (*saved.anchors, AnchorPose("kf-2", Pose2D(0.5, 0, 0), True)),
+        GridExtent(10, 8, 0, 0),
+    )
+    resumed.commit_ingest(binding, 1, "kf-2", anchors, ())
+    assert resumed.map_ref == MAP and resumed.ingest_progress.sequence == 1
+    assert resumed.snapshot(Path("graph"), ()).waypoint_bindings == saved.waypoint_bindings

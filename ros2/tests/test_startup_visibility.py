@@ -162,7 +162,7 @@ def test_file_and_real_node_override_loading_preserve_boolean_settings(
 
     from control_process_test_support import generic_motion_profile
     from senior_motion_control.hardware_profile import HardwareMotionProfile
-    from senior_robot.motion_profile import select_motion_profile
+    from senior_motion_control.motion_profile import select_motion_profile
 
     raw = generic_motion_profile().model_dump(mode="json")
     raw.update(
@@ -191,7 +191,7 @@ def test_file_and_real_node_override_loading_preserve_boolean_settings(
         if isinstance(n, ast.ImportFrom)
         and any(a.name == "configure_startup_learning" for a in n.names)
     )
-    block = ast.Module(body=initialize.body[start : start + 4], type_ignores=[])
+    block = ast.Module(body=initialize.body[start : start + 3], type_ignores=[])
 
     class Node:
         def __init__(self, override):

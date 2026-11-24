@@ -63,7 +63,8 @@ async def test_composition_opens_and_closes_database(
             assert self._motion.tasks._database.connection is database.connection
             assert self._motion.tasks._database.write_lock is database.write_lock
             assert len({id(value) for value in clients}) == 9
-            assert sorted(value._timeout for value in clients) == [1.0] * 8 + [3.0]
+            # Mapping waits for graph startup/capture; motion and state retain short deadlines.
+            assert sorted(value._timeout for value in clients) == [1.0] * 7 + [3.0, 30.0]
         finally:
             await self._release()
 

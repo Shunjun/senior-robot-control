@@ -311,7 +311,7 @@ class RouteService:
                 )
         except Exception:
             # Unknown terminality is retained when the adapter still owns a goal.
-            logging.getLogger("senior_robot.navigation_adapter").exception(
+            logging.getLogger("senior_navigation.navigation_adapter").exception(
                 "qualified Nav2 route failed"
             )
         finally:

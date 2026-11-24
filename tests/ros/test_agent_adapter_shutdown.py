@@ -19,7 +19,7 @@ def test_adapter_signal_closes_ipc_and_exits_cleanly(tmp_path, signal_name):
     script = """
 from vehicle_core.ipc import IpcServer
 from senior_robot.agent_adapter import main
-from senior_robot.command_node import CommandNode
+from senior_motion_control.command_node import CommandNode
 
 start = IpcServer.start
 async def ready(self):

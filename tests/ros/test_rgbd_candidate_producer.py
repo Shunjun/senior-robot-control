@@ -8,8 +8,8 @@ import pytest
 rclpy = pytest.importorskip("rclpy")
 from rclpy.executors import MultiThreadedExecutor  # noqa: E402
 from rclpy.qos import qos_profile_sensor_data  # noqa: E402
-from senior_motion_msgs.msg import RgbdMotionCandidate  # noqa: E402
-from senior_robot.rgbd_candidate_producer import RgbdCandidateProducer  # noqa: E402
+from senior_interfaces.msg import RgbdMotionCandidate  # noqa: E402
+from senior_perception.rgbd_candidate_producer import RgbdCandidateProducer  # noqa: E402
 
 
 def test_disabled_static_domain_emits_unqualified_invalid_and_closes():
@@ -49,7 +49,7 @@ def test_real_four_streams_and_tf_produce_nonzero_unqualified_candidate():
 
     import numpy as np
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-    from senior_motion_msgs.msg import (
+    from senior_interfaces.msg import (
         BoundedRawCameraInfo,
         BoundedRawImage,
         BoundedStaticTf,
@@ -228,7 +228,7 @@ def test_real_four_streams_and_tf_produce_nonzero_unqualified_candidate():
 
 
 def test_remapped_input_graph_uses_resolved_topic():
-    from senior_motion_msgs.msg import BoundedRawImage
+    from senior_interfaces.msg import BoundedRawImage
 
     rclpy.init(args=["--ros-args", "-r", "/rgbd_diagnostic/rgb:=/safety/raw/rgb"])
     producer = RgbdCandidateProducer()
@@ -254,7 +254,7 @@ def test_native_upstream_and_fence_emit_nonzero_candidate():
     import numpy as np
     from geometry_msgs.msg import TransformStamped
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-    from senior_motion_msgs.msg import BoundedStaticTf, FencedRgbdCandidate
+    from senior_interfaces.msg import BoundedStaticTf, FencedRgbdCandidate
     from sensor_msgs.msg import CameraInfo, Image
     from tf2_msgs.msg import TFMessage
 

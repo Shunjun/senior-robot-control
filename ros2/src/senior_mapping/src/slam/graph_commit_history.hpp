@@ -9,7 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 enum class CommitLookup {found, pending, gap, invalid};
 
@@ -49,6 +49,6 @@ private:
   std::array<std::optional<Commit>, Capacity> entries_;
   std::uint64_t latest_{0};
 };
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 #endif  // SENIOR_SLAM_BRIDGE__GRAPH_COMMIT_HISTORY_HPP_

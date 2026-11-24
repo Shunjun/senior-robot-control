@@ -1,0 +1,7 @@
+# Serial owner pauses intake before draining graph commits and capturing a checkpoint.
+# Opening starts with a new timestamp floor: queued loading-window scans are discarded.
+string<=36 boot_id
+bool accepting
+---
+bool ok
+uint64 graph_commit_sequence

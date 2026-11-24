@@ -5,6 +5,7 @@
   <description>Map persistence, native SLAM runtime and isolated graph diagnostics</description>
   <maintainer email="maintainer@example.com">Senior Robot</maintainer>
   <license>Apache-2.0</license>
+  <license>LGPL-2.1-only</license>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>rclpy</exec_depend>
@@ -12,18 +13,21 @@
   <exec_depend>geometry_msgs</exec_depend>
   <exec_depend>visualization_msgs</exec_depend>
   <depend>boost</depend>
+  <depend>libceres-dev</depend>
+  <depend>pluginlib</depend>
   <depend>libtbb-dev</depend>
   <depend>libssl-dev</depend>
   <depend>rclcpp</depend>
-  <depend>senior_slam_bridge</depend>
-  <depend>senior_motion_msgs</depend>
+  <depend>senior_interfaces</depend>
+  <depend>senior_sensor_ingress</depend>
+
   <depend>sensor_msgs</depend>
+  <depend>nav_msgs</depend>
   <depend>tf2_ros</depend>
   <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_cmake_test</test_depend>
   <test_depend>ament_index_python</test_depend>
   <test_depend>rosgraph_msgs</test_depend>
-  <test_depend>senior_sensor_ingress</test_depend>
 
   <export><build_type>ament_cmake</build_type></export>
 </package>

@@ -11,9 +11,10 @@ from types import ModuleType, SimpleNamespace
 import pytest
 from control_process_test_support import generic_motion_profile
 from learning_test_support import TestRun, learning_point
+from senior_motion_control.motion_core_output import MotionCoreOutput
+from senior_motion_control.vehicle_speed import limit_velocity as reference_limit_velocity
 from senior_motion_estimation.observations import Source
-from senior_robot.motion_core_output import MotionCoreOutput
-from senior_robot.raw_safety_observation import RawSafetyObservation
+from senior_perception.raw_safety_observation import RawSafetyObservation
 from sensor_time_test_support import capture_fields, sample_time
 from test_motion_core_handoff import barrier
 from test_native_output_protocol import output_module  # noqa: F401
@@ -32,7 +33,9 @@ class LearningRig:
         messages.String = lambda: SimpleNamespace(data="")
         monkeypatch.setitem(sys.modules, "std_msgs.msg", messages)
         monkeypatch.setenv("SENIOR_STARTUP_LEARNING_CLAIM", str(self.run.path))
-        monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: self.now)
+        monkeypatch.setattr(
+            "senior_motion_control.motion_core_output.time.monotonic", lambda: self.now
+        )
         monkeypatch.setattr(
             "senior_perception.learning_runtime.LearningClient",
             lambda _, **kwargs: self.run.client(**kwargs),
@@ -153,7 +156,7 @@ class LearningRig:
             self.run.owner.new_attempt("manual-round", "a" * 64, 0, output_boot_id=self.core.boot)
             == "accepted"
         )
-        self.run.service._reset_stream()
+        self.run.service._reset_capture()
         self.run.service.proposal = request
         self.run.owner.record = self.run.owner.record.model_copy(update={"created_steady_ns": 0})
         self.run.pump()
@@ -415,7 +418,7 @@ def test_new_calibration_request_is_rejected_if_core_source_generation_changed(r
         == "accepted"
     )
     rig.run.owner.record = rig.run.owner.record.model_copy(update={"created_steady_ns": 0})
-    rig.run.service._reset_stream()
+    rig.run.service._reset_capture()
     rig.run.pump()
     rig.run.service.proposal = BeginAttempt(
         start_request_id="manual-new",
@@ -485,9 +488,9 @@ def test_recovered_core_stays_read_only_until_handoff_then_can_run_a_new_explici
 
 
 def uncached_scan(core, raw, *, avoidance=False):
+    import senior_perception.scan_decode as perception
     from senior_perception.learning_view import LearningFilterView
     from senior_perception.self_learning import SelfReturnModel
-    from senior_robot import motion_core_perception as perception
 
     decode = perception.avoidance_observation if avoidance else perception.scan_observation
     expected = decode(raw, core.node._body)
@@ -502,8 +505,11 @@ def uncached_scan(core, raw, *, avoidance=False):
 
 
 def assert_original_scan_result(core, raw, actual, now, *, avoidance=False):
+    perception_limit_velocity = reference_limit_velocity
+    from senior_perception.collision import (
+        directional_clearance as perception_directional_clearance,
+    )
     from senior_perception.startup_visibility import startup_visibility
-    from senior_robot import motion_core_perception as perception
 
     expected = uncached_scan(core, raw, avoidance=avoidance)
     # JSON gives NaN its original nonfinite category; finite coordinates compare exactly.
@@ -512,19 +518,19 @@ def assert_original_scan_result(core, raw, actual, now, *, avoidance=False):
     )
     flags = dict(front_stop=True, rear_stop=True)
     assert startup_visibility(actual, **flags) == startup_visibility(expected, **flags)
-    clearance = perception.directional_clearance([raw], core.profile, now, filtered=actual)
-    reference = perception.directional_clearance([raw], core.profile, now, filtered=expected)
+    clearance = perception_directional_clearance([raw], core.profile, now, filtered=actual)
+    reference = perception_directional_clearance([raw], core.profile, now, filtered=expected)
     assert clearance == reference
     if clearance is not None:
         arguments = (Velocity(0.05, 0), Velocity(0.01, 0), 0.0)
-        assert perception.limit_velocity(*arguments, clearance, core.profile, 0.05) == (
-            perception.limit_velocity(*arguments, reference, core.profile, 0.05)
+        assert perception_limit_velocity(*arguments, clearance, core.profile, 0.05) == (
+            perception_limit_velocity(*arguments, reference, core.profile, 0.05)
         )
     return clearance
 
 
 def checked_current_velocity(core, now, function, *arguments):
-    from senior_robot.motion_core_perception import directional_clearance
+    from senior_perception.collision import directional_clearance
 
     raw = core.node._scans[-1]
     filtered = uncached_scan(core, raw, avoidance=bool(raw.predictions))
@@ -665,8 +671,8 @@ def test_prediction_changes_only_invalidate_avoidance_and_keep_original_learning
 ):
     from senior_motion_control import vehicle_speed
     from senior_perception import learning_runtime as motion_core_output
+    from senior_perception.raw_safety_observation import PredictedReturn
     from senior_perception.vision.raw_capture import capture_from_message
-    from senior_robot.raw_safety_observation import PredictedReturn
 
     rig.start()
     seed = capture_from_message(rig.core.node._scans[-1].message.raw_capture)
@@ -737,16 +743,26 @@ def test_async_incomplete_before_submission_retires_target_without_consuming(rig
         "reserve_action",
         lambda session: (reservations.append(session), reserve(session))[1],
     )
-    rig.step(rig.now + 0.05)
-    assert rig.core.startup.state == "sampling"
     action = rig.run.owner.record.action
-    rig.run.service.gap = True
+    assert not action.consumed
+    from senior_perception.learning_wire import MotionObservedThrough
+
+    rig.run.rpc(
+        MotionObservedThrough(
+            session=rig.core._learning_client.session,
+            attempt_id=rig.run.owner.record.attempt_id,
+            segment_id=rig.core.startup.segment_id,
+            through_steady_ns=round(rig.now * 1e9),
+            stationary=True,
+            gap=True,
+        )
+    )
     rig.run.pump()
-    assert rig.run.owner.record.reason == "learning_stream_incomplete"
+    assert rig.run.owner.record.reason == "learning_motion_facts_incomplete"
     for _ in range(3):
         assert rig.step(rig.now + 0.05) == Velocity(0, 0)
         assert not rig.core.startup.active
-        assert rig.core.startup.reason == "learning_stream_incomplete"
+        assert rig.core.startup.reason == "learning_motion_facts_incomplete"
         assert rig.core.target.source == "idle" and rig.core.machine.state.task_id is None
     assert rig.run.owner.record.action == action and not action.consumed
     assert reservations == []
@@ -756,7 +772,18 @@ def test_async_failure_after_submission_preserves_window_then_projects_terminal(
     start = rig.start()
     deadline = rig.core.startup.deadline
     grant = rig.run.owner._reservation
-    rig.run.service.gap = True
+    from senior_perception.learning_wire import MotionObservedThrough
+
+    rig.run.rpc(
+        MotionObservedThrough(
+            session=rig.core._learning_client.session,
+            attempt_id=rig.run.owner.record.attempt_id,
+            segment_id=rig.core.startup.segment_id,
+            through_steady_ns=round(rig.now * 1e9),
+            stationary=True,
+            gap=True,
+        )
+    )
     rig.run.pump()
     assert rig.run.owner.record.phase == "failed"
     while rig.now + 0.05 < deadline:
@@ -764,7 +791,7 @@ def test_async_failure_after_submission_preserves_window_then_projects_terminal(
         assert rig.core.startup.started == start and rig.core.startup.deadline == deadline
         assert rig.run.owner._reservation == grant
     assert rig.step(deadline) == Velocity(0, 0)
-    assert rig.core.startup.reason == "learning_stream_incomplete"
+    assert rig.core.startup.reason == "learning_motion_facts_incomplete"
     assert not rig.core.startup.active and rig.core.target.source == "idle"
     action = rig.run.owner.record.action
     assert action.stage == "window_finished"
@@ -912,8 +939,8 @@ def test_core_trace_preserves_velocities_deadlines_ties_and_scan_expiry(
     import socket
 
     from senior_motion_control import vehicle_speed
+    from senior_perception.scan_decode import scan_observation
     from senior_perception.startup_learning import StartupLearning
-    from senior_robot.motion_core_perception import scan_observation
 
     gc_settings = gc.isenabled(), gc.get_threshold()
     module = request.getfixturevalue("output_module")

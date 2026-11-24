@@ -38,7 +38,7 @@ def generate_launch_description():
                 remappings=remappings,
             ),
             Node(
-                package="senior_robot",
+                package="senior_perception",
                 executable="rgbd_candidate_producer",
                 prefix=restart_prefix(),
                 parameters=[

@@ -270,11 +270,13 @@ def validate_real_runtime(
 def validate_navigation(reference: Path | None, parameters: Path | None) -> None:
     if reference is None and parameters is None:
         return  # Manual-only is valid; navigation remains explicitly unavailable.
-    if reference is None or parameters is None:
-        raise ValueError("navigation_reference and navigation_parameters must be supplied together")
-    from senior_localization.navigation_reference import load_navigation_reference
+    if parameters is None:
+        raise ValueError("navigation_parameters is required for navigation_reference")
+    if reference is not None:
+        from senior_localization.navigation_reference import load_navigation_reference
 
-    load_navigation_reference(reference)
+        load_navigation_reference(reference)
+    # Active mapping supplies its qualified reference after native initialization.
     if not parameters.is_absolute():
         raise ValueError("navigation_parameters must be absolute")
     values = yaml.safe_load(parameters.read_bytes())

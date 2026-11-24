@@ -1,0 +1,11 @@
+.panel { border: 1px solid var(--line); background: var(--graphite-850); padding: 12px; font-size: 12px; }
+.panel header, .machine { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+.panel header { margin-bottom: 10px; }
+.panel header span, .panel p, .panel small { color: var(--ink-dim); }
+.panel b { color: var(--amber); font-family: var(--font-data); }
+.panel table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+.panel th, .panel td { text-align: right; padding: 6px 0; border-bottom: 1px solid var(--line); }
+.panel th:first-child { text-align: left; }
+.panel td { font-family: var(--font-data); }
+.panel p { margin: 10px 0 0; line-height: 1.6; }
+.panel [data-stale="true"] { opacity: .5; }

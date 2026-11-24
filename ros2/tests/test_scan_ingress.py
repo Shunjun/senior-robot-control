@@ -16,9 +16,9 @@ def test_raw_source_replacement_retires_old_epoch_and_keeps_original_receipt(
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.parameter import Parameter
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import BoundedRawLaserScan, FencedSafetyScan
+    from senior_interfaces.msg import BoundedRawLaserScan, FencedSafetyScan
+    from senior_motion_control.safety_node import SafetyGate
     from senior_perception.safety_scan_ingress import SafetyScanIngress
-    from senior_robot.safety_node import SafetyGate
     from sensor_msgs.msg import LaserScan
 
     rclpy.init()
@@ -166,7 +166,7 @@ def test_raw_source_replacement_retires_old_epoch_and_keeps_original_receipt(
 def test_oversized_raw_dimensions_emit_only_a_bounded_invalid_event(native_scan_process, dimension):
     rclpy = pytest.importorskip("rclpy")
     from rclpy.qos import qos_profile_sensor_data
-    from senior_motion_msgs.msg import BoundedRawLaserScan
+    from senior_interfaces.msg import BoundedRawLaserScan
     from sensor_msgs.msg import LaserScan
 
     rclpy.init()
@@ -205,9 +205,9 @@ def test_oversized_raw_dimensions_emit_only_a_bounded_invalid_event(native_scan_
 @pytest.mark.parametrize("failure", ["empty_epoch", "retirement_exhaustion"])
 def test_unqualified_or_exhausted_scan_epoch_revokes_freshness(monkeypatch, failure):
     rclpy = pytest.importorskip("rclpy")
+    from senior_interfaces.msg import BoundedSafetyScan, FencedSafetyScan
+    from senior_motion_control.safety_node import SafetyGate
     from senior_motion_control.source_fences import SourceEpochFence
-    from senior_motion_msgs.msg import BoundedSafetyScan, FencedSafetyScan
-    from senior_robot.safety_node import SafetyGate
 
     rclpy.init()
     gate = SafetyGate()
@@ -291,10 +291,10 @@ def test_unqualified_or_exhausted_scan_epoch_revokes_freshness(monkeypatch, fail
 
 def test_scan_consumers_require_fenced_and_original_bounded_sources():
     rclpy = pytest.importorskip("rclpy")
-    from senior_motion_msgs.msg import BoundedRawLaserScan, FencedSafetyScan
+    from senior_interfaces.msg import BoundedRawLaserScan, FencedSafetyScan
+    from senior_motion_control.safety_node import SafetyGate
     from senior_perception.safety_scan_ingress import SafetyScanIngress
     from senior_perception.scan_adapter import ScanAdapter
-    from senior_robot.safety_node import SafetyGate
 
     rclpy.init()
     ingress = SafetyScanIngress()

@@ -517,8 +517,14 @@ def test_bad_gps_does_not_kill_healthy_local_navigation() -> None:
 
 
 def test_localization_console_script_is_registered() -> None:
-    text = (ROOT / "ros2" / "src" / "senior_robot" / "setup.py").read_text()
-    assert "localization_node = senior_localization.localization_node:main" in text
+    package = ROOT / "ros2/src/senior_localization"
+    assert (
+        "scripts/localization_node DESTINATION lib/${PROJECT_NAME}"
+        in (package / "CMakeLists.txt").read_text()
+    )
+    script = package / "scripts/localization_node"
+    assert script.stat().st_mode & 0o111
+    assert "from senior_localization.localization_node import main" in script.read_text()
 
 
 async def test_scan_match_failure_clears_previous_localization() -> None:

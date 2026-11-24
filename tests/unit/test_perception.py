@@ -333,7 +333,7 @@ class BlockingDetector:
 
 
 def _load_node_module() -> object:
-    path = ROOT / "ros2" / "src" / "senior_robot" / "senior_robot" / "perception_node.py"
+    path = ROOT / "ros2" / "src" / "senior_perception" / "senior_perception" / "perception_node.py"
     spec = importlib.util.spec_from_file_location("perception_node_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -409,7 +409,7 @@ def test_absent_detector_keeps_geometry_rate(tmp_path: Path) -> None:
 
 
 def test_node_module_imports_without_ros_and_publishes_no_velocity() -> None:
-    path = ROOT / "ros2" / "src" / "senior_robot" / "senior_robot" / "perception_node.py"
+    path = ROOT / "ros2" / "src" / "senior_perception" / "senior_perception" / "perception_node.py"
     text = path.read_text()
     assert "Twist" not in text and "create_publisher" not in text
     top_level = [line for line in text.splitlines() if line.startswith(("import ", "from "))]

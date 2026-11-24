@@ -10,8 +10,8 @@ def _receive(parameters, remaps, snapshots, stop, parent_pid):
     child_lifetime(parent_pid)
     import rclpy
     from rclpy.parameter import Parameter
+    from senior_sensor_ingress.ros_lifecycle import MotionExecutor
 
-    from senior_motion_control.motion_lifecycle import MotionExecutor
     from senior_motion_control.safety_node import SafetyGate
 
     args = ["--ros-args"]

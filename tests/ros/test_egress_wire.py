@@ -5,7 +5,7 @@ import pytest
 
 def test_egress_envelopes_include_depth_receipt_and_original_capture_headers():
     pytest.importorskip("rclpy")
-    from senior_motion_msgs.msg import FencedDepthEvidence, FencedSemanticEvidence
+    from senior_interfaces.msg import FencedDepthEvidence, FencedSemanticEvidence
 
     depth = FencedDepthEvidence()
     semantic = FencedSemanticEvidence()
@@ -19,9 +19,9 @@ def test_egress_envelopes_include_depth_receipt_and_original_capture_headers():
 def test_gate_and_semantic_receive_fenced_depth_only():
     rclpy = pytest.importorskip("rclpy")
     from rclpy.parameter import Parameter
-    from senior_motion_msgs.msg import FencedDepthEvidence
-    from senior_robot.safety_node import SafetyGate
-    from senior_robot.semantic_ingress import SemanticIngress
+    from senior_interfaces.msg import FencedDepthEvidence
+    from senior_motion_control.safety_node import SafetyGate
+    from senior_perception.semantic_ingress import SemanticIngress
 
     rclpy.init()
     gate = SafetyGate(parameter_overrides=[Parameter("depth_policy", value="required")])

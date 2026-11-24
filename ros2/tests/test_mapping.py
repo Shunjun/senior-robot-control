@@ -26,6 +26,11 @@ def mapping_launch(monkeypatch):
         "launch.actions": {
             "DeclareLaunchArgument": type("DeclareLaunchArgument", (Action,), {}),
             "OpaqueFunction": type("OpaqueFunction", (Action,), {}),
+            "RegisterEventHandler": type("RegisterEventHandler", (Action,), {}),
+        },
+        "launch.event_handlers": {
+            "OnProcessStart": type("OnProcessStart", (Action,), {}),
+            "OnProcessExit": type("OnProcessExit", (Action,), {}),
         },
         "launch.substitutions": {
             "LaunchConfiguration": LaunchConfiguration,
@@ -40,7 +45,7 @@ def mapping_launch(monkeypatch):
         vars(module).update(members)
         monkeypatch.setitem(sys.modules, name, module)
     launch_file = (
-        Path(__file__).resolve().parents[2] / "ros2/src/senior_robot/launch/mapping.launch.py"
+        Path(__file__).resolve().parents[2] / "ros2/src/senior_mapping/launch/mapping.launch.py"
     )
     description = runpy.run_path(str(launch_file))["generate_launch_description"]()
     actions = description.args[0]
@@ -57,7 +62,12 @@ def mapping_launch(monkeypatch):
         for action in actions
         if isinstance(action, modules["launch.actions"]["OpaqueFunction"])
     ]
-    return select, defaults
+    def select_nodes(context):
+        # Launch diagnostics wrap the same nodes; retain all original command assertions.
+        return [action for action in select(context)
+                if isinstance(action, modules["launch_ros.actions"]["Node"])]
+
+    return select_nodes, defaults
 
 
 def test_default_mapping_keeps_stock_graph_and_adapter(mapping_launch):

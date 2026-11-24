@@ -41,7 +41,7 @@ TEST(StaticTfReceipt, CyclesAndNonUnitQuaternionAreRejected)
 #include <thread>
 #include <vector>
 #include <rclcpp/rclcpp.hpp>
-#include <senior_motion_msgs/msg/bounded_static_tf.hpp>
+#include <senior_interfaces/msg/bounded_static_tf.hpp>
 
 using namespace std::chrono_literals;
 
@@ -72,9 +72,9 @@ TEST(StaticTfReceipt, AuthenticPublisherZeroStampAndCurrentInvalidation)
   auto qos = rclcpp::QoS(1).reliable().transient_local();
   auto publisher = source->create_publisher<TFMessage>("/d2a_tf_test/static", qos);
   std::mutex mutex;
-  std::vector<senior_motion_msgs::msg::BoundedStaticTf> received;
-  auto sub = observer->create_subscription<senior_motion_msgs::msg::BoundedStaticTf>(
-    "/d2a_tf_test/receipt", qos, [&](senior_motion_msgs::msg::BoundedStaticTf::ConstSharedPtr message) {
+  std::vector<senior_interfaces::msg::BoundedStaticTf> received;
+  auto sub = observer->create_subscription<senior_interfaces::msg::BoundedStaticTf>(
+    "/d2a_tf_test/receipt", qos, [&](senior_interfaces::msg::BoundedStaticTf::ConstSharedPtr message) {
       std::lock_guard<std::mutex> lock(mutex);
       received.push_back(*message);
     });
@@ -172,10 +172,10 @@ TEST(StaticTfReceipt, ZeroClockAdmitsStaticConfigurationWithoutRestamping)
   auto publisher = source->create_publisher<TFMessage>("/d2a_zero_tf/static", qos);
   auto clock = observer->create_publisher<rosgraph_msgs::msg::Clock>("/clock", rclcpp::QoS(10));
   std::mutex mutex;
-  std::vector<senior_motion_msgs::msg::BoundedStaticTf> received;
-  auto sub = observer->create_subscription<senior_motion_msgs::msg::BoundedStaticTf>(
+  std::vector<senior_interfaces::msg::BoundedStaticTf> received;
+  auto sub = observer->create_subscription<senior_interfaces::msg::BoundedStaticTf>(
     "/d2a_zero_tf/receipt", qos,
-    [&](senior_motion_msgs::msg::BoundedStaticTf::ConstSharedPtr message) {
+    [&](senior_interfaces::msg::BoundedStaticTf::ConstSharedPtr message) {
       std::lock_guard<std::mutex> lock(mutex);
       received.push_back(*message);
     });
@@ -213,7 +213,7 @@ TEST(StaticTfReceipt, ZeroClockAdmitsStaticConfigurationWithoutRestamping)
   clock->publish(tick);
   ASSERT_TRUE(wait_for_tf([&] {return bridge->get_clock()->now().nanoseconds() == 2000000000LL;}));
   std::this_thread::sleep_for(80ms);
-  senior_motion_msgs::msg::BoundedStaticTf admitted;
+  senior_interfaces::msg::BoundedStaticTf admitted;
   {
     std::lock_guard<std::mutex> lock(mutex);
     admitted = received.back();
@@ -273,10 +273,10 @@ TEST(StaticTfReceipt, AdditionalPublisherRevokesCurrentBinding)
   auto qos = rclcpp::QoS(1).reliable().transient_local();
   auto publisher = source->create_publisher<TFMessage>("/d2a_conflict_tf/static", qos);
   std::mutex mutex;
-  std::vector<senior_motion_msgs::msg::BoundedStaticTf> received;
-  auto sub = observer->create_subscription<senior_motion_msgs::msg::BoundedStaticTf>(
+  std::vector<senior_interfaces::msg::BoundedStaticTf> received;
+  auto sub = observer->create_subscription<senior_interfaces::msg::BoundedStaticTf>(
     "/d2a_conflict_tf/receipt", qos,
-    [&](senior_motion_msgs::msg::BoundedStaticTf::ConstSharedPtr message) {
+    [&](senior_interfaces::msg::BoundedStaticTf::ConstSharedPtr message) {
       std::lock_guard<std::mutex> lock(mutex);
       received.push_back(*message);
     });
@@ -345,10 +345,10 @@ TEST(StaticTfReceipt, QueuedRetiredPublisherCannotRevokeSuccessor)
   auto observer = std::make_shared<rclcpp::Node>("d2a_old_observer");
   auto qos = rclcpp::QoS(1).reliable().transient_local();
   auto publisher = source->create_publisher<TFMessage>("/d2a_old_tf/static", qos);
-  std::vector<senior_motion_msgs::msg::BoundedStaticTf> received;
-  auto sub = observer->create_subscription<senior_motion_msgs::msg::BoundedStaticTf>(
+  std::vector<senior_interfaces::msg::BoundedStaticTf> received;
+  auto sub = observer->create_subscription<senior_interfaces::msg::BoundedStaticTf>(
     "/d2a_old_tf/receipt", qos,
-    [&](senior_motion_msgs::msg::BoundedStaticTf::ConstSharedPtr message) {
+    [&](senior_interfaces::msg::BoundedStaticTf::ConstSharedPtr message) {
       std::lock_guard<std::mutex> lock(mutex);
       received.push_back(*message);
     });
@@ -444,10 +444,10 @@ TEST(StaticTfReceipt, NeverAdmittedQueuedOldPublisherCannotRevokeSuccessor)
   auto observer = std::make_shared<rclcpp::Node>("d2a_unseen_old_observer");
   auto qos = rclcpp::QoS(1).reliable().transient_local();
   auto publisher = source->create_publisher<TFMessage>("/d2a_unseen_old_tf/static", qos);
-  std::vector<senior_motion_msgs::msg::BoundedStaticTf> received;
-  auto sub = observer->create_subscription<senior_motion_msgs::msg::BoundedStaticTf>(
+  std::vector<senior_interfaces::msg::BoundedStaticTf> received;
+  auto sub = observer->create_subscription<senior_interfaces::msg::BoundedStaticTf>(
     "/d2a_unseen_old_tf/receipt", qos,
-    [&](senior_motion_msgs::msg::BoundedStaticTf::ConstSharedPtr message) {
+    [&](senior_interfaces::msg::BoundedStaticTf::ConstSharedPtr message) {
       std::lock_guard<std::mutex> lock(mutex);
       received.push_back(*message);
     });
@@ -524,10 +524,10 @@ TEST(StaticTfReceipt, DelayedInspectorSampleDoesNotFakeClockRollback)
   auto observer = std::make_shared<rclcpp::Node>("d2a_inspect_race_observer");
   auto qos = rclcpp::QoS(1).reliable().transient_local();
   auto publisher = source->create_publisher<TFMessage>("/d2a_inspect_race/static", qos);
-  std::vector<senior_motion_msgs::msg::BoundedStaticTf> received;
-  auto sub = observer->create_subscription<senior_motion_msgs::msg::BoundedStaticTf>(
+  std::vector<senior_interfaces::msg::BoundedStaticTf> received;
+  auto sub = observer->create_subscription<senior_interfaces::msg::BoundedStaticTf>(
     "/d2a_inspect_race/receipt", qos,
-    [&](senior_motion_msgs::msg::BoundedStaticTf::ConstSharedPtr value) {
+    [&](senior_interfaces::msg::BoundedStaticTf::ConstSharedPtr value) {
       std::lock_guard<std::mutex> lock(mutex); received.push_back(*value);
     });
   rclcpp::executors::MultiThreadedExecutor executor;

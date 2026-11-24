@@ -20,11 +20,11 @@ def navigation(monkeypatch):
         "rclpy.parameter": {"Parameter": object},
         "rclpy.qos": {"qos_profile_sensor_data": SimpleNamespace(depth=5)},
         "rclpy.subscription": {"Subscription": object},
-        "senior_motion_msgs.msg": {
+        "senior_interfaces.msg": {
             "DriveExecutionFeedback": object,
             "FinalCommand": object,
         },
-        "senior_robot.motion_lifecycle": {"with_dds_info": lambda callback: callback},
+        "senior_sensor_ingress.ros_lifecycle": {"with_dds_info": lambda callback: callback},
     }
     for name, attributes in modules.items():
         stub = ModuleType(name)

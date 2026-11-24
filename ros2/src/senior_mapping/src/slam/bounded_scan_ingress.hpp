@@ -2,7 +2,7 @@
 #define SENIOR_SLAM_BRIDGE__BOUNDED_SCAN_INGRESS_HPP_
 
 #include "laser_geometry.hpp"
-#include <senior_motion_msgs/sample_time.hpp>
+#include <senior_sensor_ingress/sample_time.hpp>
 
 #include <chrono>
 #include <cstdint>
@@ -11,12 +11,12 @@
 #include <string>
 
 #include "rclcpp/rclcpp.hpp"
-#include "senior_motion_msgs/msg/bounded_raw_laser_scan.hpp"
-#include "senior_motion_msgs/msg/bounded_static_tf.hpp"
+#include "senior_interfaces/msg/bounded_raw_laser_scan.hpp"
+#include "senior_interfaces/msg/bounded_static_tf.hpp"
 #include "sensor_msgs/msg/laser_scan.hpp"
 #include "tf2_ros/buffer.h"
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 class StaticLidarTfIngress;
 
@@ -24,10 +24,10 @@ class StaticLidarTfIngress;
 class BoundedScanIngress
 {
 public:
-  using Receipt = senior_motion_msgs::msg::RawCaptureHeader;
+  using Receipt = senior_interfaces::msg::RawCaptureHeader;
   using Scan = sensor_msgs::msg::LaserScan;
-  using BoundedScan = senior_motion_msgs::msg::BoundedRawLaserScan;
-  using StaticReceipt = senior_motion_msgs::msg::BoundedStaticTf;
+  using BoundedScan = senior_interfaces::msg::BoundedRawLaserScan;
+  using StaticReceipt = senior_interfaces::msg::BoundedStaticTf;
   using Submit = std::function<void(
     Scan::ConstSharedPtr, BoundedScan::ConstSharedPtr, LaserTransform,
     StaticReceipt::ConstSharedPtr)>;
@@ -58,11 +58,11 @@ private:
   std::int64_t last_measurement_ns_{0};
   std::int64_t last_steady_ns_{0};
   std::uint64_t receipt_floor_ns_{0};
-  senior_motion_msgs::time::ClockTracker clock_;
+  senior_sensor_ingress::time::ClockTracker clock_;
   bool closed_{false};
   rclcpp::Subscription<Message>::SharedPtr subscription_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 #endif  // SENIOR_SLAM_BRIDGE__BOUNDED_SCAN_INGRESS_HPP_

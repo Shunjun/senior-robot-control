@@ -4,9 +4,7 @@ import json
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass
-from typing import Any, Literal
-
-from senior_motion_control.hardware_profile import HardwareMotionProfile
+from typing import Any, Literal, Protocol
 
 from senior_perception.learning_client import LearningClient
 from senior_perception.learning_record import LearningGeometry
@@ -23,6 +21,22 @@ from senior_perception.vision.raw_capture import capture_from_message
 from vehicle_core.motion_state import MotionMode
 from vehicle_core.sensor_policy import default_policy
 from vehicle_core.values import Velocity
+
+
+class LearningProfile(Protocol):
+    """Read-only geometry and occlusion settings supplied by composition."""
+
+    @property
+    def length(self) -> float: ...
+
+    @property
+    def width(self) -> float: ...
+
+    @property
+    def startup_learning_front_occlusion_stop(self) -> float: ...
+
+    @property
+    def startup_learning_rear_occlusion_stop(self) -> float: ...
 
 
 @dataclass(frozen=True)
@@ -57,7 +71,7 @@ class LearningMotionRequest:
 class LearningPorts:
     """Observation/cache resources and bounded lifecycle/trace hooks, not arbitration."""
 
-    get_profile: Callable[[], HardwareMotionProfile]
+    get_profile: Callable[[], LearningProfile]
     get_body_frame: Callable[[], str]
     scans: Callable[[], Sequence[RawSafetyObservation]]
     scan_generation: Callable[[], int | None]

@@ -267,7 +267,7 @@ def acquire_receipt(command, env, check, *, timeout=9.0, cleanup_seconds=2.0):
 
 def live_receipt_query(payload, started, frame, seed):
     from rclpy.serialization import deserialize_message
-    from senior_motion_msgs.msg import BoundedRawLaserScan
+    from senior_interfaces.msg import BoundedRawLaserScan
 
     try:
         scan = deserialize_message(payload, BoundedRawLaserScan)
@@ -488,7 +488,7 @@ def main():
 
     import rclpy
     from rclpy.signals import SignalHandlerOptions
-    from senior_slam_bridge.srv import ReadGraph, ReadLoadedGraph
+    from senior_interfaces.srv import ReadGraph, ReadLoadedGraph
 
     attempt = secrets.token_hex(16)
     namespace = f"/senior/slam/preflight_{attempt}"
@@ -516,7 +516,7 @@ def main():
         command.extend(["-p", f"{name}:={json.dumps(value, ensure_ascii=False)}"])
 
     if stationary_scan is not None or args.live_scan:
-        from senior_slam_bridge.srv import MatchStationaryScan
+        from senior_interfaces.srv import MatchStationaryScan
 
         command.extend(
             [

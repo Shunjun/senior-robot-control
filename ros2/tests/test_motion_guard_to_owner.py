@@ -12,9 +12,12 @@ import time
 from pathlib import Path
 from types import SimpleNamespace as N
 
-from control_process_test_support import capture_inputs
+from control_process_test_support import capture_inputs, read_inputs
 from senior_motion_control.arbiter import FinalCommandFence
-from senior_robot.motion_observation_adapter import NativeObservations, strict_reference_json
+from senior_motion_estimation.motion_observation_adapter import (
+    NativeObservations,
+    strict_reference_json,
+)
 from test_motion_core_chain import feed
 from test_motion_core_handoff import Publisher, core  # noqa: F401
 
@@ -61,8 +64,8 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
     )
     parent.setblocking(False)
     g._guard_socket = parent
-    monkeypatch.setattr("senior_robot.motion_core_output.time.monotonic", lambda: 10.3)
-    core.controller.trajectory.velocity = Velocity(0.4, 0)
+    monkeypatch.setattr("senior_motion_control.motion_core_output.time.monotonic", lambda: 10.3)
+    core._output = Velocity(0.4, 0)
     try:
         event_counts = []
         for _ in range(2):
@@ -82,7 +85,7 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
             5,
             "retired",
         )
-        assert core.controller.trajectory.velocity.vx == 0.4 and core.node.emitted == []
+        assert core._output == Velocity(0, 0) and core.node.emitted == []
         assert core.target.source == "idle"
         assert core.target.source_id == core.boot
         assert event_counts[0] == event_counts[1]  # source close applied only once
@@ -106,7 +109,7 @@ def test_real_native_frame_crosses_gate_fence_before_retirement_ack(core, monkey
             N(node_name="motion_fusion", node_namespace="/", endpoint_gid=b"fusion")
         ]
         capture_inputs(core, N(data=strict_reference_json(observations.snapshot(10.3, 10.3))))
-        assert core._inputs(10.3)[1] is not None
+        assert read_inputs(core, 10.3)[1] is not None
         for mode in ("manual_release", "manual_intent"):
             subprocess.run(
                 [str(native.NativeRoundtrip.binary), str(child.fileno()), mode],

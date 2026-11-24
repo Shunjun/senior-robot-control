@@ -4,7 +4,7 @@
 #include <filesystem>
 #include <string>
 
-namespace senior_slam_bridge
+namespace senior_mapping
 {
 class StagedGraph
 {
@@ -21,6 +21,6 @@ private:
   std::filesystem::path directory_;
   std::string digest_;
 };
-}  // namespace senior_slam_bridge
+}  // namespace senior_mapping
 
 #endif  // SENIOR_SLAM_BRIDGE__STAGED_GRAPH_HPP_

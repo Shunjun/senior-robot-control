@@ -38,10 +38,13 @@ def test_actual_core_emitter_serializes_zero_and_tracking_as_ros_floats(velocity
     exec(compile(ast.Module(body=[method], type_ignores=[]), str(p), "exec"), scope)
     outputs = []
     gate = N(
+        _motion_core=N(boot="test", sequence=1),
         _output_transport=N(
+            mark=lambda *_: None,
+            flush_send_trace=lambda **_: None,
             publish=lambda velocity, deadline, *, computed_steady: outputs.append(
                 (velocity, deadline, computed_steady)
-            )
+            ),
         ),
         _publish_drive_feedback=lambda _: None,
         _feedback=N(published=lambda *_: None),

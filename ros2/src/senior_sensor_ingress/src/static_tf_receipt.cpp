@@ -1,5 +1,5 @@
 #include "senior_sensor_ingress/static_tf_receipt.hpp"
-#include <senior_motion_msgs/sample_time.hpp>
+#include <senior_sensor_ingress/sample_time.hpp>
 
 #include <cmath>
 #include <map>
@@ -70,7 +70,7 @@ std::string hex_gid(const uint8_t * data, size_t length)
 }
 double steady_now()
 {
-  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
+  return static_cast<double>(senior_sensor_ingress::time::monotonic_ns()) / 1e9;
 }
 std::string make_boot()
 {
@@ -233,7 +233,7 @@ void StaticTfReceipt::on_message(const Input & message, const rclcpp::MessageInf
   output.received_steady = received_steady;
   output.valid = true;
   for (const auto & edge : message.transforms) {
-    senior_motion_msgs::msg::StaticTransformEdge bounded;
+    senior_interfaces::msg::StaticTransformEdge bounded;
     bounded.parent_frame = edge.header.frame_id;
     bounded.child_frame = edge.child_frame_id;
     bounded.stamp = edge.header.stamp;

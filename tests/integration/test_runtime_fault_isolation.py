@@ -152,7 +152,7 @@ async def test_supervise_local_fault_keeps_actual_agent_and_log_transport(
         monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
         env = dict(os.environ)
         if kind == "real":
-            profile = SimpleNamespace(ros_domain=17)
+            profile = SimpleNamespace(ros_domain=17, ros_setup=None)
             runner = asyncio.create_task(helper.supervise(root, ["agent"], env, profile=profile))
         else:
             profile = SimpleNamespace(

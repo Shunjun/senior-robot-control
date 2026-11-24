@@ -449,3 +449,16 @@ def test_missing_or_nonfinite_thresholds_fail_closed() -> None:
         assert snapshot.cells == ()
         assert snapshot.map_ref is None
         assert_no_velocity(snapshot)
+
+
+def test_repeated_frame_cannot_confirm_a_stable_obstacle() -> None:
+    maintainer = OccupancyMaintainer(thresholds())
+    first = observe(0.0, hits=(SceneHit(*BOX, "static"),), rays=(beam(BOX),))
+    second = observe(1.0, hits=(SceneHit(*BOX, "static"),), rays=(beam(BOX),))
+    assert_delta_idle(maintainer.update(first))
+    assert_delta_idle(maintainer.update(second))
+    assert_delta_idle(maintainer.update(second))
+    assert maintainer.snapshot().cells == ()
+    final = maintainer.update(observe(1.5, hits=(SceneHit(*BOX, "static"),), rays=(beam(BOX),)))
+    assert len(final.added) == 1
+    assert final.added[0].hit_count == 3

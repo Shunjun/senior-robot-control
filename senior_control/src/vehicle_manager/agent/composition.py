@@ -16,10 +16,13 @@ from vehicle_manager.agent.bootstrap_ports import (
     AgentConfiguration,
     LocalClient,
 )
+from vehicle_manager.agent.dispatcher import Deadlines
 from vehicle_manager.agent.logs_wire import AgentLogHandler, CloudLogGrants
 from vehicle_manager.agent.main import Agent
+from vehicle_manager.agent.request_ports import Requester
 from vehicle_manager.agent.settings_wire import SettingsRuntime
 from vehicle_manager.observability import APPLICATION_LOG_NAMES
+from vehicle_manager.performance.monitor import PerformanceMonitor
 from vehicle_manager.settings.models import vehicle_settings_profile
 from vehicle_manager.settings.service import RuntimeGate, SettingsService
 from vehicle_manager.settings.store import SettingsStore
@@ -104,11 +107,31 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             safety_client=ipc(),
         )
         state_client = ipc()
-        map_client = ipc()
+        map_client = ipc(timeout_ms=30000.0)
         navigation_client = ipc(timeout_ms=3000.0)
         workspace_client = ipc()
         display_client = ipc()
-        state = ports.state(state_client)
+        mapping_protocol_version = None
+        map_requests: Requester = map_client
+        workspace_requests: Requester = workspace_client
+        mapped = None
+        if ports.mapping_requests is not None:
+            mapped = await ports.mapping_requests(
+                database,
+                workspace_client,
+                map_client,
+                robot_id=config.robot_id,
+                root=config.database_path.parent / "active-mapping",
+                waypoints=waypoints,
+            )
+            if mapped is not None:
+                map_requests = workspace_requests = mapped
+                mapping_protocol_version = 2 if hasattr(mapped, "coordinate_home") else 1
+        state = ports.state(
+            mapped.state_requests(state_client)
+            if mapped is not None and hasattr(mapped, "state_requests")
+            else state_client
+        )
         exported_grid = None
         if config.workspace_map_bundle is not None and config.workspace_map_sha256 is not None:
             try:
@@ -121,12 +144,24 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             except (ports.error, OSError):
                 logger.warning("configured workspace display map is unavailable", exc_info=True)
         workspace = ports.workspace(
-            config.robot_id, tasks, waypoints, workspace_client, exported_grid=exported_grid
+            config.robot_id, tasks, waypoints, workspace_requests, exported_grid=exported_grid
         )
         display = ports.workspace(
-            config.robot_id, tasks, waypoints, display_client, exported_grid=exported_grid
+            config.robot_id,
+            tasks,
+            waypoints,
+            mapped if mapped is not None else display_client,
+            exported_grid=exported_grid,
         )
-        home = ports.home(state_client, waypoints, robot_id=config.robot_id)
+        home = ports.home(
+            mapped.state_requests(state_client)
+            if mapped is not None and hasattr(mapped, "state_requests")
+            else state_client,
+            waypoints,
+            robot_id=config.robot_id,
+        )
+        if mapped is not None and hasattr(mapped, "coordinate_home"):
+            home = mapped.coordinate_home(home)
         agent: Agent[Any]
         navigation = ports.navigation(
             navigation_client,
@@ -235,6 +270,11 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
         video_session = media.session
 
         async def cleanup() -> None:
+            if mapped is not None and hasattr(mapped, "close"):
+                try:
+                    await mapped.close()
+                except Exception:
+                    logger.exception("Mapping shutdown did not save its final cut")
             await asyncio.gather(
                 state_client.close(),
                 map_client.close(),
@@ -271,11 +311,19 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
                     }
                 )
 
+        performance = PerformanceMonitor()
         event_fd = os.environ.get(ports.read_fd)
 
         async def lifecycle_loop() -> None:
             assert event_fd is not None
-            await ports.observe(int(event_fd), agent.report_runtime_event)
+
+            def receive(event: dict[str, Any]) -> None:
+                if event.get("module") == "resources":
+                    performance.event(event)
+                else:
+                    agent.report_runtime_event(event)
+
+            await ports.observe(int(event_fd), receive)
             # EOF is already recorded by observe; no global shutdown or restart.
 
         async def logs_loop() -> None:
@@ -294,7 +342,7 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
                 tasks, robot_id=config.robot_id, verify_workspace=workspace.verify_task_edit
             ),
             home=home,
-            maps=ports.maps(map_client),
+            maps=ports.maps(map_requests),
             state=ports.snapshot_state(
                 state,
                 tasks,
@@ -313,14 +361,23 @@ async def run_agent(config: AgentConfiguration, *, ports: AgentBootstrapPorts) -
             navigation=navigation_actions,
             motion=motion,
             video_session=video_session,
+            performance=performance.read,
+            mapping_protocol_version=mapping_protocol_version,
             map_root=config.database_path.parent / "map-transfer",
             background={
                 "tasks": task_loop,
+                "performance": performance.run,
+                **(
+                    {"mapping": mapped.run} if mapped is not None and hasattr(mapped, "run") else {}
+                ),
                 **({"logs": logs_loop} if logs is not None else {}),
                 **({"observer": lifecycle_loop} if event_fd is not None else {}),
             },
             background_fault=background_fault,
             cleanup=cleanup,
+            cleanup_timeout_ms=(
+                Deadlines().map * 1000 if mapped is not None and hasattr(mapped, "close") else None
+            ),
             # Accepted tasks are vehicle-owned; only manual authority follows eligibility.
         )
         agent.install_signal_handlers()

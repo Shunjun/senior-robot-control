@@ -5,24 +5,14 @@ missing observations do not revoke sources or create a persistent fault.
 """
 
 import math
-from dataclasses import dataclass
+
+# //Compatible: existing control clients use the same estimation-owned value type.
+from senior_motion_estimation.recovery_observation import RecoveryObservation as RecoveryObservation
 
 from senior_motion_control.contracts import MotionEvent
 from senior_motion_control.contracts import MotionEventKind as K
 from vehicle_core.motion_state import MotionMode as M
 from vehicle_core.motion_state import MotionState
-
-
-@dataclass(frozen=True)
-class RecoveryObservation:
-    epoch: str
-    sequence: int
-    stamp_steady: float
-    deadline_steady: float
-    healthy: bool
-    stationary: bool
-    # //Compatible: retained for existing observation producers, never admission.
-    manual_rearm_ready: bool = False
 
 
 class MotionStateMachine:
@@ -145,6 +135,8 @@ class MotionStateMachine:
 
     def _advance_clock(self, now: float) -> bool:
         if not math.isfinite(now) or now < self._last_now:
+            # Evidence in the previous clock coordinate cannot establish stillness.
+            self._evidence = None
             self._fault = True
             self._fault_revision += 1
             self._pause_sources()

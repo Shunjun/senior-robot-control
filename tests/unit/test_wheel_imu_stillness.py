@@ -7,9 +7,9 @@ from types import SimpleNamespace
 import pytest
 from control_process_test_support import generic_motion_profile
 from senior_motion_control.controller import Feedback, MotionController
+from senior_motion_estimation.motion_sensor_runtime import MotionSensorRuntime
 from senior_motion_estimation.observations import Source
 from senior_motion_estimation.stillness import stationary
-from senior_robot.motion_sensor_runtime import MotionSensorRuntime
 from test_unified_motion_runtime import point
 
 from vehicle_core.diagnostics import RuntimeDiagnostics

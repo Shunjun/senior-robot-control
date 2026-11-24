@@ -1,5 +1,5 @@
 #include "senior_sensor_ingress/rgbd_candidate_receipt.hpp"
-#include "senior_motion_msgs/sample_time.hpp"
+#include "senior_sensor_ingress/sample_time.hpp"
 #include "senior_sensor_ingress/static_tf_receipt.hpp"
 
 #include <algorithm>
@@ -37,7 +37,7 @@ std::string new_boot()
 }
 double steady_now()
 {
-  return static_cast<double>(senior_motion_msgs::time::monotonic_ns()) / 1e9;
+  return static_cast<double>(senior_sensor_ingress::time::monotonic_ns()) / 1e9;
 }
 int64_t nanos(const builtin_interfaces::msg::Time & stamp)
 {
