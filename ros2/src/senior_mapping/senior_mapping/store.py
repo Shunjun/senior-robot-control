@@ -1,23 +1,41 @@
 """Reconcile long-term occupancy and waypoints with pose-graph anchors."""
 
 import math
+import time
 import uuid
-from collections.abc import Iterator
+from collections import Counter
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from copy import copy
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from senior_mapping.evidence import CellEvidence, OccupancySnapshot
+from senior_mapping.evidence import (
+    FIXED_CHANGES,
+    FIXED_MEMBERS,
+    FIXED_TILES,
+    CellEvidence,
+    FixedDelta,
+    FixedWatermark,
+    OccupancySnapshot,
+    ProfileProvenance,
+    SourceIdentity,
+    VerifiedBasis,
+    anchor_digest,
+    fixed_text,
+    fixed_uint,
+)
 from senior_mapping.references import (
     AnchoredWaypoint,
     AnchorPose,
     AnchorSnapshot,
     CellBinding,
+    FixedSnapshot,
     GridExtent,
     ReferenceChange,
     SlamSnapshot,
     WaypointBinding,
+    fixed_anchor_records,
 )
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef, Pose2D
@@ -122,6 +140,8 @@ class MapReferenceStore:
         self._removed: dict[int, _Record] = {}
         self._waypoints: list[_Waypoint] = []
         self._seq = 0
+        self._fixed_cut: FixedSnapshot | None = None
+        self._fixed_retired = False
 
     @property
     def map_ref(self) -> MapRef:
@@ -266,6 +286,11 @@ class MapReferenceStore:
             self._fence_ingest()
             raise
 
+        fixed_stage = (
+            self._prepare_fixed_graph(staged, sequence, anchors)
+            if self._fixed_cut is not None
+            else None
+        )
         self._known_anchors = staged._known_anchors
         self._live = staged._live
         self._removed = staged._removed
@@ -275,6 +300,8 @@ class MapReferenceStore:
         self._map_generation = staged._map_generation
         progress = OccupancyIngestProgress(binding, sequence, keyframe_id)
         self._ingest_progress = progress
+        if fixed_stage is not None:
+            self._publish_fixed_graph(fixed_stage)
         return progress
 
     def commit_waypoints(
@@ -314,11 +341,36 @@ class MapReferenceStore:
                 raise DomainError(ErrorCode.VALIDATION, "waypoint edit has no current graph anchor")
             seen.add(waypoint.waypoint_id)
             staged[waypoint.waypoint_id] = _Waypoint(waypoint, item.anchor_pose)
-        if len(staged) + len(self._live) + len(self._removed) > _MAX_INGEST_RECORDS:
+        if (
+            len(staged)
+            + len(self._live)
+            + len(self._removed)
+            + (0 if self._fixed_cut is None else self._fixed_member_count - len(self._waypoints))
+            > _MAX_INGEST_RECORDS
+        ):
             raise DomainError(ErrorCode.VALIDATION, "waypoint edit exceeds reference capacity")
         if changes:
+            candidate = None
+            if self._fixed_cut is not None:
+                self._check_fixed_owner(binding)
+                candidate = replace(
+                    self._fixed_cut,
+                    watermark=replace(
+                        self._fixed_cut.watermark, change_sequence=self.change_sequence + 1
+                    ),
+                    waypoint_bindings=tuple(
+                        WaypointBinding(v.waypoint, v.anchor_pose) for v in staged.values()
+                    ),
+                )
+                if self._fixed_encoded_size(candidate, {}, {}) > 8 * 1024 * 1024:
+                    raise DomainError(ErrorCode.VALIDATION, "fixed_capacity: waypoint payload")
             self._waypoints = list(staged.values())
             self._change_sequence += 1
+            if candidate is not None:
+                self._fixed_member_count += len(self._waypoints) - len(
+                    self._fixed_cut.waypoint_bindings
+                )
+                self._fixed_cut = candidate
 
     def _prepare_ingest(
         self, keyframe_id: str, anchors: AnchorSnapshot, changes: tuple[CellBinding, ...]
@@ -351,6 +403,7 @@ class MapReferenceStore:
             raise DomainError(ErrorCode.CONFLICT, "corrected anchor set is incomplete or stale")
 
         staged = copy(self)
+        staged._fixed_cut = None  # prepare the legacy graph members independently
         staged._live = {key: replace(record) for key, record in self._live.items()}
         staged._removed = {key: replace(record) for key, record in self._removed.items()}
         staged._waypoints = [replace(waypoint) for waypoint in self._waypoints]
@@ -403,6 +456,7 @@ class MapReferenceStore:
             raise DomainError(ErrorCode.VALIDATION, "invalid anchored occupancy change")
 
     def _fence_ingest(self) -> None:
+        self._fixed_retired = True
         self._ingest_binding = None
         self._ingest_progress = None
         self._ingest_fenced = True
@@ -482,6 +536,7 @@ class MapReferenceStore:
         anchor_pose: Pose2D,
     ) -> None:
         self._require_capture_writable()
+        self._reject_fixed_v1()
         self._fence_ingest()
         anchor_id = evidence.anchor_id.strip()
         if not anchor_id or self._index(*world) != evidence.cell:
@@ -505,6 +560,7 @@ class MapReferenceStore:
 
     def place_waypoint(self, waypoint: AnchoredWaypoint, *, anchor_pose: Pose2D) -> None:
         self._require_capture_writable()
+        self._reject_fixed_v1()
         self._fence_ingest()
         anchor_id = waypoint.anchor_id.strip()
         if not waypoint.waypoint_id.strip() or not anchor_id:
@@ -520,6 +576,7 @@ class MapReferenceStore:
 
     def remove(self, evidence: CellEvidence) -> None:
         self._require_capture_writable()
+        self._reject_fixed_v1()
         self._fence_ingest()
         found = self._find(self._live, evidence.cell)
         if found is None:
@@ -537,6 +594,7 @@ class MapReferenceStore:
 
     def apply_anchor_update(self, update: AnchorSnapshot) -> ReferenceChange:
         self._require_capture_writable()
+        self._reject_fixed_v1()
         self._fence_ingest()
         owner = update.odom_owner.strip()
         if update.map_ref.map_id != self.map_ref.map_id or owner != self.odom_owner:
@@ -587,6 +645,11 @@ class MapReferenceStore:
         pose_graph_prefix: Path,
         pose_graph_cells: tuple[tuple[int, int], ...],
     ) -> SlamSnapshot:
+        if self._fixed_cut is not None:
+            raise DomainError(
+                ErrorCode.CONFLICT,
+                "V1 capture cannot save fixed V2 state; T4 explicit archive path required",
+            )
         bindings = tuple(self._binding(item, removed=False) for item in self._live.values())
         bindings += tuple(self._binding(item, removed=True) for item in self._removed.values())
         waypoints = tuple(
@@ -609,6 +672,7 @@ class MapReferenceStore:
 
     def restore(self, snapshot: SlamSnapshot) -> None:
         self._require_capture_writable()
+        self._reject_fixed_v1()
         self._fence_ingest()
         if not self.is_empty():
             raise DomainError(ErrorCode.CONFLICT, "occupancy store already has records")
@@ -625,8 +689,8 @@ class MapReferenceStore:
     def replace(self, snapshot: SlamSnapshot) -> None:
         """Switch identity, resolution, odometry owner, and sequence together."""
         self._require_capture_writable()
+        self._reject_fixed_v1()
         self._fence_ingest()
-
         self._reset_identity(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
         self._advance_generation()
         self._change_sequence += 1
@@ -638,6 +702,7 @@ class MapReferenceStore:
         """Empty the layer and publish a new identity in the same update."""
         self._require_capture_writable()
 
+        self._reject_fixed_v1()
         self._reset_identity(map_ref, odom_owner, cell_size_m)
         self._advance_generation()
         self._change_sequence += 1
@@ -785,3 +850,820 @@ class MapReferenceStore:
         if math.isclose(scaled, nearest, abs_tol=1e-9):
             scaled = float(nearest)
         return math.floor(scaled)
+
+    def _reject_fixed_v1(self) -> None:
+        if self._fixed_cut is not None:
+            raise DomainError(ErrorCode.CONFLICT, "explicit V2 lifecycle required")
+
+    def bind_fixed_context(
+        self,
+        binding: OccupancyIngestBinding,
+        *,
+        source_identity: SourceIdentity,
+        host_boot_id: str,
+        acceptance_floor,
+        acceptance_floor_steady_ns: int,
+        accepting: Callable[[], bool],
+        clock: Callable[[], int] = time.monotonic_ns,
+        profiles: tuple[ProfileProvenance, ...] = (),
+        legacy_base=None,
+    ) -> FixedSnapshot:
+        """Opt-in pure C3 boundary after independently verified graph/source intake.
+
+        The source token owner supplies the live local fence, never a JSON field.
+        This grants no physical classification, navigation or production activation.
+        Existing V1 records require T4 migration and cannot be silently discarded.
+        """
+        from senior_mapping.workspace import FixedRaster
+
+        self._require_capture_writable()
+        self._check_binding(binding)
+        fixed_text(host_boot_id, 36)
+        fixed_uint(acceptance_floor_steady_ns)
+        if (
+            self._fixed_cut is not None
+            or self._fixed_retired
+            or self._ingest_progress is None
+            or self._live
+            or self._removed
+            or source_identity.backend_boot != binding.backend_boot
+            or source_identity.source_epoch != binding.source_epoch
+            or not callable(accepting)
+            or not callable(clock)
+            or not accepting()
+            or len(profiles) > 128
+            or len({p.profile_id for p in profiles}) != len(profiles)
+            or (
+                acceptance_floor is not None
+                and SourceIdentity.from_key(acceptance_floor) != source_identity
+            )
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "fixed context is not independently qualified")
+        anchors = tuple(sorted(self._anchor_snapshot(), key=lambda a: a.anchor_id.encode("utf-8")))
+        digest = anchor_digest(fixed_anchor_records(anchors))
+        extent = self.grid
+        raster = FixedRaster(
+            self.map_ref,
+            self.cell_size_m,
+            Pose2D(extent.origin_x, extent.origin_y, 0.0),
+            extent.width,
+            extent.height,
+            True,
+            False,
+        )
+        raster.install(anchors, (), (), legacy_base)
+        watermark = FixedWatermark(
+            self.map_ref,
+            self.map_generation,
+            binding.backend_boot,
+            host_boot_id,
+            source_identity,
+            self._ingest_progress.sequence,
+            digest,
+            0,
+            None,
+            0,
+            self.change_sequence,
+        )
+        cut = FixedSnapshot(
+            watermark,
+            raster.grid(),
+            anchors,
+            None,
+            (),
+            (),
+            legacy_base,
+            self.waypoint_bindings(),
+            profiles,
+        )
+        from senior_mapping.references import validate_fixed_snapshot
+
+        validate_fixed_snapshot(cut)
+        from senior_mapping.references import fixed_payload_size
+
+        if fixed_payload_size(cut) > 8 * 1024 * 1024:
+            raise DomainError(ErrorCode.VALIDATION, "fixed_capacity: encoded transfer")
+        self._fixed_accepting, self._fixed_clock = accepting, clock
+        self._fixed_floor, self._fixed_floor_ns = acceptance_floor, acceptance_floor_steady_ns
+        self._fixed_accepted = None
+        self._fixed_last_accepted = acceptance_floor
+        self._fixed_supports, self._fixed_tiles = {}, {}
+        self._fixed_by_anchor = {}
+        if legacy_base is not None:
+            for b in legacy_base.anchor_bindings:
+                self._fixed_by_anchor.setdefault(b.anchor_id, set()).update(
+                    ("l", i) for i in b.base_cell_indices
+                )
+        # IDs are owner-generated UUIDs; retained audit IDs need no unbounded tombstone list.
+        self._fixed_raster, self._fixed_cut = raster, cut
+        self._fixed_member_count = len(cut.waypoint_bindings) + (
+            0
+            if legacy_base is None
+            else sum(2 * len(b.base_cell_indices) for b in legacy_base.anchor_bindings)
+        )
+        return cut
+
+    def _check_binding(self, binding) -> None:
+        if (
+            binding is not self._ingest_binding
+            or binding is None
+            or binding.map_ref != self.map_ref
+            or self.review_required
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "fixed source binding is stale")
+
+    def _check_fixed_owner(self, binding) -> FixedSnapshot:
+        self._require_capture_writable()
+        self._check_binding(binding)
+        if self._fixed_cut is None or self._fixed_retired:
+            raise DomainError(ErrorCode.CONFLICT, "fixed session retired or unbound")
+        if not self._fixed_accepting():
+            self._fixed_retired = True
+            self._fixed_accepted = None
+            raise DomainError(ErrorCode.CONFLICT, "fixed owner observed retirement")
+        return self._fixed_cut
+
+    def retire_fixed(self, binding) -> None:
+        self._check_binding(binding)
+        self._interrupt_capture()
+        self._fixed_retired = True
+        self._fixed_accepted = None
+
+    def fixed_snapshot(self, binding) -> FixedSnapshot:
+        self._check_binding(binding)
+        if self._fixed_cut is None:
+            raise DomainError(ErrorCode.CONFLICT, "fixed mode is not bound")
+        # Waypoint owner shares change_sequence; never return a stale CAS watermark.
+        if self._fixed_cut.watermark.change_sequence != self.change_sequence:
+            self._fixed_cut = replace(
+                self._fixed_cut,
+                watermark=replace(self._fixed_cut.watermark, change_sequence=self.change_sequence),
+                waypoint_bindings=self.waypoint_bindings(),
+            )
+        return self._fixed_cut
+
+    def accept_scan(self, binding, scan, basis: VerifiedBasis) -> None:
+        """Verifier-owned accepted fact, retaining original capture/floor/deadline.
+
+        File readers call this only after original session verification. PENDING is
+        not a retirement event. Manager next/capture failure and stop/switch must
+        call retire_fixed (not yet wired to NativeSession in this stage).
+        """
+        from senior_mapping.shared_scan import QualifiedScan
+
+        cut = self._check_fixed_owner(binding)
+        w = cut.watermark
+        previous = self._fixed_last_accepted
+        if (
+            not isinstance(scan, QualifiedScan)
+            or not isinstance(basis, VerifiedBasis)
+            or SourceIdentity.from_key(scan.key) != w.source
+            or scan.host_boot_id != w.host_boot_id
+            or scan.key.backend_boot != w.backend_boot
+            or scan.capture.time.sample_steady_ns <= self._fixed_floor_ns
+            or (previous is not None and scan.key.sequence <= previous.sequence)
+            or (
+                basis.map_ref,
+                basis.reference_generation,
+                basis.graph_sequence,
+                basis.anchor_digest,
+            )
+            != (w.map_ref, w.reference_generation, w.graph_sequence, w.anchor_digest)
+            or self._known_anchors.get(basis.anchor_id) != basis.map_basis
+            or not scan.capture.time.sample_steady_ns
+            <= self._fixed_clock()
+            < scan.valid_until_steady_ns
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "scan does not belong to live verified cut")
+        self._fixed_accepted = (scan, basis, self._observed_bounds(scan, basis))
+        self._fixed_last_accepted = scan.key
+        self._fixed_cut = replace(cut, basis=basis)
+
+    def _observed_bounds(self, scan, basis):
+        from senior_mapping.workspace import _inverse, _transform
+
+        points = []
+        for beam in scan.beams:
+            if beam.kind not in ("hit", "clear") or beam.endpoint_odom is None:
+                continue
+            for p in (beam.origin_odom, beam.endpoint_odom):
+                points.append(_transform(_inverse(p, basis.odom_basis), basis.map_basis))
+        if not points:
+            return None
+        if not all(_finite_number(v) for p in points for v in p):
+            raise DomainError(ErrorCode.VALIDATION, "nonfinite observed bounds")
+        return (
+            min(p[0] for p in points),
+            min(p[1] for p in points),
+            max(p[0] for p in points),
+            max(p[1] for p in points),
+        )
+
+    def _check_fixed_fact(self, binding, expected):
+        self._check_fixed_owner(binding)
+        cut = self.fixed_snapshot(binding)
+        accepted = self._fixed_accepted
+        if accepted is None or expected != cut.watermark:
+            raise DomainError(ErrorCode.CONFLICT, "fixed full CAS or accepted scan mismatch")
+        scan, basis, bounds = accepted
+        if (
+            scan.host_boot_id != expected.host_boot_id
+            or SourceIdentity.from_key(scan.key) != expected.source
+            or (
+                basis.map_ref,
+                basis.reference_generation,
+                basis.graph_sequence,
+                basis.anchor_digest,
+            )
+            != (
+                expected.map_ref,
+                expected.reference_generation,
+                expected.graph_sequence,
+                expected.anchor_digest,
+            )
+            or self._known_anchors.get(basis.anchor_id) != basis.map_basis
+            or scan.capture.time.sample_steady_ns <= self._fixed_floor_ns
+            or (self._fixed_floor is not None and scan.key.sequence <= self._fixed_floor.sequence)
+            or not scan.capture.time.sample_steady_ns
+            <= self._fixed_clock()
+            < scan.valid_until_steady_ns
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "accepted capture expired or changed cut")
+        return cut, scan, basis, bounds
+
+    def ensure_observed_extent(self, binding, *, expected, bounds) -> FixedSnapshot:
+        cut, scan, basis, actual = self._check_fixed_fact(binding, expected)
+        if actual is None or bounds != actual:
+            raise DomainError(ErrorCode.VALIDATION, "extent is not the accepted scan bounds")
+        extent = self._fixed_extent(actual)
+        if extent == self._fixed_raster.extent:
+            return cut
+        try:
+            patch = self._fixed_raster.prepare({}, extent=extent)
+            watermark = replace(
+                cut.watermark,
+                fixed_revision=cut.watermark.fixed_revision + 1,
+                change_sequence=self.change_sequence + 1,
+            )
+            candidate = replace(cut, watermark=watermark, grid=patch.grid)
+            self._fixed_capacity(candidate, {}, {}, 0)
+        except ValueError as exc:
+            raise DomainError(ErrorCode.VALIDATION, str(exc)) from exc
+        self._check_fixed_fact(binding, expected)
+        self._fixed_raster.publish(patch)
+        self._fixed_cut = candidate
+        self._change_sequence = watermark.change_sequence
+        return candidate
+
+    def _fixed_extent(self, bounds, updates=None):
+        raster = self._fixed_raster
+        x0, y0, x1, y1 = raster.extent
+        if bounds is not None:
+            lo = raster._cell(bounds[:2])
+            hi = raster._cell(bounds[2:])
+            x0, y0, x1, y1 = min(x0, lo[0]), min(y0, lo[1]), max(x1, hi[0] + 1), max(y1, hi[1] + 1)
+        for projection in (updates or {}).values():
+            if projection is not None:
+                for x, y in projection.occupied | projection.free:
+                    x0, y0, x1, y1 = min(x0, x), min(y0, y), max(x1, x + 1), max(y1, y + 1)
+        return x0, y0, x1, y1
+
+    def allocate_support_id(self, binding) -> str:
+        """Only this owner issues new support identities, never reused on revocation."""
+        self._check_fixed_owner(binding)
+        identity = uuid.uuid4().hex
+        if not hasattr(self, "_fixed_issued"):
+            self._fixed_issued = set()
+        if len(self._fixed_issued) >= FIXED_CHANGES:
+            raise DomainError(ErrorCode.VALIDATION, "fixed_capacity: unconsumed support IDs")
+        self._fixed_issued.add(identity)
+        return identity
+
+    def commit_evidence(
+        self,
+        binding,
+        *,
+        expected_graph_sequence: int,
+        expected_anchor_digest: str,
+        delta: FixedDelta,
+    ) -> FixedSnapshot:
+        """One synchronous owning-loop transaction; no externally visible stage writes."""
+        cut, scan, basis, bounds = self._check_fixed_fact(binding, delta.expected)
+        w = cut.watermark
+        if (
+            type(expected_graph_sequence) is not int
+            or expected_graph_sequence != w.graph_sequence
+            or expected_anchor_digest != w.anchor_digest
+            or delta.key != scan.key
+            or delta.trigger_anchor_id != basis.anchor_id
+            or delta.evidence_revision <= w.evidence_revision
+            or (w.evidence_key is not None and delta.key.sequence <= w.evidence_key.sequence)
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "evidence belongs to a stale graph or scan")
+        try:
+            candidate, supports, tiles, patch, charge = self._prepare_fixed_delta(
+                cut, delta, bounds
+            )
+            self._fixed_capacity(candidate, supports, tiles, charge)
+        except (ValueError, OverflowError) as exc:
+            raise DomainError(ErrorCode.VALIDATION, str(exc)) from exc
+        self._check_fixed_fact(binding, delta.expected)
+        self._publish_fixed(candidate, supports, tiles, patch)
+        return candidate
+
+    def _stage_support_removals(self, delta):
+        supports = {}
+        charge = 0
+        handled = set()
+        free_removals = []
+        for removal in (*delta.revocations, *delta.support_cell_removals):
+            old = self._fixed_supports.get(removal.support_id)
+            if (
+                old is None
+                or removal.support_id in handled
+                or old.updated_evidence_revision != removal.expected_support_revision
+                or removal.trigger_key != delta.key
+                or removal.trigger_anchor_id != delta.trigger_anchor_id
+            ):
+                raise ValueError("invalid support removal reference or trigger")
+            handled.add(removal.support_id)
+            if hasattr(removal, "local_cells"):
+                removed = set(removal.local_cells)
+                free_removals.append(
+                    replace(
+                        old,
+                        local_cells=removal.local_cells,
+                        local_endpoints=tuple(
+                            p
+                            for p in old.local_endpoints
+                            if (
+                                math.floor(p[0] / old.resolution_m),
+                                math.floor(p[1] / old.resolution_m),
+                            )
+                            in removed
+                        ),
+                        local_surface=(),
+                    )
+                )
+                if not removed <= set(old.local_cells):
+                    raise ValueError("partial removal references missing cells")
+                cells = tuple(c for c in old.local_cells if c not in removed)
+                endpoints = tuple(
+                    p
+                    for p in old.local_endpoints
+                    if (math.floor(p[0] / old.resolution_m), math.floor(p[1] / old.resolution_m))
+                    not in removed
+                )
+                new = (
+                    None
+                    if not cells
+                    else replace(
+                        old,
+                        local_cells=cells,
+                        local_endpoints=endpoints,
+                        local_surface=endpoints[:32],
+                        updated_evidence_revision=delta.evidence_revision,
+                    )
+                )
+                surface = () if new is None else new.local_surface
+                charge += (
+                    len(removed)
+                    + len(old.local_endpoints)
+                    - len(endpoints)
+                    + 1
+                    + sum((Counter(old.local_surface) - Counter(surface)).values())
+                    + sum((Counter(surface) - Counter(old.local_surface)).values())
+                )
+            else:
+                if removal.reason == "observed_free_space":
+                    free_removals.append(old)
+                new = None
+                charge += old.member_count
+            supports[old.support_id] = new
+        return supports, charge, free_removals
+
+    def _stage_support_upserts(self, cut, delta, supports):
+        charge = 0
+        handled = set(supports)
+        profile_lookup = {p.profile_id: p for p in cut.profiles}
+        upsert_ids = set()
+        for s in delta.upsert_supports:
+            old = supports.get(s.support_id, self._fixed_supports.get(s.support_id))
+            original = self._fixed_supports.get(s.support_id)
+            if (
+                s.support_id in upsert_ids
+                or (s.support_id in handled and old is None)
+                or self._known_anchors.get(s.anchor_id) is None
+                or s.resolution_m != self.cell_size_m
+                or s.provenance != "geometric"
+                or s.source != cut.watermark.source
+                or s.last_key != delta.key
+                or s.updated_evidence_revision != delta.evidence_revision
+                or s.profile_id not in profile_lookup
+                or profile_lookup[s.profile_id].evidence_digest != s.evidence_digest
+            ):
+                raise ValueError("invalid admitted support/provenance")
+            if old is not None:
+                if (
+                    s.anchor_id != old.anchor_id
+                    or s.created_evidence_revision != old.created_evidence_revision
+                    or s.first_key != old.first_key
+                    or not set(old.local_cells) <= set(s.local_cells)
+                    or not Counter(old.local_endpoints) <= Counter(s.local_endpoints)
+                ):
+                    raise ValueError("support update silently shrinks or changes anchor")
+            elif original is None:
+                if (
+                    s.support_id not in getattr(self, "_fixed_issued", ())
+                    or s.created_evidence_revision != delta.evidence_revision
+                ):
+                    raise ValueError("support ID was not issued by this owner")
+            upsert_ids.add(s.support_id)
+            supports[s.support_id] = s
+            charge += (
+                s.member_count
+                if old is None
+                else (
+                    1
+                    + sum((Counter(s.local_endpoints) - Counter(old.local_endpoints)).values())
+                    + len(set(s.local_cells) - set(old.local_cells))
+                    + sum((Counter(s.local_surface) - Counter(old.local_surface)).values())
+                    + sum((Counter(old.local_surface) - Counter(s.local_surface)).values())
+                )
+            )
+        return charge
+
+    def _stage_free_tiles(self, cut, delta, updates):
+        tiles = {}
+        raster = self._fixed_raster
+        observed_free_regions = []
+        for t in delta.free_tiles:
+            old = self._fixed_tiles.get(t.tile_key)
+            if (
+                t.tile_key in tiles
+                or t.anchor_id != delta.trigger_anchor_id
+                or t.resolution_m != self.cell_size_m
+                or t.source != cut.watermark.source
+                or t.last_observed_key != delta.key
+                or t.evidence_revision != delta.evidence_revision
+                or t.tile_revision != (1 if old is None else old.tile_revision + 1)
+            ):
+                raise ValueError("invalid complete free replacement")
+            observed_projection = raster.free_projection(t, self._known_anchors[t.anchor_id])
+            observed_free_regions.append(observed_projection)
+            xor = int.from_bytes(t.active_mask, "little") ^ (
+                0 if old is None else int.from_bytes(old.active_mask, "little")
+            )
+            if xor == 0:
+                # Reobserving already active bits is not a new local generation.
+                continue
+            tiles[t.tile_key] = t if any(t.active_mask) else None
+            updates["f", t.tile_key] = None if tiles[t.tile_key] is None else observed_projection
+        return tiles, observed_free_regions
+
+    def _prepare_fixed_delta(self, cut, delta, bounds):
+        from senior_mapping.workspace import _Projection
+
+        supports, charge, free_removals = self._stage_support_removals(delta)
+        charge += self._stage_support_upserts(cut, delta, supports)
+        updates = {}
+        raster = self._fixed_raster
+        for identity, s in supports.items():
+            updates["s", identity] = (
+                None
+                if s is None
+                else raster.support_projection(s, self._known_anchors[s.anchor_id])
+            )
+        tiles, observed_free_regions = self._stage_free_tiles(cut, delta, updates)
+        qualified_free = set()
+        for projection in observed_free_regions:
+            qualified_free.update(projection.free)
+        for removed in free_removals:
+            projected = raster.support_projection(removed, self._known_anchors[removed.anchor_id])
+            if not projected.occupied <= qualified_free:
+                raise ValueError("free removal lacks complete qualified region for selected cells")
+        # Every occupied write invalidates *all* intersecting older free, including
+        # partial rotated bits that did not render as a complete target F cell.
+        occupied = raster.occupied_cells(updates)
+        # New free also cannot survive an independent occupied support.
+        for projection in tuple(updates.values()):
+            if projection is not None:
+                for cell, _local in projection.free_bits:
+                    if raster._legacy_value(cell, cut.legacy_base) == 100:
+                        occupied.add(cell)
+                    for key in raster.reverse.get(cell, ()):
+                        current = updates.get(key, raster.records.get(key, _Projection()))
+                        if current is not None and cell in current.occupied:
+                            occupied.add(cell)
+        self._invalidate_fixed_free(occupied, tiles, updates)
+        charge += self._finalize_fixed_tiles(tiles, updates, self._known_anchors)
+        legacy, legacy_dirty, legacy_charge = self._legacy_edits(cut, delta, occupied, updates)
+        charge += legacy_charge
+        patch = raster.prepare(
+            updates,
+            extent=self._fixed_extent(bounds, updates),
+            legacy=legacy,
+            legacy_dirty=legacy_dirty,
+        )
+        watermark = replace(
+            cut.watermark,
+            fixed_revision=cut.watermark.fixed_revision + 1,
+            evidence_key=delta.key,
+            evidence_revision=delta.evidence_revision,
+            change_sequence=self.change_sequence + 1,
+        )
+        candidate = replace(
+            cut,
+            watermark=watermark,
+            grid=patch.grid,
+            supports=self._patched_fixed_members(
+                self._fixed_supports, supports, cut.supports, lambda s: s.support_id
+            ),
+            free_tiles=self._patched_fixed_members(
+                self._fixed_tiles, tiles, cut.free_tiles, lambda t: t.tile_key
+            ),
+            legacy_base=legacy,
+        )
+        return candidate, supports, tiles, patch, charge
+
+    @staticmethod
+    def _patched_fixed_members(current, edits, original, sort_key):
+        if not edits:
+            return original
+        members = [edits.get(k, v) for k, v in current.items() if edits.get(k, v) is not None]
+        members.extend(v for k, v in edits.items() if k not in current and v is not None)
+        return tuple(sorted(members, key=sort_key))
+
+    def _invalidate_fixed_free(self, occupied, tiles, updates, poses=None):
+        charge = 0
+        raster = self._fixed_raster
+        poses = self._known_anchors if poses is None else poses
+        for key, cells in raster.overlapping_free(occupied, updates).items():
+            tile = tiles.get(key, self._fixed_tiles.get(key))
+            if tile is None:
+                continue
+            mask = bytearray(tile.active_mask)
+            changed = 0
+            for x, y in cells:
+                bit = 32 * (y - 32 * tile.tile_y) + (x - 32 * tile.tile_x)
+                if mask[bit // 8] & (1 << (bit % 8)):
+                    mask[bit // 8] &= ~(1 << (bit % 8))
+                    changed += 1
+            if changed:
+                charge += changed
+                updated = replace(
+                    tile, active_mask=bytes(mask), tile_revision=tile.tile_revision + 1
+                )
+                tiles[key] = updated if any(mask) else None
+                updates["f", key] = (
+                    None
+                    if tiles[key] is None
+                    else raster.free_projection(updated, poses[tile.anchor_id])
+                )
+        return charge
+
+    def _finalize_fixed_tiles(self, tiles, updates, poses):
+        """Charge committed bit differences and retain no-op local generations."""
+        charge = 0
+        for key in tuple(tiles):
+            old = self._fixed_tiles.get(key)
+            new = tiles[key]
+            before = 0 if old is None else int.from_bytes(old.active_mask, "little")
+            after = 0 if new is None else int.from_bytes(new.active_mask, "little")
+            charge += (before ^ after).bit_count()
+            if before == after:
+                del tiles[key]
+                if old is None:
+                    updates.pop(("f", key), None)
+                else:
+                    updates["f", key] = self._fixed_raster.free_projection(
+                        old, poses[old.anchor_id]
+                    )
+            elif old is not None and new is not None and not after & ~before:
+                # Derived clearing must not claim a new free observation.
+                tiles[key] = replace(
+                    new,
+                    last_observed_key=old.last_observed_key,
+                    source=old.source,
+                    evidence_revision=old.evidence_revision,
+                )
+        return charge
+
+    def _legacy_edits(self, cut, delta, occupied, updates, poses=None):
+        base = cut.legacy_base
+        if base is None:
+            if delta.legacy_edits:
+                raise ValueError("legacy edit without base")
+            return None, (), 0
+        mask = bytearray(base.live_mask)
+        cleared = set()
+        for edit in delta.legacy_edits:
+            if (
+                edit.base_id != base.base_id
+                or edit.trigger_key != delta.key
+                or edit.trigger_anchor_id != delta.trigger_anchor_id
+            ):
+                raise ValueError("legacy trigger mismatch")
+            for i, value in zip(edit.cell_indices, edit.expected_values, strict=False):
+                if (
+                    i >= len(base.grid.cells)
+                    or i in cleared
+                    or base.grid.cells[i] != value
+                    or not mask[i // 8] & (1 << (i % 8))
+                ):
+                    raise ValueError("legacy expected value mismatch")
+                cleared.add(i)
+        raster = self._fixed_raster
+        updated_free = {}
+        for (kind, index), projection in updates.items():
+            if kind == "l" and projection is not None and base.grid.cells[index] == 0:
+                for cell in projection.free:
+                    updated_free.setdefault(cell, set()).add(index)
+        for cell in occupied:
+            for i in raster.legacy_indices(cell, base):
+                if (
+                    i not in raster.legacy_bound
+                    and base.grid.cells[i] == 0
+                    and mask[i // 8] & (1 << (i % 8))
+                ):
+                    cleared.add(i)
+            for key in raster.reverse.get(cell, ()):
+                if key[0] == "l" and base.grid.cells[key[1]] == 0:
+                    cleared.add(key[1])
+            cleared.update(updated_free.get(cell, ()))
+        for i in cleared:
+            mask[i // 8] &= ~(1 << (i % 8))
+        new = replace(base, live_mask=bytes(mask)) if cleared else base
+        dirty = set()
+        bound = []
+        for i in cleared:
+            if i in raster.legacy_bound:
+                bound.append(i)
+            else:
+                dirty.add(
+                    raster._cell(
+                        (
+                            base.grid.origin.x + (i % base.grid.width + 0.5) * self.cell_size_m,
+                            base.grid.origin.y + (i // base.grid.width + 0.5) * self.cell_size_m,
+                        )
+                    )
+                )
+        updates.update(
+            raster.legacy_projections(new, self._known_anchors if poses is None else poses, bound)
+        )
+        return new, dirty, len(cleared)
+
+    def _fixed_capacity(self, candidate, supports, tiles, charge):
+        # Count aggregate full members, including surface summaries, not just IDs.
+        count = self._fixed_member_count
+        for key, new in supports.items():
+            old = self._fixed_supports.get(key)
+            count += (0 if new is None else new.member_count) - (
+                0 if old is None else old.member_count
+            )
+        tile_count = len(self._fixed_tiles) + sum(
+            (new is not None) - (key in self._fixed_tiles) for key, new in tiles.items()
+        )
+        if count > FIXED_MEMBERS or tile_count > FIXED_TILES or charge > FIXED_CHANGES:
+            raise ValueError(
+                "fixed_capacity: complete transaction exceeds member/tile/change bound"
+            )
+        # Strict actual encoded budgets are checked before publication; a cached
+        # component-size ledger avoids serializing anchors/members every scan.
+        size = self._fixed_encoded_size(candidate, supports, tiles)
+        if size > 8 * 1024 * 1024:
+            raise ValueError("fixed_capacity: encoded transfer")
+        return count
+
+    def _fixed_encoded_size(self, cut, supports, tiles):
+        # Filled by references' explicit codec component encoder; no second schema.
+        from senior_mapping.references import fixed_payload_size
+
+        if not hasattr(self, "_fixed_size_cache"):
+            self._fixed_size_cache = {}
+        return fixed_payload_size(cut, self._fixed_size_cache)
+
+    def _publish_fixed(self, candidate, supports, tiles, patch):
+        for key, new in supports.items():
+            old = self._fixed_supports.get(key)
+            self._fixed_member_count += (0 if new is None else new.member_count) - (
+                0 if old is None else old.member_count
+            )
+            if old is not None:
+                self._fixed_by_anchor[old.anchor_id].discard(("s", key))
+            if new is None:
+                self._fixed_supports.pop(key, None)
+            else:
+                self._fixed_supports[key] = new
+                self._fixed_by_anchor.setdefault(new.anchor_id, set()).add(("s", key))
+            getattr(self, "_fixed_issued", set()).discard(key)
+        for key, new in tiles.items():
+            old = self._fixed_tiles.get(key)
+            if old is not None:
+                self._fixed_by_anchor[old.anchor_id].discard(("f", key))
+            if new is None:
+                self._fixed_tiles.pop(key, None)
+            else:
+                self._fixed_tiles[key] = new
+                self._fixed_by_anchor.setdefault(new.anchor_id, set()).add(("f", key))
+        self._fixed_raster.publish(patch)
+        self._fixed_raster.legacy = candidate.legacy_base
+        self._fixed_cut = candidate
+        self._change_sequence = candidate.watermark.change_sequence
+
+    def _prepare_fixed_graph(self, staged, sequence, anchors):
+        cut = self._fixed_cut
+        if self._fixed_retired or not self._fixed_accepting():
+            self._fixed_retired = True
+            raise DomainError(ErrorCode.CONFLICT, "fixed session retired")
+        # Graph correction costs only affected anchors' cached members; graph cut
+        # validation itself retains the original complete-graph continuity check.
+        changed = {k for k, v in staged._known_anchors.items() if self._known_anchors.get(k) != v}
+        raster = self._fixed_raster
+        updates = {}
+        affected_legacy = []
+        for anchor in changed:
+            for kind, key in self._fixed_by_anchor.get(anchor, ()):
+                if kind == "s":
+                    s = self._fixed_supports[key]
+                    updates[kind, key] = raster.support_projection(s, staged._known_anchors[anchor])
+                elif kind == "f":
+                    t = self._fixed_tiles[key]
+                    updates[kind, key] = raster.free_projection(t, staged._known_anchors[anchor])
+                else:
+                    affected_legacy.append(key)
+        tiles = {}
+        base = cut.legacy_base
+        if base is not None:
+            updates.update(raster.legacy_projections(base, staged._known_anchors, affected_legacy))
+        occupied = raster.occupied_cells(updates)
+        for projection in tuple(updates.values()):
+            if projection is not None:
+                for cell, _local in projection.free_bits:
+                    if raster._legacy_value(cell, base) == 100:
+                        occupied.add(cell)
+                    for key in raster.reverse.get(cell, ()):
+                        current = updates.get(key, raster.records.get(key))
+                        if current is not None and cell in current.occupied:
+                            occupied.add(cell)
+        self._invalidate_fixed_free(occupied, tiles, updates, staged._known_anchors)
+        charge = self._finalize_fixed_tiles(tiles, updates, staged._known_anchors)
+        # Same legacy edit engine, with no synthetic observation or new evidence key.
+        from types import SimpleNamespace
+
+        legacy_delta = SimpleNamespace(legacy_edits=())
+        base, legacy_dirty, legacy_charge = self._legacy_edits(
+            cut, legacy_delta, occupied, updates, staged._known_anchors
+        )
+        charge += legacy_charge
+        grid = anchors.grid
+        lo = raster._cell((grid.origin_x, grid.origin_y))
+        hi = raster._cell(
+            (
+                grid.origin_x + grid.width * self.cell_size_m,
+                grid.origin_y + grid.height * self.cell_size_m,
+            )
+        )
+        x0, y0, x1, y1 = raster.extent
+        ux0, uy0, ux1, uy1 = self._fixed_extent(None, updates)
+        patch = raster.prepare(
+            updates,
+            extent=(min(ux0, lo[0]), min(uy0, lo[1]), max(ux1, hi[0]), max(uy1, hi[1])),
+            legacy=base,
+            legacy_dirty=legacy_dirty,
+        )
+        watermark = replace(
+            cut.watermark,
+            reference_generation=staged.map_generation,
+            graph_sequence=sequence,
+            anchor_digest=anchor_digest(fixed_anchor_records(anchors.anchors)),
+            fixed_revision=cut.watermark.fixed_revision + 1,
+            change_sequence=staged.change_sequence,
+        )
+        tt = tuple(
+            tiles.get(k, v) for k, v in self._fixed_tiles.items() if tiles.get(k, v) is not None
+        )
+        candidate = replace(
+            cut,
+            watermark=watermark,
+            anchors=tuple(sorted(anchors.anchors, key=lambda a: a.anchor_id.encode("utf-8"))),
+            basis=None,
+            grid=patch.grid,
+            free_tiles=tuple(sorted(tt, key=lambda t: t.tile_key)),
+            legacy_base=base,
+            waypoint_bindings=staged.waypoint_bindings(),
+        )
+        self._fixed_capacity(candidate, {}, tiles, charge)
+        floor = self._fixed_floor_ns
+        if cut.watermark.reference_generation != watermark.reference_generation:
+            floor = self._fixed_clock()
+            fixed_uint(floor)
+        self._check_fixed_owner(self._ingest_binding)
+        return candidate, {}, tiles, patch, floor
+
+    def _publish_fixed_graph(self, stage):
+        self._publish_fixed(*stage[:4])
+        self._fixed_floor_ns = stage[4]
+        self._fixed_accepted = None
+        self._fixed_floor = self._fixed_last_accepted
+        # Original graph basis changes require a fresh scan but graph PENDING does not.

@@ -155,3 +155,262 @@ def test_home_binding_update_keeps_the_live_observation_stream_and_reference() -
     assert active.map_generation == generation
     with pytest.raises(DomainError):
         active.update_waypoints(source, expected_sequence=1, changes=(home,))
+
+
+def fixed_episode_setup(*, legacy_base=None):
+    """Synthetic admitted evidence only: no physical stability classification."""
+    from senior_mapping.evidence import ProfileProvenance, SourceIdentity
+    from senior_mapping.shared_scan import ScanKey
+
+    active, token = session()
+    active.commit(token, 1, "kf1", anchors(1, 8), ())
+    identity = SourceIdentity.from_key(
+        ScanKey("graph-a", "bridge", "scanner-a", 1, 1, "01", "02", 0)
+    )
+    state = {"accepting": True, "now": 1_000_000_100}
+    active.bind_fixed_context(
+        token,
+        source_identity=identity,
+        host_boot_id="host",
+        acceptance_floor=None,
+        acceptance_floor_steady_ns=0,
+        accepting=lambda: state["accepting"],
+        clock=lambda: state["now"],
+        profiles=(ProfileProvenance("synthetic-admitted", "a" * 64, {}),),
+        legacy_base=legacy_base,
+    )
+    return active, token, identity, state
+
+
+def accepted_fixed_scan(active, token, state, seq, anchor="kf1", endpoint=(3.75, 0.75)):
+    from senior_mapping.evidence import VerifiedBasis
+    from senior_mapping.shared_scan import Beam, QualifiedScan, ScanKey
+    from senior_perception.vision.raw_capture import RawCaptureHeader
+
+    from vehicle_core.sample_time import SampleTime
+
+    t = 1_000_000_000 + seq * 1_000_000
+    state["now"] = t + 1
+    capture = RawCaptureHeader(
+        SampleTime(t, t, t, t, 1), "laser", "01", "02", "scanner-a", "bridge", 1, seq, True, ""
+    )
+    scan = QualifiedScan(
+        ScanKey.of("graph-a", capture),
+        capture,
+        "synthetic",
+        POSE,
+        (Beam(0, (0.0, 0.0), endpoint, "hit"),),
+        t + 500_000_000,
+        "host",
+    )
+    cut = active.fixed_snapshot(token)
+    pose = next(a.pose for a in cut.anchors if a.anchor_id == anchor)
+    basis = VerifiedBasis(
+        anchor,
+        pose,
+        POSE,
+        cut.watermark.graph_sequence,
+        cut.watermark.anchor_digest,
+        MAP,
+        active.map_generation,
+    )
+    active.accept_scan(token, scan, basis)
+    return scan, active.fixed_snapshot(token)
+
+
+def test_fixed_three_state_lifecycle_episode():
+    from dataclasses import replace
+
+    from senior_mapping.evidence import (
+        FixedDelta,
+        FreeTile,
+        StableSupport,
+        SupportCellRemoval,
+        SupportRevocation,
+    )
+    from test_map_references import assert_fixed_episode_codec, fixed_episode_legacy_base
+
+    active, token, identity, state = fixed_episode_setup(legacy_base=fixed_episode_legacy_base(MAP))
+
+    def apply(seq, build=lambda key, cut: {}, anchor="kf1"):
+        scan, cut = accepted_fixed_scan(active, token, state, seq, anchor)
+        delta = FixedDelta(cut.watermark, scan.key, seq, anchor, **build(scan.key, cut))
+        from senior_mapping.references import decode_fixed_delta, encode_fixed_delta
+
+        delta = decode_fixed_delta(encode_fixed_delta(delta))
+        return active.apply_evidence(
+            token,
+            expected_graph_sequence=cut.watermark.graph_sequence,
+            expected_anchor_digest=cut.watermark.anchor_digest,
+            delta=delta,
+        )
+
+    def tile(key, revision, cells, anchor="kf1"):
+        mask = bytearray(128)
+        for x, y in cells:
+            bit = 32 * y + x
+            mask[bit // 8] |= 1 << (bit % 8)
+        return FreeTile(anchor, 0.5, 0, 0, bytes(mask), revision, key, identity, key.sequence)
+
+    names = {name: active.allocate_support_id(token) for name in ("wall", "object")}
+
+    def support(name, cells, key):
+        endpoints = tuple((x * 0.5 + 0.25, y * 0.5 + 0.25) for x, y in cells)
+        if name == "wall":
+            endpoints = (endpoints[0],) * 32 + endpoints[1:]
+        return StableSupport(
+            names[name],
+            "kf1",
+            0.5,
+            endpoints[:32],
+            endpoints,
+            cells,
+            key,
+            key,
+            identity,
+            "geometric",
+            "synthetic-admitted",
+            "a" * 64,
+            key.sequence,
+            key.sequence,
+        )
+
+    old_free = apply(1, lambda k, c: {"free_tiles": (tile(k, 1, ((1, 0), (2, 0), (5, 0))),)})
+    assert old_free.grid.cells[:8] == bytes([255, 0, 0, 255, 255, 0, 255, 100])
+    occupied = apply(
+        2,
+        lambda k, c: {
+            "upsert_supports": (
+                support("wall", ((1, 0), (3, 0), (4, 0)), k),
+                support("object", ((1, 0), (2, 0)), k),
+            )
+        },
+    )
+    assert occupied.grid.cells[:8] == bytes([255, 100, 100, 100, 100, 0, 255, 100])
+    moved = apply(
+        3,
+        lambda k, c: {
+            "revocations": (SupportRevocation(names["object"], 2, "motion_evidenced", k, "kf1"),)
+        },
+    )
+    assert moved.grid.cells[:8] == bytes([255, 100, 255, 100, 100, 0, 255, 100])
+    assert not moved.legacy_base.live_mask[0] & 4
+    assert moved.free_tiles[0].active_mask[0] == 32  # old free cannot revive
+    occluded = apply(4)
+    assert occluded.grid is moved.grid  # no geometry/bytes copy on evidence-only update
+    assert occluded.watermark.graph_sequence == 1
+    assert occluded.watermark.fixed_revision > moved.watermark.fixed_revision
+    # Full CAS and source token; rejected transactions leave the complete cut unchanged.
+    scan, cut = accepted_fixed_scan(active, token, state, 5, endpoint=(4.25, 0.75))
+    # Natural scan extent changes fixed/dirty only, and repeating it is a no-op.
+    expanded = active.ensure_observed_extent(
+        token, expected=cut.watermark, bounds=(0.0, 0.0, 4.25, 0.75)
+    )
+    assert expanded.grid.width == 9
+    assert expanded.watermark.evidence_key == cut.watermark.evidence_key
+    assert expanded.watermark.graph_sequence == cut.watermark.graph_sequence
+    assert expanded.watermark.change_sequence == cut.watermark.change_sequence + 1
+    assert (
+        active.ensure_observed_extent(
+            token, expected=expanded.watermark, bounds=(0.0, 0.0, 4.25, 0.75)
+        )
+        is expanded
+    )
+    cut = expanded
+    # A complete over-budget upgrade is rejected after staging, retaining walls,
+    # old-free invalidation and every watermark; it does not retire Q intake.
+    oversized = tuple(
+        StableSupport(
+            active.allocate_support_id(token),
+            "kf1",
+            0.5,
+            ((3.25, 0.25),) * 32,
+            ((3.25, 0.25),) * 2048,
+            ((6, 0),),
+            scan.key,
+            scan.key,
+            identity,
+            "geometric",
+            "synthetic-admitted",
+            "a" * 64,
+            5,
+            5,
+        )
+        for _ in range(4)
+    )
+    with pytest.raises(DomainError, match="fixed_capacity"):
+        active.apply_evidence(
+            token,
+            expected_graph_sequence=1,
+            expected_anchor_digest=cut.watermark.anchor_digest,
+            delta=FixedDelta(cut.watermark, scan.key, 5, "kf1", upsert_supports=oversized),
+        )
+    assert active.fixed_snapshot(token) == cut
+    stale = FixedDelta(occupied.watermark, scan.key, 5, "kf1")
+    with pytest.raises(DomainError):
+        active.apply_evidence(
+            token,
+            expected_graph_sequence=1,
+            expected_anchor_digest=cut.watermark.anchor_digest,
+            delta=stale,
+        )
+    assert active.fixed_snapshot(token) == cut
+    with pytest.raises(DomainError):
+        active.ensure_observed_extent(object(), expected=cut.watermark, bounds=(0, 0, 4, 1))
+    with pytest.raises(DomainError):
+        active.ensure_observed_extent(token, expected=cut.watermark, bounds=(-999, 0, 4, 1))
+    with pytest.raises(DomainError), active._store.freeze_for_capture():
+        with pytest.raises(DomainError):
+            active.apply_evidence(
+                token,
+                expected_graph_sequence=1,
+                expected_anchor_digest=cut.watermark.anchor_digest,
+                delta=FixedDelta(cut.watermark, scan.key, 5, "kf1"),
+            )
+    # Original graph rule: exactly one new anchor; correction changes R, never graph spoofing.
+    corrected = AnchorSnapshot(
+        MAP,
+        "wheel_odom",
+        (AnchorPose("kf1", Pose2D(0.5, 0, 0), True), AnchorPose("kf2", POSE, True)),
+        GridExtent(9, 3, 0, 0),
+    )
+    active.commit(token, 2, "kf2", corrected, ())
+    partial = apply(
+        6,
+        lambda k, c: {
+            "support_cell_removals": (
+                SupportCellRemoval(names["wall"], 2, ((3, 0),), "observed_free_space", k, "kf2"),
+            ),
+            "free_tiles": (tile(k, 1, ((4, 0),), "kf2"),),
+        },
+        "kf2",
+    )
+    assert partial.grid.cells[2] == 100  # remaining independently supported wall
+    assert partial.grid.cells[4] == 0
+    assert partial.grid.cells[5] == 100
+    wall = next(s for s in partial.supports if s.support_id == names["wall"])
+    assert wall.anchor_id == "kf1" and wall.local_cells == ((1, 0), (4, 0))
+    assert len(wall.local_endpoints) == 33
+    # Rotation of a free tile: target boundaries require full coverage.
+    rotated = AnchorSnapshot(
+        MAP,
+        "wheel_odom",
+        corrected.anchors + (AnchorPose("kf3", Pose2D(0, 0, 0.35), True),),
+        GridExtent(9, 3, 0, 0),
+    )
+    active.commit(token, 3, "kf3", rotated, ())
+    rotated_cut = apply(7, lambda k, c: {"free_tiles": (tile(k, 1, ((0, 0),), "kf3"),)}, "kf3")
+    assert rotated_cut.grid.cells[0] == 255
+    assert_fixed_episode_codec(rotated_cut)
+    # Explicit V2 opt-in cannot silently pass through the production V1 saver.
+    from pathlib import Path
+
+    with pytest.raises(DomainError):
+        active._store.snapshot(Path("/unused"), ())
+    # Observed retirement permanently fences a previously accepted file fact.
+    state["accepting"] = False
+    with pytest.raises(DomainError):
+        accepted_fixed_scan(active, token, state, 8, "kf3")
+    state["accepting"] = True
+    with pytest.raises(DomainError):
+        active.accept_scan(token, scan, replace(cut.basis))
