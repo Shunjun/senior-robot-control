@@ -1021,3 +1021,52 @@ async def test_shared_owner_capacity_rejection_keeps_old_bound_supports(tmp_path
     assert owner._evidence.reason == "coverage_limit"
     assert not owner._fixed_retired
     assert native.reference.coverage_reason == "coverage_limit"
+
+
+async def test_shared_owner_graph_correction_overlaps_independent_wall_before_object_motion(
+    tmp_path, monkeypatch
+):
+    from dataclasses import asdict
+
+    from test_scan_geometry import episode_frame
+
+    owner, native, clock = shared_owner(tmp_path, monkeypatch)
+    native.pending_graph = True
+    for sequence in range(2, 5):
+        cut = await offer_owner_scan(owner, clock, sequence, wall=False)
+    object_support = cut.supports[0]
+
+    def graph_commit(sequence, sample):
+        native.sequence = sequence
+        graph = native.cut()
+        graph["capture"] = asdict(episode_frame(sample).capture)
+        owner._apply(graph)
+        native.navigation.observe_cut(graph)
+        return owner.active.fixed_snapshot(owner.source)
+
+    native.anchors.append(dict(id=1, x=0.0, y=0.0, yaw=0.0))
+    graph_commit(2, 4)
+    for sequence in range(5, 9):
+        cut = await offer_owner_scan(owner, clock, sequence)
+    wall = next(s for s in cut.supports if s.anchor_id == "1")
+    native.anchors[1].update(x=-1.5, y=-1.5)
+    native.anchors.append(dict(id=2, x=0.0, y=0.0, yaw=0.0))
+    corrected = graph_commit(3, 8)
+    raster = owner.active._store._fixed_raster
+    poses = {a.anchor_id: a.pose for a in corrected.anchors}
+    overlap = (
+        raster.support_projection(object_support, poses["0"]).occupied
+        & raster.support_projection(wall, poses["1"]).occupied
+    )
+    assert overlap, "independent contributions must really share cells after graph correction"
+    old_x = math.floor((4.5 - corrected.grid.origin.x) / 0.05)
+    old_y = math.floor((1.55 - corrected.grid.origin.y) / 0.05)
+    assert corrected.grid.cells[old_y * corrected.grid.width + old_x] == 255
+    for sequence in range(9, 12):
+        await offer_owner_scan(owner, clock, sequence)
+    for sequence, offset in ((12, 0.2), (13, 0.4), (14, 0.6), (15, 0.8)):
+        cut = await offer_owner_scan(owner, clock, sequence, offset=offset)
+    assert object_support.support_id not in {s.support_id for s in cut.supports}
+    assert next(s for s in cut.supports if s.support_id == wall.support_id) == wall
+    x0, y0, _, _ = raster.extent
+    assert all(cut.grid.cells[(y - y0) * cut.grid.width + x - x0] == 100 for x, y in overlap)
