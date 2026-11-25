@@ -1,0 +1,19 @@
+--- a/nav2_mppi_controller/src/critics/cost_critic.cpp
++++ b/nav2_mppi_controller/src/critics/cost_critic.cpp
+@@ -162,6 +162,16 @@
+       // Note that we collision check based on the footprint actual,
+       // but score based on the center-point cost regardless
+       using namespace nav2_costmap_2d; // NOLINT
++      // Compatible with pinned Humble 1.1.20: the real collision check above stays authoritative.
++      // Only in-grid allowed unknown is neutral; preserve exterior and known obstacle costs.
++      unsigned int unknown_mx, unknown_my;
++      if (pose_cost == NO_INFORMATION &&
++        costmap_ros_->getLayeredCostmap()->isTrackingUnknown() &&
++        collision_checker_.worldToMap(traj.x(i, j), traj.y(i, j), unknown_mx, unknown_my))
++      {
++        continue;
++      }
++
+       if (pose_cost >= INSCRIBED_INFLATED_OBSTACLE) {
+         repulsive_cost[i] += critical_cost_;
+       } else if (!near_goal) {  // Generally prefer trajectories further from obstacles

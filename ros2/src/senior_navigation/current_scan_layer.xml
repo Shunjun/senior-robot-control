@@ -1,0 +1,7 @@
+<library path="senior_current_scan_layer">
+  <class name="senior_navigation::CurrentScanLayer"
+         type="senior_navigation::CurrentScanLayer"
+         base_class_type="nav2_costmap_2d::Layer">
+    <description>Current qualified map-frame hits, with bounded lifetime and reversible contributions.</description>
+  </class>
+</library>

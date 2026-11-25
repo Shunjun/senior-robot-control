@@ -136,3 +136,181 @@ planner 和 DedicatedController，必须核对实际选中文件及安装态参�
 Smac/MPPI 的 unknown 通道和 unknown/lethal 混合足迹，以及插件安装态 S12–S14 均未验。
 精确部署版/ABI 与实际物理 profile 证据尚缺；整个 unknown 导航功能交付继续阻塞，不能仅凭此
 配置和准入通过宣布 Nav2 已安全交付。未实现自研 frontier、临时等待、通道 ban 或第二运动规则。
+
+## 2026-11-26：全量 current Q 插件与原 owner 覆盖契约（待联验）
+
+`senior_navigation::CurrentScanLayer` 是薄 Nav2 Layer；live global/local 顺序均为
+StaticLayer→CurrentScanLayer→InflationLayer。它消费 map-frame 的全部当前 hit（最多2048），
+不使用 UI 的96点预览、不作物体分类、预测、历史续占据或写第二张固定地图。local 保持 odom
+滚动窗口，每周期将 owner 已补偿的 map 点转入本 costmap frame；窗口外点仍保留在完整 Q，
+由 global 覆盖。global 同时检查实际 master 范围和全部 hit，未扩域时 current=false。
+
+旧实际渲染范围与本周期新点范围共同进入 updateBounds；Nav2 原 LayeredCostmap 重置该范围后，
+StaticLayer 重铺真实固定 O/F/U，Q 只写当次 lethal，InflationLayer 按原机制重算。Q 移走、
+有效空、失格、过期、reset 或 disable 均不直接把 master 写 free；旧点及膨胀撤去后，固定墙
+仍参与规划，原 unknown 不会因没有当前 hit 被证明 free。reset/deactivate/resize 保留一次清旧域
+机会，没有私有 dense grid、额外永久线程或跨周期历史点表。
+
+Q 不能给自身授权。原 startup 必须给两个 costmap 注入同一私有0700运行目录、run nonce、
+真实 host boot 及各自 role permit；插件严格读取原 bridge 的 `reference.json` schema1，
+检查原 selected 授权、MapRef/R/backend/full source、floor、期限，再检查 Q 的原整数首收时间、
+单调同源 sequence、map frame 与 finite hit。授权换代、失格或绝对期限到期不能靠重复 Q、
+文件 revision、bridge ACK 或 timer 续期。Q 使用可靠 KEEP_LAST=1/volatile；逐消息 DDS GID
+还须匹配唯一 Q writer 与同 node 的唯一 `/map` writer，但节点名称/GID 本身不是选图授权。
+该契约沿原同机同uid受信进程边界，不声称提供 DDS 消息签名或跨主机 steady 时钟协议。
+
+插件把完成周期的实际 master geometry、处理的原 ScanKey/截止、清理及全量覆盖结果写到
+`global-coverage.json` / `local-coverage.json`。健康新周期保留上一份同授权/domain且未到期的
+完成回执；明确失格立即排负回执。回执期限不超过原 Q、授权 lease 和本周期开始后0.5秒。
+文件读写由现有 costmap ROS executor 的独立 callback group 定时处理，单 writer 合并待写槽，
+不持 master/插件状态锁作文件 I/O。原 LiveMappingReference 的 selected、scan 和两端 coverage
+合取、许可换代及 static/live 生命周期交接由原 owner 独立实现，不能把本插件 current 位当作
+该跨进程接线已经完成；回执也不冒充 stock StaticLayer 已装入某个内容 G 的证明。
+
+canonical nav2.yaml 的 live 两端启用 Q，原 `/scan` ObstacleLayer 参数作为 inactive 配置保留，
+供原 startup 生成静态 fallback overlay；live 插件列表不重复选择 `/scan`。本 child 不再修改
+simulation_motion.launch.py，临时 overlay、planner/DedicatedController 同路径消费和静态
+map_server/AMCL 交接归原 startup owner。缺运行目录/许可时插件拒绝配置，不能直接拿 canonical
+live 文件替代尚未交接的静态部署。global update_frequency 从1 Hz调整至5 Hz，与 local一致，
+配合原0.5秒 Q 期限；未加长期限，这不是 VM/实机时延或 CPU 达标承诺。footprint/padding、
+速度、MPPI critic 参数、Smac allow_unknown 及原任务取消保护没有放宽；
+允许 unknown 的 CostCritic 评分修复边界见下文。
+
+已读取参考 VM Ubuntu22.04 ARM64 的 Humble安装头文件：costmap
+1.1.20-1jammy.20260916.124031、MPPI .130539、Smac .131156；严格 JSON 依赖为
+`nlohmann_json >=3.10.5`，该 VM 已安装 nlohmann-json3-dev 3.10.5-2。这不是车端部署版本证明。
+VM 对冻结候选 `5d929e71a4afdaa6873d8d9a7399c4bfe27c5991a22febe61bc2ecff7ddcbffe`
+已完成实际构建和 S12；S14 三种 cyclic 起点在原 core 分别为255/254/255，原库确实存在
+mixed unknown 掩盖已知 lethal 的失败。经单文件 lethal-first 修复后，三序均由真实共享 checker、
+Smac、MPPI collision 检查得到254/true/true，插件也会拒绝原不安全 core 的配置。
+这是该参考 VM/该冻结候选的结果，不是本次新增评分测试已编译或车辆部署验收。
+
+S12 C++ 使用真实 LayeredCostmap/StaticLayer/InflationLayer 和冻结授权文件 fixture，
+DDS metadata 由测试 peer 提供，不冒充生产 catalog/IPC 或实际桥 ACK；原 owner 联验另行覆盖。
+S13 安装态 synthetic-map probe 使用真实 Smac action、MPPI private Twist 及原 SE2 函数的
+20 Hz理想离线跟随，有限 unknown 通道和已知 lethal 分隔重规划，不代表实车。
+**原 S13 仍失败：Smac 规划 status4 后，MPPI 跟随以 status6/Failed to make progress 终止，
+尚未到已知 lethal 分隔阶段。** 一次获批的外部单周期观测保留全部2000×56候选、8 critic 和
+实际 master：753条中心触达 unknown 的候选均受到 CostCritic 正 critical 惩罚，其余1247条
+该项增量为零；PathFollow 等四项可见增量为零。观测未覆盖 gamma/softmax/滤波选择，不能据此
+认定唯一根因或称修复/性能 GREEN。诊断代码和其专用库不属于产品。
+
+下述最小评分补丁与新增真实 score 断言尚未在 ROS 环境构建/执行；Bot1 无 ROS/colcon。
+最终原 S13、S12/S14评分回归、完整授权/coverage/静态-live 生产接线、车端 ABI/安装和
+四核 CPU/RSS/锁等待仍须各自验证；缺 ROS、源码、skip 或规划 status4 都不能当实际跟随通过。
+
+
+### 同版共享 footprint checker 的固定补丁与运行时边界
+
+依赖补丁是 [nav2_costmap_2d-1.1.20-lethal-first.patch](../../patches/nav2_costmap_2d-1.1.20-lethal-first.patch)，
+仅修改官方 navigation2 `1.1.20` / commit
+`a097086719c88f781aa59788eca29ac6ca5e56db` 的
+`nav2_costmap_2d/src/footprint_collision_checker.cpp`。官方 codeload 该 commit 的 tar.gz
+SHA256 为 `8b0fdd2aa41947d48d543ad24a6e5dc7fe885f1014a2bd43e5410985c5ff31af`；
+原文件 SHA256 为
+`dedc7441a1c6404ae99f17632d2f0770c08677a37cf80c04316441d9f2d70c59`，
+补丁 SHA256 为 `d6bd06dfd4da553afd9d9f3046d3889b832fd3393e0aba97e8abd8f9cdbb6ecb`，
+预期补后文件 SHA256 为
+`3d220699b3e23c7dacdce8ab06957b201e4333c54e52106f67709b6f72e03104`。
+循环中的每条原始 edge cost、最后 closing edge 的原始 cost 都优先判断 lethal，随后才保留
+原 unknown 最大值语义；不改 lineCost、公共头/签名、足迹、padding 或 Smac/MPPI 配置。
+S14 保留原两个物理输入/断言，并明确增加第三个相同几何的 cyclic 起点，使 lethal 位于
+closing edge；这是三个实际输入，须先在旧库记录第三输入 RED，再在固定 overlay 验证 GREEN。
+纯 unknown 可通行仍须原 S13 实际路径与控制输出联验；当前跟随尚未通过。
+
+Layer 在配置时还会用独立80×80、.01m分辨率的小 costmap 与同一 mixed 足迹调用**实际链接的**
+FootprintCollisionChecker，验证循环/closing 三种起点。该临时网格约6.4KiB，立即销毁，不改
+真实 master、真实传感输入或机器人 footprint，不读版本字符串代替行为检查；旧不安全库
+会明确拒绝配置，不能因漏装补丁仍发 ready。没有默认绕过开关。该能力检查只证明所调用
+共享 checker 的这一语义，不代替 S14 的真实 Smac/MPPI 调用和各进程实际动态库路径证据。
+
+构建只在任务私有 prefix 使用该固定源的原 `nav2_costmap_2d` 包；先核 source archive/commit、
+上述原文件 hash、实际 underlay 公共头与编译器/依赖版本，再零 fuzz 应用补丁并复核补后 hash。
+不把整个 Nav2 源码放进产品仓库，不覆盖 `/opt/ros/humble`、系统 `.so` 或只遮蔽一个头文件。
+原 cpp 的两个显式模板实例位于 `libnav2_costmap_2d_core.so`，必须实际重建该库。
+示例中各目录均由验证 owner 选择的绝对私有路径，命令不是已执行证据：
+
+```bash
+source /opt/ros/humble/setup.bash
+patch --directory "$T5_NAV2_SOURCE" --strip=1 --fuzz=0 < "$T5_PATCH"
+colcon build --base-paths "$T5_NAV2_SOURCE/nav2_costmap_2d" \
+  --build-base "$T5_OVERLAY/build" --install-base "$T5_OVERLAY/install" \
+  --packages-select nav2_costmap_2d \
+  --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=Release
+source "$T5_OVERLAY/install/setup.bash"
+# 在上述环境重新构建并 source 当前项目的安装 prefix，不能先后混入旧 core。
+ros2 pkg prefix nav2_costmap_2d
+```
+
+保留 patch 后 core 的 ELF hash/build ID、ament package/plugin XML、prefix 环境、readelf/ldd；
+在实际 S14 test 与后续 planner/controller 运行时读取 `/proc/<pid>/maps`，确认所有映射的
+`libnav2_costmap_2d_core.so` 均来自该固定 overlay，且 hash 一致，没有同时映射原 core。
+ldd 只是辅助，不能代替运行进程 maps；S14 未绿时仍不运行 S13。
+部署入口复用现有显式 `profile.ros_setup`：原 platform_runtime 的 adapter/motion 两命令
+均先 source vendor setup 再 source 该项目 setup，DedicatedController 继承相同环境。
+原部署 owner 可选择经过 prefix/hash 拒错的 composed setup，不新增 profile 字段或运动来源分支；
+本 child 不修改实际车辆 profile 或 parent 启动代码。未取得实际安装与 S12–S14 GREEN 前，
+上述补丁、能力检查和构建指令都不是 unknown 功能已通过或已部署的声明。
+
+
+### 同版 CostCritic 对允许 unknown 的最小评分修复
+
+依赖补丁是 [nav2_mppi_controller-1.1.20-unknown-cost.patch](../../patches/nav2_mppi_controller-1.1.20-unknown-cost.patch)，
+同一官方 `a097086719c88f781aa59788eca29ac6ca5e56db` / Humble1.1.20，只改
+`nav2_mppi_controller/src/critics/cost_critic.cpp`。原文件 SHA256：
+`0630dc3f8302d146d7f5317ee2c3fc940cc6f6ad63f26b19bf0aa630accc7fa4`；
+补丁 SHA256：`fa2fad32ddb1f38650dd571e4ec58c8b1044ec6c034b14943785ce7f671d05ab`；
+补后文件 SHA256：`600c88698e3d6eb32b6cb638910f47293db0b16a10b2d2243217ec8cbcb73fa4`。
+使用前节同一官方归档/hash，原公共头、API、critic 参数与算法其余部分均不变。
+
+原评分先用真实 `inCollision` 判断，再把中心 cost>=253 都加 critical300，导致既有策略
+已允许的 unknown255 也被当作已知近障碍。补丁只在原碰撞检查已通过后，对 `worldToMap`
+成功、实际中心255且原 `isTrackingUnknown()` 为真的点跳过该项 repulsion。混合足迹中的
+已知 lethal 仍先触发原 collision_cost/fail；known253的 critical300、其它 known 成本、
+图外255和原不允许 unknown 的处理原样保留。没有把 U 写成 F，没有新增地图 writer、
+source/资格判断、等待逻辑或永久线程；评分仍为 O(候选数×步数)，unknown分支多一次有界格索引。
+这里选择的是允许 unknown 的中性评分，不证明 unknown 物理为空，也不改原 free-only 航点。
+
+该补丁必须与前节共享 checker 的 lethal-first 修复共同验证。只改评分、漏装旧 core 的
+known-lethal 修复不可验收。Layer 的配置能力检查只检测共享 footprint 语义，不检测
+CostCritic 评分是否正确安装；不能拿 current/ready 或版本号代替真实 score/S13 与实际库身份。
+
+S14 明确为五个实际语义输入：原三种 mixed 足迹起点保留 checker/Smac/MPPI collision
+断言，并追加实际 `CostCritic::score` 的 collision_cost/fail 断言；另两个输入分别是图内纯
+unknown（原评分期望 RED=4.5、修后期望0）和无 lethal 的 known253（原/修后都应保留4.5）。
+一候选一步的数值独立由固定参数3.81/254、critical300、collision1e6得出，混合碰撞应15000。
+测试通过同版真实 `ParametersHandler` 和 `CriticFunction::on_configure` 初始化，不手设 critic
+内部状态，不复制碰撞/评分算法；无 inflation 的小型语义 fixture 会按原库发优化提示，
+使用原 full-footprint 路径。它验证实际共享库语义，不能冒充完整 MPPI optimizer 或闭环运动。
+测试翻译单元在所有头文件之前对齐实际 MPPI 编译行的 `XTENSOR_ENABLE_XSIMD` /
+`XTENSOR_USE_XSIMD`；同 VM 的 xtensor0.23.10 会按后者选择公开张量的 allocator 类型，
+见[官方固定版配置](https://github.com/xtensor-stack/xtensor/blob/0.23.10/include/xtensor/xtensor_config.hpp)。
+这只影响既有测试 CPP，没有修改公共头或 build 路径；实际安装头与测试/critic 的类型、
+对齐和链接兼容性仍须在原生构建中核验，不能用本机文本核对代替 ABI 证据。
+
+后续原生验证使用**新私有 prefix**，从官方 pristine MPPI package 加本评分补丁，绝不把
+临时观测 prefix 或被改过的 `critic_manager.cpp` 带进产品。其 pristine 文件 SHA256 必须是
+`339587bccec06962453893eba577aa3ad9b65aa804ea12999dec5be8f73fce3b`。
+先在原 uninstrumented MPPI + 已修 core 上运行同一评分测试，明确纯 unknown score RED；
+再仅换评分补丁验证同输入 GREEN，并运行原 S13 与 S12。测试、map、goal、随机/控制参数、
+原足迹/速度/任务取消/资格和 assertion 不变；原 S13 仍失败则如实报告，不能自行调参或重试。
+示例是供原生验证 owner 审阅的命令形状，Bot1 未执行：
+
+```bash
+source /opt/ros/humble/setup.bash
+source "$T5_COSTMAP_OVERLAY/install/setup.bash"
+# T5_MPPI_SOURCE 必须是已核官方归档的新 MPPI 源，critic_manager.cpp 为上述 pristine hash。
+patch --directory "$T5_MPPI_SOURCE" --strip=1 --fuzz=0 < "$T5_MPPI_PATCH"
+colcon build --base-paths "$T5_MPPI_SOURCE/nav2_mppi_controller" \
+  --build-base "$T5_MPPI_OVERLAY/build" --install-base "$T5_MPPI_OVERLAY/install" \
+  --packages-select nav2_mppi_controller \
+  --cmake-args -DBUILD_TESTING=OFF -DCMAKE_BUILD_TYPE=RelWithDebInfo
+source "$T5_MPPI_OVERLAY/install/setup.bash"
+# 在该环境重新构建/source 本项目的新候选；原产品验证 owner 保存完整命令及环境。
+```
+
+保留 cost_critic baseline/after/patch、实际 controller/critics/core `.so` 的 ELF SHA/build ID、
+原安装头比对、consumer参数文件及测试/planner/controller实际 `/proc/<pid>/maps`，不能仅用
+ldd、源码或包版本签通过。原核心 `.so`、系统安装和车端 profile 均不在本 child 修改范围。
+本次新评分补丁、两个评分对照和追加断言的 ROS 编译/加载/RED/GREEN/S13 结果仍未取得，
+也不构成车辆安装、ABI 或 VM 模拟树莓派性能验收。
