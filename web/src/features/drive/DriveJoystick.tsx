@@ -56,6 +56,21 @@ export interface DriveJoystickProps {
   onChange: (linear: number, turn: number) => void;
   onRelease: (reason: ReleaseReason) => void;
 }
+
+function geometry(pad: HTMLDivElement, knob: HTMLSpanElement) {
+  const box = pad.getBoundingClientRect();
+  const handle = knob.getBoundingClientRect();
+  const style = getComputedStyle(pad);
+  // Keep the whole handle inside the inner edge of the circular border.
+  const border = Math.max(...[
+    style.borderTopWidth, style.borderRightWidth,
+    style.borderBottomWidth, style.borderLeftWidth,
+  ].map((width) => Number.parseFloat(width) || 0));
+  const travel = Math.max(0,
+    Math.min(box.width, box.height) / 2 - border - Math.max(handle.width, handle.height) / 2,
+  );
+  return { box, travel };
+}
 /** 10% entry / 18% exit axis band; 8% center dead-zone, 5% output steps. */
 export function DriveJoystick({
   disabled,
@@ -65,9 +80,23 @@ export function DriveJoystick({
   onRelease,
 }: DriveJoystickProps): ReactElement {
   const [value, setValue] = useState({ linear: 0, turn: 0 });
+  const [travel, setTravel] = useState(0);
+  const pad = useRef<HTMLDivElement>(null);
+  const knob = useRef<HTMLSpanElement>(null);
   const pointer = useRef<number | null>(null);
   const keys = useRef(new Set<string>());
   const snaps = useRef({ linear: false, turn: false });
+  useLayoutEffect(() => {
+    const disc = pad.current, handle = knob.current;
+    if (!disc || !handle) return;
+    const measure = () => setTravel(geometry(disc, handle).travel);
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(disc);
+    observer.observe(handle);
+    return () => observer.disconnect();
+  }, []);
   useLayoutEffect(() => {
     pointer.current = null;
     keys.current.clear();
@@ -83,12 +112,13 @@ export function DriveJoystick({
     onRelease(reason);
   }
   function position(event: PointerEvent<HTMLDivElement>) {
-    const box = event.currentTarget.getBoundingClientRect();
-    let linear = box.height
-      ? -(event.clientY - box.top - box.height / 2) / (box.height / 2)
+    const { box, travel: radius } = geometry(event.currentTarget, knob.current!);
+    setTravel(radius);
+    let linear = radius
+      ? -(event.clientY - box.top - box.height / 2) / radius
       : 0;
-    let turn = box.width
-      ? -(event.clientX - box.left - box.width / 2) / (box.width / 2)
+    let turn = radius
+      ? -(event.clientX - box.left - box.width / 2) / radius
       : 0;
     const norm = Math.max(1, Math.hypot(linear, turn));
     linear /= norm;
@@ -181,9 +211,12 @@ export function DriveJoystick({
     onChange(next.linear, next.turn);
   }
 
+  // Per-axis rounding can slightly exceed the unit circle; clamp only drawing.
+  const visualNorm = Math.max(1, Math.hypot(value.linear, value.turn));
   return (
     <div className={ui.singleStickBox}>
       <div
+        ref={pad}
         role="group"
         aria-label="驾驶摇杆"
         aria-describedby="drive-stick-hint"
@@ -208,9 +241,10 @@ export function DriveJoystick({
         <span className={ui.axisLeft}>←</span>
         <span className={ui.axisRight}>→</span>
         <span
+          ref={knob}
           className={ui.singleKnob}
           style={{
-            transform: `translate(${-value.turn * 110}%,${-value.linear * 110}%)`,
+            transform: `translate(${-value.turn * travel / visualNorm}px,${-value.linear * travel / visualNorm}px)`,
           }}
         >
           <Grip size={24} />

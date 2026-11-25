@@ -752,3 +752,93 @@ for (const viewport of [
     });
   });
 }
+
+// Real browser geometry: the same legal center travel drives input and drawing.
+for (const viewport of [{ width: 1280, height: 770 }, { width: 390, height: 844 }]) {
+  test.describe(`joystick radius ${viewport.width}px`, () => {
+    test.use({ viewport });
+    test('pointer follows the legal travel and releases to center', async ({ page }, testInfo) => {
+      await page.route('**/*', route => {
+        const url = new URL(route.request().url());
+        return url.origin === new URL(baseURL!).origin &&
+          (url.pathname.startsWith('/robots/') || url.pathname.startsWith('/assets/') ||
+            ['/control-fixture.js', '/preview-extension.js'].includes(url.pathname))
+          ? route.continue() : route.abort();
+      });
+      await page.addInitScript({ path: fixture });
+      await page.goto(`${baseURL}/robots/fixture-A`);
+      const stick = page.getByRole('group', { name: '驾驶摇杆' });
+      await page.getByRole('button', { name: '获取控制权', exact: true }).click();
+      await expect(stick).toHaveAttribute('aria-disabled', 'false');
+      await stick.scrollIntoViewIfNeeded();
+      const geometry = () => stick.evaluate(pad => {
+        const disc = pad.getBoundingClientRect();
+        const knob = pad.querySelector('.drive-single-knob')!.getBoundingClientRect();
+        const style = getComputedStyle(pad);
+        const border = Math.max(...[style.borderTopWidth, style.borderRightWidth,
+          style.borderBottomWidth, style.borderLeftWidth].map(Number.parseFloat));
+        return { cx: disc.x + disc.width / 2, cy: disc.y + disc.height / 2,
+          kx: knob.x + knob.width / 2, ky: knob.y + knob.height / 2,
+          discWidth: disc.width, knobWidth: knob.width, border,
+          travel: Math.min(disc.width, disc.height) / 2 - border - Math.max(knob.width, knob.height) / 2,
+          linear: Number((pad as HTMLElement).dataset.linear), turn: Number((pad as HTMLElement).dataset.turn) };
+      });
+      const initial = await geometry();
+      expect(initial.discWidth).toBe(viewport.width === 390 ? 142 : 184);
+      const { cx, cy, travel } = initial;
+      const evidence: unknown[] = [initial];
+      await page.mouse.move(cx, cy);
+      await page.mouse.down();
+      for (const [x, y] of [[.2, -.2], [.4, -.4], [.37, -.43]]) {
+        await page.mouse.move(cx + x! * travel, cy + y! * travel);
+        await expect.poll(async () => {
+          const g = await geometry();
+          return Math.hypot(g.kx - (cx + x! * travel), g.ky - (cy + y! * travel));
+        }).toBeLessThanOrEqual(Math.SQRT2 * .025 * travel + .05);
+        const g = await geometry();
+        expect(g.linear).toBe(Math.round(-y! * 20) / 20);
+        expect(g.turn).toBe(Math.round(-x! * 20) / 20);
+        evidence.push({ pointer: { x: cx + x! * travel, y: cy + y! * travel }, ...g });
+      }
+      await page.screenshot({ path: testInfo.outputPath('joystick-free.png') });
+      // .55 rounds with sqrt(1-.55²) to (.55,.85): output norm > 1 is preserved,
+      // while the handle's final rendering must stay inside the legal circle.
+      for (const [x, y] of [[0, -1], [.55, -Math.sqrt(1 - .55 ** 2)], [2, -2]]) {
+        await page.mouse.move(cx + x! * travel, cy + y! * travel);
+        await expect.poll(async () => {
+          const g = await geometry();
+          return Math.hypot(g.kx - cx, g.ky - cy);
+        }).toBeLessThanOrEqual(travel + .05);
+        const g = await geometry();
+        expect(Math.abs(g.linear)).toBeLessThanOrEqual(1);
+        expect(Math.abs(g.turn)).toBeLessThanOrEqual(1);
+        if (x === 0) expect([g.linear, g.turn]).toEqual([1, 0]);
+        if (x === .55) expect([g.linear, g.turn]).toEqual([.85, -.55]);
+        if (x === 2) expect([g.linear, g.turn]).toEqual([.7, -.7]);
+        evidence.push({ pointer: { x: cx + x! * travel, y: cy + y! * travel }, ...g });
+      }
+      await page.mouse.up();
+      await expect(stick).toHaveAttribute('data-linear', '0');
+      await expect(stick).toHaveAttribute('data-turn', '0');
+      const released = await geometry();
+      expect(Math.hypot(released.kx - cx, released.ky - cy)).toBeLessThan(.05);
+      await stick.focus();
+      await page.keyboard.down('ArrowUp');
+      await expect.poll(async () => (await geometry()).ky).toBeCloseTo(cy - travel, 1);
+      await page.keyboard.up('ArrowUp');
+      await expect(stick).toHaveAttribute('data-linear', '0');
+      const calls = await page.evaluate(() => (window as unknown as {
+        __wheelFixture: { calls: Array<{ type?: string; payload?: { linear?: number; turn?: number } }> }
+      }).__wheelFixture.calls.filter(c => c.type === 'drive.intent' || c.type === 'drive.stop'));
+      expect(calls.some(c => c.type === 'drive.stop')).toBe(true);
+      const intents = calls.filter(c => c.type === 'drive.intent');
+      expect(intents.length).toBeGreaterThan(0);
+      for (const intent of intents) {
+        expect(Math.abs(intent.payload!.linear!)).toBeLessThanOrEqual(1);
+        expect(Math.abs(intent.payload!.turn!)).toBeLessThanOrEqual(1);
+      }
+      await page.getByRole('button', { name: '释放控制权', exact: true }).click();
+      await writeFile(testInfo.outputPath('joystick-radius.json'), JSON.stringify({ evidence, released, calls }, null, 2));
+    });
+  });
+}
