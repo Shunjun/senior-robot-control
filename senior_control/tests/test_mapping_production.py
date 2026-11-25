@@ -1017,10 +1017,18 @@ async def test_shared_owner_capacity_rejection_keeps_old_bound_supports(tmp_path
     tracker = owner._evidence.tracker
     after = await offer_owner_scan(owner, clock, 5, beams=(Beam(0, (0, 0), (500, 0), "hit"),))
     assert after == before
-    assert owner._evidence.tracker is tracker
+    # This existing 500m engineering fixture is outside the deployed 20m
+    # range. Store atomicity is unchanged; C2 must observe the real rejected
+    # frame rather than manufacturing a sequence gap on the next complete one.
+    assert owner._evidence.tracker._previous.key.sequence == 5
     assert owner._evidence.reason == "coverage_limit"
     assert not owner._fixed_retired
     assert native.reference.coverage_reason == "coverage_limit"
+    identities = tracker.bound_support_ids
+    for sequence in range(6, 10):
+        cut = await offer_owner_scan(owner, clock, sequence)
+    assert {s.support_id for s in cut.supports} == set(identities)
+    assert owner._evidence.tracker.bound_support_ids == identities
 
 
 async def test_shared_owner_graph_correction_overlaps_independent_wall_before_object_motion(
@@ -1070,3 +1078,252 @@ async def test_shared_owner_graph_correction_overlaps_independent_wall_before_ob
     assert next(s for s in cut.supports if s.support_id == wall.support_id) == wall
     x0, y0, _, _ = raster.extent
     assert all(cut.grid.cells[(y - y0) * cut.grid.width + x - x0] == 100 for x, y in overlap)
+
+
+def legacy_wall_consumer():
+    """Admitted synthetic legacy O at (60, 0), independent of the T2 curve."""
+    from senior_mapping.active import ActiveMap
+    from senior_mapping.evidence import OccupancyThresholds, SourceIdentity
+    from senior_mapping.fixed_evidence import FixedEvidenceConsumer
+    from senior_mapping.references import AnchorPose, AnchorSnapshot, GridExtent, LegacyBase
+    from senior_mapping.workspace import WorkspaceGrid, fixed_grid_id
+    from test_scan_geometry import episode_frame
+
+    from vehicle_core.values import MapRef
+
+    ref, pose, origin = MapRef("legacy-independence", 1), Pose2D(0, 0, 0), Pose2D(0, -1, 0)
+    cells = bytearray(b"\xff") * (120 * 80)
+    index = 20 * 120 + 60
+    cells[index] = 100
+    grid = WorkspaceGrid(
+        ref,
+        fixed_grid_id(ref, 120, 80, 0.05, origin, bytes(cells)),
+        120,
+        80,
+        0.05,
+        origin,
+        bytes(cells),
+        True,
+        False,
+    )
+    mask = bytearray((len(cells) + 7) // 8)
+    mask[index // 8] |= 1 << (index % 8)
+    base = LegacyBase(
+        grid.grid_id,
+        grid,
+        "legacy-derived",
+        "a" * 64,
+        "synthetic-independent-legacy-wall",
+        bytes(mask),
+        (),
+    )
+    active, source, clock = ActiveMap(ref, "odom", 0.05), object(), {"now": 0}
+    active.bind_verified_source(source, backend_boot="backend", source_epoch="source")
+    active.commit(
+        source,
+        1,
+        "0",
+        AnchorSnapshot(
+            ref,
+            "odom",
+            (AnchorPose("0", pose, True),),
+            GridExtent(120, 80, 0, -1),
+        ),
+        (),
+    )
+    consumer = FixedEvidenceConsumer(
+        OccupancyThresholds(0.05, 3, 1, 3, 1, 0.1, 1, 1, 2, -1, -5, 5, 2, 0.5),
+        profile=admitted_profile(),
+        clock=lambda: clock["now"],
+    )
+    active.bind_fixed_context(
+        source,
+        source_identity=SourceIdentity.from_key(episode_frame(1).key),
+        host_boot_id="host",
+        acceptance_floor=None,
+        acceptance_floor_steady_ns=0,
+        accepting=lambda: True,
+        clock=lambda: clock["now"],
+        profiles=consumer.profiles(),
+        legacy_base=base,
+    )
+    return active, source, consumer, clock, index
+
+
+def consume_legacy_scan(active, source, consumer, clock, scan):
+    from senior_mapping.evidence import VerifiedBasis
+    from senior_mapping.references import decode_fixed_snapshot, encode_fixed_snapshot
+
+    clock["now"] = scan.capture.time.sample_steady_ns
+    cut = active.fixed_snapshot(source)
+    pose = Pose2D(0, 0, 0)
+    basis = VerifiedBasis(
+        "0",
+        pose,
+        pose,
+        1,
+        cut.watermark.anchor_digest,
+        cut.watermark.map_ref,
+        active.map_generation,
+    )
+    active.accept_scan(source, scan, basis)
+    cut = consumer.consume(active, source, scan, basis)
+    assert decode_fixed_snapshot(encode_fixed_snapshot(cut)) == cut
+    return cut
+
+
+def legacy_target(cut, index):
+    grid = cut.grid
+    x = int(round((3.025 - grid.origin.x) / 0.05 - 0.5))
+    y = int(round((0.025 - grid.origin.y) / 0.05 - 0.5))
+    return (
+        bool(cut.legacy_base.live_mask[index // 8] & (1 << (index % 8))),
+        grid.cells[y * grid.width + x],
+    )
+
+
+def test_legacy_wall_is_independent_of_overlapping_new_curve_and_its_motion():
+    from test_scan_geometry import episode_frame
+
+    active, source, consumer, clock, index = legacy_wall_consumer()
+    states = []
+    for seq, offset in ((2, 0), (3, 0), (4, 0), (5, 0.2), (6, 0.4), (7, 0.6), (8, 0.8)):
+        cut = consume_legacy_scan(
+            active, source, consumer, clock, episode_frame(seq, offset=offset, wall=False)
+        )
+        states.append(legacy_target(cut, index))
+        assert not cut.free_tiles
+        if seq == 4:
+            assert len(cut.supports) == 1
+        if seq == 6:
+            assert not cut.supports
+    # Codec round-trips above check the live bit as well as the rendered O.
+    assert states == [(True, 100)] * 7
+
+
+def test_restored_occupied_hit_keeps_prior_before_real_free_clears_wall():
+    from dataclasses import replace
+
+    from senior_mapping.shared_scan import Beam, ScanKey
+    from test_scan_geometry import episode_frame
+
+    from vehicle_core.sample_time import SampleTime
+
+    active, source, consumer, clock, index = legacy_wall_consumer()
+    consumer.profile = None
+    beliefs, states = [], []
+    for seq in range(2, 9):
+        scan = episode_frame(seq, wall=False)
+        ns = 10_000_000_000 + seq * 400_000_000
+        capture = replace(
+            scan.capture,
+            time=SampleTime(
+                1_700_000_000_000_000_000 + ns,
+                1_700_000_000_000_000_000 + ns,
+                ns,
+                ns,
+                1,
+            ),
+        )
+        scan = replace(
+            scan,
+            key=ScanKey.of("backend", capture),
+            capture=capture,
+            valid_until_steady_ns=ns + 500_000_000,
+            odom_base=Pose2D(0, 0, 0),
+            beams=(Beam(0, (0, 0.025), (3.025 if seq == 2 else 4.025, 0.025), "hit"),),
+        )
+        cut = consume_legacy_scan(active, source, consumer, clock, scan)
+        beliefs.append(consumer.free.cells[(60, 0)].belief)
+        states.append(legacy_target(cut, index))
+    assert beliefs == [5, 4, 3, 2, 1, 0, -1]
+    assert states == [(True, 100)] * 6 + [(False, 0)]
+
+
+async def test_shared_owner_capacity_keeps_motion_revocation_through_following_frames(
+    tmp_path,
+    monkeypatch,
+):
+    from dataclasses import replace
+
+    from senior_mapping.references import decode_fixed_snapshot, encode_fixed_snapshot
+    from senior_mapping.shared_scan import Beam
+    from test_scan_geometry import episode_frame
+
+    def stationary_frame(seq, **kw):
+        scan = episode_frame(seq, **kw)
+        return replace(
+            scan,
+            odom_base=Pose2D(0, 0, 0),
+            beams=tuple(replace(b, origin_odom=(0, 0)) for b in scan.beams),
+        )
+
+    monkeypatch.setattr("test_scan_geometry.episode_frame", stationary_frame)
+    owner, native, clock = shared_owner(tmp_path, monkeypatch)
+    native.pending_graph = True
+    rejected, committed = [], []
+    apply = owner.active.apply_evidence
+
+    def record_capacity(*args, **kwargs):
+        from vehicle_core.errors import DomainError
+
+        before = owner.active.fixed_snapshot(owner.source)
+        delta = kwargs["delta"]
+        assert delta.expected == before.watermark
+        try:
+            result = apply(*args, **kwargs)
+        except DomainError as exc:
+            if "fixed_capacity" in str(exc):
+                assert owner.active.fixed_snapshot(owner.source) == before
+                rejected.append(delta)
+            raise
+        committed.append(delta)
+        return result
+
+    monkeypatch.setattr(owner.active, "apply_evidence", record_capacity)
+    object_id, wall = None, None
+    states = []
+    for seq in range(2, 19):
+        offset = 0 if seq <= 10 else min(0.8, (seq - 10) * 0.2)
+        points = [b.endpoint_odom for b in stationary_frame(seq, offset=offset, wall=True).beams]
+        # 130 curve/wall hits + 39 sparse 14m background echoes; all within 20m.
+        for i in range(48):
+            angle = 2 * math.pi * i / 48
+            if min(angle, 2 * math.pi - angle) >= 0.65:
+                points.append((14 * math.cos(angle), 14 * math.sin(angle)))
+        points.sort(key=lambda p: math.atan2(p[1], p[0]))
+        beams = tuple(Beam(i, (0, 0), p, "hit") for i, p in enumerate(points))
+        assert len(beams) == 169
+        assert max(math.hypot(*p) for p in points) < 20
+        cut = await offer_owner_scan(owner, clock, seq, offset=offset, beams=beams)
+        if seq == 4:
+            object_id = min(cut.supports, key=lambda s: s.local_endpoints[0][1]).support_id
+            wall = max(cut.supports, key=lambda s: s.local_endpoints[0][1])
+        if seq >= 12:
+            states.append(
+                (
+                    seq,
+                    object_id in {s.support_id for s in cut.supports},
+                    object_id in owner._evidence.tracker.bound_support_ids,
+                )
+            )
+            assert next(s for s in cut.supports if s.support_id == wall.support_id) == wall
+            assert wall.support_id in owner._evidence.tracker.bound_support_ids
+            if seq == 12:
+                assert owner._evidence.reason == "coverage_limit"
+                assert native.reference.coverage_reason == "coverage_limit"
+            assert decode_fixed_snapshot(encode_fixed_snapshot(cut)) == cut
+    assert len(rejected) == 1 and rejected[0].key.sequence == 12
+    assert {r.support_id for r in rejected[0].revocations} == {object_id}
+    fallback = next(d for d in committed if d.key.sequence == 12)
+    assert fallback.expected == rejected[0].expected and fallback.key == rejected[0].key
+    assert fallback.evidence_revision == rejected[0].evidence_revision
+    assert fallback.revocations == rejected[0].revocations
+    assert not (
+        fallback.upsert_supports
+        or fallback.free_tiles
+        or fallback.support_cell_removals
+        or fallback.legacy_edits
+    )
+    assert states == [(seq, False, False) for seq in range(12, 19)]
+    assert owner.graph.sequence == 1 and not owner._fixed_retired

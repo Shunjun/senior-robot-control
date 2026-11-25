@@ -19,6 +19,7 @@ from senior_mapping.occupancy import FreeSpaceAccumulator
 from senior_mapping.references import rebase_pose
 from senior_mapping.scan_geometry import GeometryTracker
 from senior_mapping.workspace import FixedRaster, _inverse, _transform
+from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import Pose2D
 
 
@@ -28,11 +29,15 @@ class FixedEvidenceConsumer:
         self.clock = clock
         self.tracker = GeometryTracker(clock_ns=clock)
         self.free = FreeSpaceAccumulator(thresholds)
+        self._pending_revocations = {}
+        self._pending_context = None
         self.reason = "profile_missing" if profile is None else None
 
     def reset(self):
         self.tracker.reset()
         self.free = FreeSpaceAccumulator(self.thresholds)
+        self._pending_revocations.clear()
+        self._pending_context = None
 
     @property
     def thresholds(self):
@@ -61,6 +66,23 @@ class FixedEvidenceConsumer:
         poses = {a.anchor_id: a.pose for a in cut.anchors if a.available}
         alignment = rebase_pose(Pose2D(0, 0, 0), basis.odom_basis, basis.map_basis)
         supports = {s.support_id: s for s in cut.supports}
+        w = cut.watermark
+        context = (w.map_ref, w.reference_generation, w.backend_boot, w.host_boot_id, w.source)
+        # Pending motion facts belong to this source/reference lifetime, never
+        # to a replayable scan. Re-prepare only against a current accepted key
+        # and the exact still-existing support revision; C3 checks it again.
+        pending = self._pending_revocations if context == self._pending_context else {}
+        moved = {
+            identity: expected_revision
+            for identity, expected_revision in pending.items()
+            if identity in supports
+            and supports[identity].updated_evidence_revision == expected_revision
+        }
+        moved.update(
+            (identity, supports[identity].updated_evidence_revision)
+            for identity in geometry.moved_support_ids
+            if identity in supports
+        )
         revoked = tuple(
             SupportRevocation(
                 s,
@@ -69,47 +91,91 @@ class FixedEvidenceConsumer:
                 scan.key,
                 basis.anchor_id,
             )
-            for s in geometry.moved_support_ids
-            if s in supports
+            for s in sorted(moved)
         )
         upserts, bindings, issued = [], [], []
+        delta = None
+        limited = bool(pending)
+        association_unresolved = False
         try:
-            upserts, bindings, association_unresolved = self._prepare_supports(
-                active,
-                source,
-                scan,
-                basis,
-                cut,
-                geometry,
-                poses,
-                alignment,
-                revision,
-                issued,
-                tracker.bound_support_ids,
-            )
-            tiles, free_world, raster = self._prepare_free_tiles(scan, basis, cut, free, revision)
-            removals = self._free_removals(scan, basis, cut, geometry, poses, raster, free_world)
-            edits = self._legacy_edits(scan, basis, cut, poses, raster, free_world, upserts)
-            delta = FixedDelta(
-                cut.watermark,
-                scan.key,
-                revision,
-                basis.anchor_id,
-                tuple(upserts),
-                revoked,
-                tuple(removals),
-                tuple(tiles),
-                tuple(edits),
-            )
+            if pending:
+                # No new IDs/upgrades/free while a complete revocation batch
+                # cannot be expressed. No truncation into per-ID transactions.
+                delta = FixedDelta(w, scan.key, revision, basis.anchor_id, revocations=revoked)
+            else:
+                upserts, bindings, association_unresolved = self._prepare_supports(
+                    active,
+                    source,
+                    scan,
+                    basis,
+                    cut,
+                    geometry,
+                    poses,
+                    alignment,
+                    revision,
+                    issued,
+                    tracker.bound_support_ids,
+                )
+                tiles, free_world, raster = self._prepare_free_tiles(
+                    scan, basis, cut, free, revision
+                )
+                removals = self._free_removals(
+                    scan, basis, cut, geometry, poses, raster, free_world
+                )
+                edits = self._legacy_edits(scan, basis, cut, poses, raster, free_world)
+                delta = FixedDelta(
+                    cut.watermark,
+                    scan.key,
+                    revision,
+                    basis.anchor_id,
+                    tuple(upserts),
+                    revoked,
+                    tuple(removals),
+                    tuple(tiles),
+                    tuple(edits),
+                )
             result = active.apply_evidence(
                 source,
                 expected_graph_sequence=basis.graph_sequence,
                 expected_anchor_digest=basis.anchor_digest,
                 delta=delta,
             )
-        except BaseException:
+        except BaseException as exc:
             active.discard_support_ids(source, tuple(issued))
-            raise
+            if not self._capacity_error(exc):
+                raise
+            if delta is None and not revoked:
+                # Preparation can hit its own ray/confidence budget before
+                # a store batch exists. Nothing persistent changed, but this
+                # independent frame still belongs to C2's real sequence.
+                self.tracker = tracker
+                raise
+            # The rejected complete batch has published nothing. Prefer a
+            # complete motion-only transaction using the SAME fresh fact/CAS;
+            # never carry its free masks or allocated IDs into this fallback.
+            delta = FixedDelta(w, scan.key, revision, basis.anchor_id, revocations=revoked)
+            bindings = []
+            limited = True
+            try:
+                result = active.apply_evidence(
+                    source,
+                    expected_graph_sequence=basis.graph_sequence,
+                    expected_anchor_digest=basis.anchor_digest,
+                    delta=delta,
+                )
+            except BaseException as fallback:
+                if self._capacity_error(fallback):
+                    # At most one revision per existing persistent support.
+                    # While held, no new supports are issued, so this set is
+                    # bounded by C3's existing 65536 aggregate member cap.
+                    # Keep C2's real frame progression and other live bindings;
+                    # a rejected store batch must not manufacture a C2 gap.
+                    self._pending_context = context
+                    self._pending_revocations = moved
+                    self.tracker = tracker
+                raise
+        self._pending_context = context
+        self._pending_revocations = {}
         live_ids = {s.support_id for s in result.supports}
         for contour in geometry.stable:
             if contour.support_ids and not set(contour.support_ids) <= live_ids:
@@ -118,11 +184,24 @@ class FixedEvidenceConsumer:
                 )
         for track, identities in bindings:
             tracker.bind_support(track, tuple(s for s in identities if s in live_ids))
-        self.tracker, self.free = tracker, free
-        self.reason = geometry.unresolved_reason or (
-            "persistent_association_unresolved" if association_unresolved else None
+        self.tracker = tracker
+        if not limited:
+            self.free = free
+        self.reason = (
+            "coverage_limit"
+            if limited
+            else geometry.unresolved_reason
+            or ("persistent_association_unresolved" if association_unresolved else None)
         )
         return result
+
+    @staticmethod
+    def _capacity_error(exc):
+        return (
+            isinstance(exc, DomainError)
+            and exc.code is ErrorCode.VALIDATION
+            and "fixed_capacity" in str(exc)
+        )
 
     @staticmethod
     def _same_surface(world, summary, tolerance):
@@ -318,6 +397,8 @@ class FixedEvidenceConsumer:
 
     def _free_removals(self, scan, basis, cut, geometry, poses, raster, free_world):
         removals = []
+        if not free_world:
+            return removals
         for s in cut.supports:
             if s.support_id in geometry.moved_support_ids:
                 continue
@@ -349,21 +430,21 @@ class FixedEvidenceConsumer:
                 )
         return removals
 
-    def _legacy_edits(self, scan, basis, cut, poses, raster, free_world, upserts):
+    def _legacy_edits(self, scan, basis, cut, poses, raster, free_world):
         edits = []
-        if cut.legacy_base is not None:
+        if free_world and cut.legacy_base is not None:
             base = cut.legacy_base
             raster.install(cut.anchors, (), (), base)
             selected = set()
-            occupied = set()
-            for s in upserts:
-                occupied.update(raster.support_projection(s, poses[s.anchor_id]).occupied)
-            for cell in free_world | occupied:
+            for cell in free_world:
                 for index in raster.legacy_indices(cell, base):
                     if not base.live_mask[index // 8] & (1 << (index % 8)):
                         continue
                     coverage = {c for c, _ in raster.legacy_coverage(index, base, poses)}
-                    if cell in occupied or coverage <= free_world:
+                    # Overlap supplies no provenance tying legacy O to a new
+                    # contour. Only complete qualified free removes it here.
+                    # C3 separately invalidates legacy F under new occupied.
+                    if coverage <= free_world:
                         selected.add(index)
             if selected:
                 indices = tuple(sorted(selected))

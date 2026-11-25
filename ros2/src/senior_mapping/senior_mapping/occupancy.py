@@ -565,7 +565,9 @@ class FreeSpaceAccumulator:
         if len(self.cells.keys() | free | hits) > 100000:
             raise DomainError(ErrorCode.VALIDATION, "fixed_capacity: free confidence")
         for cell in hits:
-            prior = self.cells.setdefault(cell, _FreeConfidence())
+            if cell not in self.cells:
+                self.cells[cell] = _FreeConfidence(belief=initial_belief(cell))
+            prior = self.cells[cell]
             prior.count, prior.first_ns = 0, None
             prior.belief = min(limits.belief_max, prior.belief + limits.hit_weight)
         qualified = set()
