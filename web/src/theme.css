@@ -194,13 +194,14 @@
 @layer base {
   :root { color-scheme: dark; --viewport-height: calc(100svh - 116px); --viewport-min: 640px; }
   html, body, #root { min-height: 100%; }
-  body { margin: 0; color: var(--color-ink); font-family: var(--font-display); font-size: 13px; line-height: 1.5; background: linear-gradient(#11141645, #12151560), url("./assets/concrete.jpg") center/cover fixed; -webkit-font-smoothing: antialiased; }
+  body { margin: 0; color: var(--color-ink); font-family: var(--font-display); @apply text-sm; line-height: 1.5; background: linear-gradient(#11141645, #12151560), url("./assets/concrete.jpg") center/cover fixed; -webkit-font-smoothing: antialiased; }
   button, input, select { font: inherit; color: inherit; }
   a { color: inherit; }
   p { margin-block: 1em; }
-  h1 { font-size: 2em; font-weight: bold; margin-block: .67em; }
-  h2 { font-size: 1.5em; font-weight: bold; margin-block: .83em; }
-  h3 { font-size: 1.17em; font-weight: bold; margin-block: 1em; }
+  h1 { @apply text-2xl; font-weight: bold; margin-block: .67em; }
+  h2 { @apply text-xl; font-weight: bold; margin-block: .83em; }
+  h3 { @apply text-lg; font-weight: bold; margin-block: 1em; }
+  small { @apply text-xs; }
   h4 { font-weight: bold; margin-block: 1.33em; }
   ol, ul { margin-block: 1em; padding-inline-start: 40px; }
   ol { list-style: decimal; }

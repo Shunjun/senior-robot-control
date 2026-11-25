@@ -12,6 +12,7 @@
   sessionStorage.setItem('senior-control.csrf','fixture-csrf');
   window.fetch=async(input,init)=>{
     const url=String(input);calls.push({http:url,method:init?.method??'GET'});
+    if(url==='/api/session' && init?.method==='DELETE')return new Response(null,{status:204});
     if(url==='/api/robots')return new Response(JSON.stringify({robots:[{id:'fixture-A',name:'安全测试车辆 A',online:true},{id:'fixture-B',name:'安全测试车辆 B',online:false}]}));
     if(url==='/api/pairing-codes')return new Response(JSON.stringify({code:'ABCD234567',expires_in:37}),{status:201});
     if(url.startsWith('/api/'))return new Response('{}',{status:404});
@@ -74,5 +75,5 @@
   }
   window.WebSocket=FixtureSocket;
   window.__wheelFixture={calls,settings,tasks,waypoints,definitions};
-  document.addEventListener('DOMContentLoaded',()=>{const badge=document.createElement('div');badge.textContent='安全协议 fixture · 无真实连接/运动';badge.style='position:fixed;bottom:0;left:0;z-index:100;background:#674323;color:white;font:11px sans-serif;padding:4px 8px;pointer-events:none';document.body.appendChild(badge);});
+  document.addEventListener('DOMContentLoaded',()=>{const badge=document.createElement('div');badge.textContent='安全协议 fixture · 无真实连接/运动';badge.className='text-xs font-sans';badge.style='position:fixed;bottom:0;left:0;z-index:100;background:#674323;color:white;padding:4px 8px;pointer-events:none';document.body.appendChild(badge);});
 })();

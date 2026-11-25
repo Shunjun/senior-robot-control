@@ -15,24 +15,24 @@ const ui = {
     "relative before:content-[''] [&::before]:absolute [&::before]:inset-[-4.5px]"
   ].join(" "),
   estopCap: [
-    "drive-estop-cap text-[12px] max-[460.001px]:text-[10px]"
+    "drive-estop-cap text-xs max-[460.001px]:text-xs"
   ].join(" "),
   estopTag: [
-    "drive-estop-tag text-[10px]"
+    "drive-estop-tag text-xs"
   ].join(" "),
   recoveryActions: [
     "drive-recovery-actions absolute top-[calc(100%_+_10px)] right-0 w-[260px] max-w-[calc(100vw_-_24px)] flex flex-wrap",
     "gap-1.5 pt-3 pr-3 pb-3 pl-3 bg-none bg-drive-recovery-actions-background-color border",
     "border-solid border-line rounded-panel shadow-ui-card z-[35] [&>p]:[flex-basis:100%] [&>p]:mt-0 [&>p]:mr-0",
-    "[&>p]:mb-0 [&>p]:ml-0 [&>p]:text-[10px] [&>p]:leading-[1.8] [&>p]:text-warning-ink [&_.drive-ghost]:text-[11px]"
+    "[&>p]:mb-0 [&>p]:ml-0 [&>p]:text-xs [&>p]:leading-[1.8] [&>p]:text-warning-ink [&_.drive-ghost]:text-xs"
   ].join(" "),
   ghost: [
     "drive-ghost min-h-[44px] min-w-[44px] pt-2 pr-3 pb-2 pl-3 border",
-    "border-solid border-amber rounded-control text-amber bg-none bg-transparent text-[12px]",
+    "border-solid border-amber rounded-control text-amber bg-none bg-transparent text-xs",
     "cursor-pointer [&:disabled]:opacity-[0.45] [&:disabled]:cursor-not-allowed [&:focus-visible]:[outline:2px_solid_var(--color-amber)] [&:focus-visible]:[outline-offset:2px]"
   ].join(" "),
   quiet: [
-    "drive-quiet text-muted mt-2.5 mr-0 mb-0 ml-0 leading-[1.8] text-[11px]"
+    "drive-quiet text-muted mt-2.5 mr-0 mb-0 ml-0 leading-[1.8] text-xs"
   ].join(" "),
 } as const;
 

@@ -5,13 +5,13 @@ import { init, chartTheme } from "./charts";
 // Complete utility strings keep the finite presentation states visible to Tailwind.
 const ui = {
   panel: [
-    "performance-panel-panel pt-0 pr-0 pb-0 pl-0 text-[11px]"
+    "performance-panel-panel pt-0 pr-0 pb-0 pl-0 text-xs"
   ].join(" "),
   machine: [
-    "performance-panel-machine grid grid-cols-[1fr_1fr] gap-[15px] [&>div>span]:text-muted [&>div>span]:text-[10px]"
+    "performance-panel-machine grid grid-cols-[1fr_1fr] gap-[15px] [&>div>span]:text-muted [&>div>span]:text-xs"
   ].join(" "),
   big: [
-    "performance-panel-big font-light text-[42px] leading-[normal] font-number tracking-[-1.4px] [&_small]:font-normal [&_small]:text-[11px]",
+    "performance-panel-big font-light text-4xl leading-[normal] font-number tracking-[-1.4px] [&_small]:font-normal [&_small]:text-xs",
     "[&_small]:leading-[normal] [&_small]:font-ui [&_small]:tracking-[0] [&_small]:text-muted"
   ].join(" "),
   chart: [
@@ -19,14 +19,14 @@ const ui = {
   ].join(" "),
   metric: [
     "performance-panel-metric flex items-center justify-between gap-2.5 pt-2.5 pr-0 pb-2.5",
-    "pl-0 text-[11px] border-t [border-top-style:solid] border-t-performance-panel-metric-border-top-color"
+    "pl-0 text-xs border-t [border-top-style:solid] border-t-performance-panel-metric-border-top-color"
   ].join(" "),
   freshness: [
-    "performance-panel-freshness text-performance-panel-freshness-color text-[9px] mt-2.5 mr-0 mb-0 ml-0"
+    "performance-panel-freshness text-performance-panel-freshness-color text-xs mt-2.5 mr-0 mb-0 ml-0"
   ].join(" "),
   details: [
-    "performance-panel-details text-performance-panel-freshness-color text-[9px] mt-2.5 mr-0 mb-0 ml-0 [&_summary]:cursor-pointer",
-    "[&_p]:text-[10px] [&_p]:leading-[1.8] [&_p]:[overflow-wrap:anywhere]"
+    "performance-panel-details text-performance-panel-freshness-color text-xs mt-2.5 mr-0 mb-0 ml-0 [&_summary]:cursor-pointer",
+    "[&_p]:text-xs [&_p]:leading-[1.8] [&_p]:[overflow-wrap:anywhere]"
   ].join(" "),
 } as const;
 

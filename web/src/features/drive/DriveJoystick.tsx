@@ -25,19 +25,19 @@ const ui = {
     "max-[460.001px]:mt-0 max-[460.001px]:mr-0 max-[460.001px]:mb-0 max-[460.001px]:ml-0"
   ].join(" "),
   axisUp: [
-    "drive-axis-up absolute font-normal text-[11px] leading-[normal] font-mono text-drive-axis-up-color pointer-events-none",
+    "drive-axis-up absolute font-normal text-xs leading-[normal] font-mono text-drive-axis-up-color pointer-events-none",
     "top-2"
   ].join(" "),
   axisDown: [
-    "drive-axis-down absolute font-normal text-[11px] leading-[normal] font-mono text-drive-axis-up-color pointer-events-none",
+    "drive-axis-down absolute font-normal text-xs leading-[normal] font-mono text-drive-axis-up-color pointer-events-none",
     "bottom-2"
   ].join(" "),
   axisLeft: [
-    "drive-axis-left absolute font-normal text-[11px] leading-[normal] font-mono text-drive-axis-up-color pointer-events-none",
+    "drive-axis-left absolute font-normal text-xs leading-[normal] font-mono text-drive-axis-up-color pointer-events-none",
     "left-2.5"
   ].join(" "),
   axisRight: [
-    "drive-axis-right absolute font-normal text-[11px] leading-[normal] font-mono text-drive-axis-up-color pointer-events-none",
+    "drive-axis-right absolute font-normal text-xs leading-[normal] font-mono text-drive-axis-up-color pointer-events-none",
     "right-2.5"
   ].join(" "),
   singleKnob: [
@@ -45,7 +45,7 @@ const ui = {
     "place-items-center shadow-drive-single-knob pointer-events-none"
   ].join(" "),
   quiet: [
-    "drive-quiet text-muted mt-2.5 mr-0 mb-0 ml-0 leading-[1.8] text-[11px]"
+    "drive-quiet text-muted mt-2.5 mr-0 mb-0 ml-0 leading-[1.8] text-xs"
   ].join(" "),
 } as const;
 

@@ -18,42 +18,42 @@ import { Button } from "../../components/ui/Button";
 // Complete utility strings keep the finite presentation states visible to Tailwind.
 const ui = {
   home: [
-    "map-home relative bg-none bg-transparent [&_h3]:text-[15px] [&_h3]:font-medium [&_h3]:mt-0 [&_h3]:mr-0",
-    "[&_h3]:mb-[5px] [&_h3]:ml-0 max-[460.001px]:[&_h3]:text-[14px]"
+    "map-home relative bg-none bg-transparent [&_h3]:text-base [&_h3]:font-medium [&_h3]:mt-0 [&_h3]:mr-0",
+    "[&_h3]:mb-[5px] [&_h3]:ml-0 max-[460.001px]:[&_h3]:text-sm"
   ].join(" "),
   navigationHead: [
     "map-navigation-head flex items-center justify-between gap-2.5"
   ].join(" "),
   english: [
-    "map-english font-normal text-[9px] leading-[normal] font-mono tracking-[1px] text-english"
+    "map-english font-normal text-xs leading-[normal] font-mono tracking-[1px] text-english"
   ].join(" "),
   instruction: [
     "map-instruction mt-3 mr-0 mb-3 ml-0 pt-2.5 pr-2.5 pb-2.5",
-    "pl-2.5 bg-none bg-control rounded-md text-[11px] leading-[1.8]"
+    "pl-2.5 bg-none bg-control rounded-md text-xs leading-[1.8]"
   ].join(" "),
   goalAction: [
     "map-goal-action w-full"
   ].join(" "),
   actions: [
-    "map-actions flex flex-wrap gap-1.5 mt-3 [&_button]:text-[11px]"
+    "map-actions flex flex-wrap gap-1.5 mt-3 [&_button]:text-xs"
   ].join(" "),
   positionActions: [
     "map-position-actions border-t [border-top-style:solid] border-t-line-soft pt-[13px] pr-0 pb-0 pl-0",
-    "mt-4 [&_.map-actions]:mt-3 [&_button]:text-[10px] [&_button]:mt-[9px] [&_button]:px-[9px] [&_button]:py-[7px]"
+    "mt-4 [&_.map-actions]:mt-3 [&_button]:text-xs [&_button]:mt-[9px] [&_button]:px-[9px] [&_button]:py-[7px]"
   ].join(" "),
   quiet: [
-    "map-quiet text-muted text-[11px] leading-[1.8] mt-0 mr-0 mb-0 ml-0"
+    "map-quiet text-muted text-xs leading-[1.8] mt-0 mr-0 mb-0 ml-0"
   ].join(" "),
   navigationDetails: [
-    "map-navigation-details text-muted text-[9px] [&_summary]:cursor-pointer [&[open]>p]:mt-2"
+    "map-navigation-details text-muted text-xs [&_summary]:cursor-pointer [&[open]>p]:mt-2"
   ].join(" "),
   failure: [
     "map-failure mt-2 mr-0 mb-0 ml-0 pt-2 pr-2.5 pb-2",
-    "pl-2.5 rounded-md text-[11px] text-warning-ink bg-none bg-red-wash"
+    "pl-2.5 rounded-md text-xs text-warning-ink bg-none bg-red-wash"
   ].join(" "),
   confirmed: [
     "map-confirmed mt-2 mr-0 mb-0 ml-0 pt-2 pr-2.5 pb-2",
-    "pl-2.5 rounded-md bg-none bg-control text-[11px]"
+    "pl-2.5 rounded-md bg-none bg-control text-xs"
   ].join(" "),
 } as const;
 

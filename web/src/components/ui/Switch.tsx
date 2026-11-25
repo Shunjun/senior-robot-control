@@ -4,11 +4,11 @@ import type { ReactElement } from 'react';
 const ui = {
   switchLabel: [
     "ui-switch-label border border-solid border-line rounded-control text-ink cursor-pointer",
-    "inline-flex items-center justify-center gap-2.5 whitespace-nowrap text-[11px] bg-none bg-switch-surface",
+    "inline-flex items-center justify-center gap-2.5 whitespace-nowrap text-xs bg-none bg-switch-surface",
     "pt-[9px] pr-3 pb-[9px] pl-3 [&:disabled]:opacity-[0.36] [&:disabled]:cursor-not-allowed [&[data-compact=true]]:pt-0 [&[data-compact=true]]:pr-0",
     "[&[data-compact=true]]:pb-0 [&[data-compact=true]]:pl-0 [&[data-compact=true]]:border-0 [&[data-compact=true]]:border-none [&[data-compact=true]]:border-current [&[data-compact=true]]:bg-none [&[data-compact=true]]:bg-transparent [&[data-compact=true]>span:first-child]:absolute",
     "[&[data-compact=true]>span:first-child]:w-[1px] [&[data-compact=true]>span:first-child]:h-[1px] [&[data-compact=true]>span:first-child]:overflow-hidden [&[data-compact=true]>span:first-child]:[clip-path:inset(50%)] max-[760.001px]:pt-[7px] max-[760.001px]:pr-[9px] max-[760.001px]:pb-[7px] max-[760.001px]:pl-[9px]",
-    "max-[760.001px]:text-[10px]"
+    "max-[760.001px]:text-xs"
   ].join(" "),
   switchTrack: [
     "ui-switch-track relative w-[32px] h-[18px] rounded-full bg-none bg-switch-off flex-none",

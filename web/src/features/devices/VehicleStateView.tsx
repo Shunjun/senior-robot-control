@@ -9,11 +9,11 @@ const ui = {
   card: [
     "vehicle-state-view-card pt-4 pr-4 pb-4 pl-4 border border-solid border-line",
     "bg-none bg-app-empty-symbol-background-color min-w-0 [&_h3]:mt-0 [&_h3]:mr-0 [&_h3]:mb-0 [&_h3]:ml-0 [&_h4]:mt-0",
-    "[&_h4]:mr-0 [&_h4]:mb-0 [&_h4]:ml-0 [&_p]:text-ink-soft [&_p]:text-[11px] [&_details]:mt-4 [&_details]:text-ink-dim [&_details]:text-[12px]",
+    "[&_h4]:mr-0 [&_h4]:mb-0 [&_h4]:ml-0 [&_p]:text-ink-soft [&_p]:text-xs [&_details]:mt-4 [&_details]:text-ink-dim [&_details]:text-xs",
     "[&_summary]:cursor-pointer [&_summary]:min-h-[32px]"
   ].join(" "),
   head: [
-    "vehicle-state-view-head flex justify-between items-center gap-3 [&_span]:text-ink-dim [&_span]:text-[12px]"
+    "vehicle-state-view-head flex justify-between items-center gap-3 [&_span]:text-ink-dim [&_span]:text-xs"
   ].join(" "),
   warning: [
     "vehicle-state-view-warning pt-3 pr-3 pb-3 pl-3 border-l-[3px] [border-left-style:solid] border-l-amber",
@@ -21,13 +21,13 @@ const ui = {
   ].join(" "),
   speed: [
     "vehicle-state-view-speed flex items-baseline gap-3 flex-wrap mt-4 mr-0 mb-4",
-    "ml-0 [&_strong]:font-normal [&_strong]:text-[32px] [&_strong]:leading-[1] [&_strong]:font-data [&_span]:text-[12px] [&_span]:text-ink-dim"
+    "ml-0 [&_strong]:font-normal [&_strong]:text-3xl [&_strong]:leading-[1] [&_strong]:font-data [&_span]:text-xs [&_span]:text-ink-dim"
   ].join(" "),
   source: [
     "vehicle-state-view-source text-teal!"
   ].join(" "),
   connection: [
-    "vehicle-state-view-connection text-ink-dim text-[12px]"
+    "vehicle-state-view-connection text-ink-dim text-xs"
   ].join(" "),
   task: [
     "vehicle-state-view-task mt-4.5 pt-4 border-t [border-top-style:solid] border-t-line"
@@ -38,9 +38,9 @@ const ui = {
     "[&_button]:rounded-control [&_button:disabled]:opacity-[0.45] [&_button:disabled]:cursor-not-allowed"
   ].join(" "),
   compactTask: [
-    "vehicle-state-view-compact-task mt-2 text-[10px] [&_h4]:text-[11px] [&_h4]:font-medium [&_h4]:mt-0 [&_h4]:mr-0 [&_h4]:mb-[5px]",
-    "[&_h4]:ml-0 [&_p]:text-[10px] [&_p]:mt-1 [&_p]:mr-0 [&_p]:mb-1 [&_p]:ml-0 [&_.vehicle-state-view-actions]:gap-[5px] [&_.vehicle-state-view-actions_button]:min-h-0",
-    "[&_.vehicle-state-view-actions_button]:pt-[7px] [&_.vehicle-state-view-actions_button]:pr-2.5 [&_.vehicle-state-view-actions_button]:pb-[7px] [&_.vehicle-state-view-actions_button]:pl-2.5 [&_.vehicle-state-view-actions_button]:text-[10px] [&_details]:text-[9px] [&_details]:text-ink-dim"
+    "vehicle-state-view-compact-task mt-2 text-xs [&_h4]:text-xs [&_h4]:font-medium [&_h4]:mt-0 [&_h4]:mr-0 [&_h4]:mb-[5px]",
+    "[&_h4]:ml-0 [&_p]:text-xs [&_p]:mt-1 [&_p]:mr-0 [&_p]:mb-1 [&_p]:ml-0 [&_.vehicle-state-view-actions]:gap-[5px] [&_.vehicle-state-view-actions_button]:min-h-0",
+    "[&_.vehicle-state-view-actions_button]:pt-[7px] [&_.vehicle-state-view-actions_button]:pr-2.5 [&_.vehicle-state-view-actions_button]:pb-[7px] [&_.vehicle-state-view-actions_button]:pl-2.5 [&_.vehicle-state-view-actions_button]:text-xs [&_details]:text-xs [&_details]:text-ink-dim"
   ].join(" "),
 } as const;
 

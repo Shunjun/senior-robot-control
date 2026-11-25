@@ -7,12 +7,12 @@ const ui = {
     "tasks-full-width [grid-column:1/-1]"
   ].join(" "),
   note: [
-    "tasks-note text-muted text-[10px] leading-[1.8] mt-0 mr-0 mb-0 ml-0"
+    "tasks-note text-muted text-xs leading-[1.8] mt-0 mr-0 mb-0 ml-0"
   ].join(" "),
   weekdays: [
     "tasks-weekdays flex flex-wrap gap-1 border border-solid border-line mt-0",
     "mr-0 mb-0 ml-0 pt-1 pr-1.5 pb-1 pl-1.5 [&&_label]:flex",
-    "[&&_label]:items-center [&&_label]:gap-1 [&&_label]:text-[10px] [&_input]:w-[16px] [&_input]:h-[16px] [&_input]:accent-amber"
+    "[&&_label]:items-center [&&_label]:gap-1 [&&_label]:text-xs [&_input]:w-[16px] [&_input]:h-[16px] [&_input]:accent-amber"
   ].join(" "),
 } as const;
 

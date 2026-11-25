@@ -10,20 +10,20 @@ import { ScheduleFields } from "./ScheduleFields";
 // Complete utility strings keep the finite presentation states visible to Tailwind.
 const ui = {
   note: [
-    "tasks-note text-muted text-[10px] leading-[1.8] mt-0 mr-0 mb-0 ml-0"
+    "tasks-note text-muted text-xs leading-[1.8] mt-0 mr-0 mb-0 ml-0"
   ].join(" "),
   editor: [
-    "tasks-editor block mt-3 [&>label+label]:mt-3 [&_label]:grid [&_label]:gap-[7px] [&_label]:text-field [&_label]:text-[11px]",
+    "tasks-editor block mt-3 [&>label+label]:mt-3 [&_label]:grid [&_label]:gap-[7px] [&_label]:text-field [&_label]:text-xs",
     "[&_input]:min-w-0 [&_input]:w-full [&_input]:pt-2.5 [&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:text-input-ink",
     "[&_input]:bg-none [&_input]:bg-input [&_input]:border [&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input [&_select]:min-w-0 [&_select]:w-full",
     "[&_select]:pt-2.5 [&_select]:pr-2.5 [&_select]:pb-2.5 [&_select]:pl-2.5 [&_select]:text-input-ink [&_select]:bg-none [&_select]:bg-input",
-    "[&_select]:border [&_select]:border-solid [&_select]:border-login-input-border-color [&_select]:rounded-input [&_input[readonly]]:text-muted [&_input[readonly]]:text-[10px]"
+    "[&_select]:border [&_select]:border-solid [&_select]:border-login-input-border-color [&_select]:rounded-input [&_input[readonly]]:text-muted [&_input[readonly]]:text-xs"
   ].join(" "),
   planSummary: [
-    "tasks-plan-summary text-field text-[11px] [&_p]:mt-[7px] [&_p]:mr-0 [&_p]:mb-0 [&_p]:ml-0 [&_p]:text-ink"
+    "tasks-plan-summary text-field text-xs [&_p]:mt-[7px] [&_p]:mr-0 [&_p]:mb-0 [&_p]:ml-0 [&_p]:text-ink"
   ].join(" "),
   scheduleDetails: [
-    "tasks-schedule-details text-[10px] text-muted [&_summary]:cursor-pointer [&[open]]:grid [&[open]]:gap-3 [&_label]:mt-2"
+    "tasks-schedule-details text-xs text-muted [&_summary]:cursor-pointer [&[open]]:grid [&[open]]:gap-3 [&_label]:mt-2"
   ].join(" "),
 } as const;
 

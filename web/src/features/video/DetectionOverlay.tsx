@@ -6,7 +6,7 @@ const ui = {
     "video-overlay absolute inset-0 pointer-events-none"
   ].join(" "),
   box: [
-    "video-box absolute block text-teal font-normal text-[11px] leading-[normal] font-data",
+    "video-box absolute block text-teal font-normal text-xs leading-[normal] font-data",
     "border-[2px] border-solid border-teal [background:rgb(16_15_12_/_.55)]"
   ].join(" "),
 } as const;

@@ -18,10 +18,10 @@ import type { MapRef } from "../../api/protocol";
 const ui = {
   toolbar: [
     "map-toolbar absolute z-[6] bottom-3 left-4 flex pt-0 pr-0",
-    "pb-0 pl-0 gap-1 items-center [&[data-docked=true]]:relative [&[data-docked=true]]:left-auto [&[data-docked=true]]:bottom-auto"
+    "pb-0 pl-0 gap-1 items-center flex-wrap [&[data-docked=true]]:relative [&[data-docked=true]]:left-auto [&[data-docked=true]]:bottom-auto"
   ].join(" "),
   zoomGroup: [
-    "map-zoom-group flex items-center gap-1 [&_.map-tool]:grid [&_.map-tool]:place-items-center [&_.map-tool]:pt-[5px] [&_.map-tool]:pr-2.5",
+    "map-zoom-group flex flex-wrap max-w-full items-center gap-1 [&_.map-tool]:grid [&_.map-tool]:place-items-center [&_.map-tool]:pt-[5px] [&_.map-tool]:pr-2.5",
     "[&_.map-tool]:pb-[5px] [&_.map-tool]:pl-2.5 [&_.map-tool]:bg-none [&_.map-tool]:bg-map-tool [&_.map-tool]:rounded-control [&_.map-tool_svg]:w-[12px] [&_.map-tool_svg]:h-[18px] max-[1050.001px]:[&_.map-tool]:w-[25px]",
     "max-[1050.001px]:[&_.map-tool]:h-[28px] max-[1050.001px]:[&_.map-tool]:pt-[3px] max-[1050.001px]:[&_.map-tool]:pr-[3px] max-[1050.001px]:[&_.map-tool]:pb-[3px] max-[1050.001px]:[&_.map-tool]:pl-[3px] max-[1050.001px]:gap-[3px] max-[760.001px]:[&_.map-tool]:w-[22px] max-[760.001px]:[&_.map-tool]:h-[27px]",
     "max-[460.001px]:gap-0.5 max-[460.001px]:[&_.map-tool]:w-[19px] max-[460.001px]:[&_.map-tool]:h-[26px] max-[460.001px]:[&_.map-tool]:pt-px max-[460.001px]:[&_.map-tool]:pr-px max-[460.001px]:[&_.map-tool]:pb-px max-[460.001px]:[&_.map-tool]:pl-px"
@@ -32,10 +32,10 @@ const ui = {
   ].join(" "),
   scaleHtml: [
     "map-scale-html inline-flex items-center gap-[7px] pt-[7px] pr-[9px] pb-[7px] pl-[9px]",
-    "ml-[5px] rounded-sm bg-none bg-scale text-scale-ink whitespace-nowrap font-normal text-[10px]",
+    "ml-[5px] rounded-sm bg-none bg-scale text-scale-ink whitespace-nowrap font-normal text-xs",
     "leading-[normal] font-mono [&_i]:block [&_i]:box-border [&_i]:shrink-0 [&_i]:min-w-0 [&_i]:h-[7px] [&_i]:border",
     "[&_i]:border-solid [&_i]:border-current [&_i]:border-t-0 [&_i]:[border-top-style:none] [&_i]:border-t-current [&_i]:[transform:translateY(-2px)] max-[1050.001px]:pt-1.5 max-[1050.001px]:pr-1.5",
-    "max-[1050.001px]:pb-1.5 max-[1050.001px]:pl-1.5 max-[1050.001px]:text-[8px] max-[760.001px]:gap-[3px] max-[760.001px]:ml-0 max-[760.001px]:text-[7px] max-[760.001px]:pt-[5px] max-[760.001px]:pr-[5px]",
+    "max-[1050.001px]:pb-1.5 max-[1050.001px]:pl-1.5 max-[1050.001px]:text-xs max-[760.001px]:gap-[3px] max-[760.001px]:ml-0 max-[760.001px]:text-xs max-[760.001px]:pt-[5px] max-[760.001px]:pr-[5px]",
     "max-[760.001px]:pb-[5px] max-[760.001px]:pl-[5px] max-[460.001px]:pt-1 max-[460.001px]:pr-0.5 max-[460.001px]:pb-1 max-[460.001px]:pl-0.5 max-[460.001px]:gap-[3px]"
   ].join(" "),
   mapPanel: [
@@ -45,31 +45,31 @@ const ui = {
     "[&_.map-surface[data-picking=true]]:[outline-offset:-1px] [&>.map-hint]:absolute [&>.map-hint]:w-[1px] [&>.map-hint]:h-[1px] [&>.map-hint]:overflow-hidden [&>.map-hint]:[clip-path:inset(50%)] [&>.map-diagnostics]:absolute [&>.map-diagnostics]:w-[1px]",
     "[&>.map-diagnostics]:h-[1px] [&>.map-diagnostics]:overflow-hidden [&>.map-diagnostics]:[clip-path:inset(50%)] [&[data-mini=true]_.map-toolbar]:left-2 [&[data-mini=true]_.map-toolbar]:bottom-2 [&[data-mini=true]_.map-toolbar]:right-2 [&[data-mini=true]_.map-map-details]:hidden [&[data-mini=true]_.map-zoom-group]:gap-0.5",
     "[&[data-mini=true]_.map-tool]:w-[21px] [&[data-mini=true]_.map-tool]:min-w-[21px] [&[data-mini=true]_.map-tool]:h-[24px] [&[data-mini=true]_.map-tool]:pt-0.5 [&[data-mini=true]_.map-tool]:pr-0.5 [&[data-mini=true]_.map-tool]:pb-0.5 [&[data-mini=true]_.map-tool]:pl-0.5 [&[data-mini=true]_.map-tool]:rounded-input",
-    "[&[data-mini=true]_.map-scale-html]:ml-0 [&[data-mini=true]_.map-scale-html]:pt-[3px] [&[data-mini=true]_.map-scale-html]:pr-[3px] [&[data-mini=true]_.map-scale-html]:pb-[3px] [&[data-mini=true]_.map-scale-html]:pl-[3px] [&[data-mini=true]_.map-scale-html]:gap-[3px] [&[data-mini=true]_.map-scale-html]:text-[7px]"
+    "[&[data-mini=true]_.map-scale-html]:ml-0 [&[data-mini=true]_.map-scale-html]:pt-[3px] [&[data-mini=true]_.map-scale-html]:pr-[3px] [&[data-mini=true]_.map-scale-html]:pb-[3px] [&[data-mini=true]_.map-scale-html]:pl-[3px] [&[data-mini=true]_.map-scale-html]:gap-[3px] [&[data-mini=true]_.map-scale-html]:text-xs"
   ].join(" "),
   mapDetails: [
-    "map-map-details absolute top-15.5 left-4 z-[4] text-map-map-details-color text-[10px] [&_summary]:cursor-pointer",
+    "map-map-details absolute top-15.5 left-4 z-[4] text-map-map-details-color text-xs [&_summary]:cursor-pointer",
     "[&_summary]:bg-none [&_summary]:bg-map-map-details-background-color [&_summary]:pt-1.5 [&_summary]:pr-[9px] [&_summary]:pb-1.5 [&_summary]:pl-[9px] [&_summary]:border [&_summary]:border-solid",
     "[&_summary]:border-line [&_summary]:rounded-input [&_summary]:w-[max-content] [&[open]]:bg-none [&[open]]:bg-map-map-details-background-color-2 [&[open]]:border [&[open]]:border-solid [&[open]]:border-line",
     "[&[open]]:rounded-md [&[open]]:pt-2.5 [&[open]]:pr-2.5 [&[open]]:pb-2.5 [&[open]]:pl-2.5 [&[open]]:max-w-[260px] max-[760.001px]:top-15.5 max-[760.001px]:left-3",
-    "max-[460.001px]:top-13 max-[460.001px]:left-3 max-[460.001px]:[&_summary]:text-[9px] max-[460.001px]:[&_summary]:pt-1.5 max-[460.001px]:[&_summary]:pr-1.5 max-[460.001px]:[&_summary]:pb-1.5 max-[460.001px]:[&_summary]:pl-1.5"
+    "max-[460.001px]:top-13 max-[460.001px]:left-3 max-[460.001px]:[&_summary]:text-xs max-[460.001px]:[&_summary]:pt-1.5 max-[460.001px]:[&_summary]:pr-1.5 max-[460.001px]:[&_summary]:pb-1.5 max-[460.001px]:[&_summary]:pl-1.5"
   ].join(" "),
   layers: [
     "map-layers flex flex-wrap gap-2 border-0 border-none border-current pt-2",
     "pr-0 pb-2 pl-0 mt-0 mr-0 mb-0 ml-0"
   ].join(" "),
   legend: [
-    "map-legend text-muted font-normal text-[9px] leading-[normal] font-mono"
+    "map-legend text-muted font-normal text-xs leading-[normal] font-mono"
   ].join(" "),
   choice: [
-    "map-choice inline-flex items-center gap-[5px] text-[10px] [&_input]:accent-amber"
+    "map-choice inline-flex items-center gap-[5px] text-xs [&_input]:accent-amber"
   ].join(" "),
   geometryNote: [
-    "map-geometry-note mt-2 mr-0 mb-2 ml-0 text-muted text-[9px]"
+    "map-geometry-note mt-2 mr-0 mb-2 ml-0 text-muted text-xs"
   ].join(" "),
   staleBanner: [
     "map-stale-banner absolute left-4 right-4 z-[2] top-27.5 pt-2.5 pr-2.5",
-    "pb-2.5 pl-2.5 bg-none bg-workspace-map-message-background-color text-map-stale-banner-color rounded-md text-[11px]"
+    "pb-2.5 pl-2.5 bg-none bg-workspace-map-message-background-color text-map-stale-banner-color rounded-md text-xs"
   ].join(" "),
   surface: [
     "map-surface relative w-full overflow-hidden bg-none bg-graphite-950 border border-solid",
@@ -85,7 +85,7 @@ const ui = {
     "map-zone [stroke-width:2] [stroke-dasharray:8_5]"
   ].join(" "),
   zoneLabel: [
-    "map-zone-label fill-ink font-data text-[12px] [paint-order:stroke] stroke-graphite-950 [stroke-width:3px]"
+    "map-zone-label fill-ink font-data text-xs [paint-order:stroke] stroke-graphite-950 [stroke-width:3px]"
   ].join(" "),
   trajectory: [
     "map-trajectory [fill:none] stroke-teal [stroke-width:2.5] [stroke-linecap:round] [stroke-linejoin:round]"
@@ -98,27 +98,27 @@ const ui = {
     "[&:focus-visible_circle]:fill-amber [&:focus-visible_circle]:stroke-ink"
   ].join(" "),
   waypointName: [
-    "map-waypoint-name fill-ink text-[10px] font-data pointer-events-none"
+    "map-waypoint-name fill-ink text-xs font-data pointer-events-none"
   ].join(" "),
   routeDot: [
     "map-route-dot fill-amber stroke-map-route-dot-stroke [stroke-width:1]"
   ].join(" "),
   routeNumber: [
-    "map-route-number fill-white font-normal text-[10px] leading-[normal] font-data"
+    "map-route-number fill-white font-normal text-xs leading-[normal] font-data"
   ].join(" "),
   scanHits: [
     "map-scan-hits fill-amber stroke-map-scan-hits-stroke [stroke-width:0.8] pointer-events-none"
   ].join(" "),
   hint: [
-    "map-hint mt-0 mr-0 mb-0 ml-0 text-ink-dim font-data text-[12px]"
+    "map-hint mt-0 mr-0 mb-0 ml-0 text-ink-dim font-data text-xs"
   ].join(" "),
   scanLegend: [
-    "map-scan-legend text-map-scan-legend-color text-[0.75rem] mt-0 mr-0 mb-0 ml-0 absolute",
+    "map-scan-legend text-map-scan-legend-color text-xs mt-0 mr-0 mb-0 ml-0 absolute",
     "w-[1px] h-[1px] overflow-hidden [clip-path:inset(50%)] before:content-[''] [&::before]:mr-[0.5em]"
   ].join(" "),
   diagnostics: [
     "map-diagnostics flex flex-wrap gap-[8px_16px] mt-0 mr-0 mb-0 ml-0",
-    "font-data text-[11px] text-ink-soft"
+    "font-data text-xs text-ink-soft"
   ].join(" "),
   marker: [
     "map-marker [&_circle]:[stroke-width:2.5] [&_path]:[fill:none] [&_path]:[stroke-width:3] [&_path]:[stroke-linecap:round] [&_path]:[stroke-linejoin:round]"

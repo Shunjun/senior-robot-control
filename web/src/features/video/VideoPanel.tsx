@@ -13,7 +13,7 @@ const ui = {
     "[&[data-compact=true]_video]:inset-0 [&[data-compact=true]_video]:w-full [&[data-compact=true]_video]:h-full [&[data-compact=true]_video]:object-contain"
   ].join(" "),
   kicker: [
-    "video-kicker text-ink-dim font-normal text-[12px] leading-[normal] font-data"
+    "video-kicker text-ink-dim font-normal text-xs leading-[normal] font-data"
   ].join(" "),
   viewport: [
     "video-viewport relative grid min-h-[220px] place-items-center overflow-hidden bg-none bg-video-viewport-background-color",
@@ -25,7 +25,7 @@ const ui = {
   facts: [
     "video-facts grid grid-cols-[repeat(2,_1fr)] gap-px mt-0 mr-0 mb-0 ml-0",
     "bg-none bg-line-soft [&_div]:pt-2 [&_div]:pr-2 [&_div]:pb-2 [&_div]:pl-2 [&_div]:bg-none [&_div]:bg-graphite-900",
-    "[&_dt]:text-ink-dim [&_dt]:text-[12px] [&_dd]:mt-0 [&_dd]:mr-0 [&_dd]:mb-0 [&_dd]:ml-0 [&_dd]:font-data"
+    "[&_dt]:text-ink-dim [&_dt]:text-xs [&_dd]:mt-0 [&_dd]:mr-0 [&_dd]:mb-0 [&_dd]:ml-0 [&_dd]:font-data"
   ].join(" "),
 } as const;
 

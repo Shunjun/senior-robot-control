@@ -9,25 +9,25 @@ import { MapCatalog } from "./MapCatalog";
 const ui = {
   panel: [
     "mapping-panel pt-0 pr-0 pb-0 pl-0 bg-none bg-transparent border-0",
-    "border-none border-current [&_h3]:text-[15px] [&_h3]:font-medium [&_h3]:mt-0 [&_h3]:mr-0 [&_h3]:mb-[5px] [&_h3]:ml-0",
-    "[&_label]:block [&_label]:text-[11px] [&_label]:text-field [&_label]:mt-[15px] [&_input]:w-full [&_input]:min-w-0 [&_input]:mt-[7px] [&_input]:pt-2.5",
+    "border-none border-current [&_h3]:text-base [&_h3]:font-medium [&_h3]:mt-0 [&_h3]:mr-0 [&_h3]:mb-[5px] [&_h3]:ml-0",
+    "[&_label]:block [&_label]:text-xs [&_label]:text-field [&_label]:mt-[15px] [&_input]:w-full [&_input]:min-w-0 [&_input]:mt-[7px] [&_input]:pt-2.5",
     "[&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:text-input-ink [&_input]:bg-none [&_input]:bg-input [&_input]:border",
-    "[&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input [&_button:not([aria-busy])]:text-[10px] [&_button:not([aria-busy])]:pt-[7px] [&_button:not([aria-busy])]:pr-[9px] [&_button:not([aria-busy])]:pb-[7px]",
+    "[&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input [&_button:not([aria-busy])]:text-xs [&_button:not([aria-busy])]:pt-[7px] [&_button:not([aria-busy])]:pr-[9px] [&_button:not([aria-busy])]:pb-[7px]",
     "[&_button:not([aria-busy])]:pl-[9px] [&_button:not([aria-busy])]:border [&_button:not([aria-busy])]:border-solid [&_button:not([aria-busy])]:border-devices-item-border-color [&_button:not([aria-busy])]:rounded-control [&_button:not([aria-busy])]:text-inherit [&_button:not([aria-busy])]:bg-none [&_button:not([aria-busy])]:bg-control",
-    "[&_button:not([aria-busy])]:cursor-pointer [&_.mapping-actions_button]:text-[11px] [&_button:disabled]:opacity-[0.36] [&_button:disabled]:cursor-not-allowed [&_.mapping-danger]:text-mapping-panel-color [&_.mapping-danger]:border-mapping-panel-border-color [&>details]:mt-2.5 [&>details]:text-[9px]",
-    "[&>details]:text-muted [&>details_summary]:cursor-pointer max-[460.001px]:[&_h3]:text-[14px]"
+    "[&_button:not([aria-busy])]:cursor-pointer [&_.mapping-actions_button]:text-xs [&_button:disabled]:opacity-[0.36] [&_button:disabled]:cursor-not-allowed [&_.mapping-danger]:text-mapping-panel-color [&_.mapping-danger]:border-mapping-panel-border-color [&>details]:mt-2.5 [&>details]:text-xs",
+    "[&>details]:text-muted [&>details_summary]:cursor-pointer max-[460.001px]:[&_h3]:text-sm"
   ].join(" "),
   details: [
-    "mapping-details [&_button:not([aria-busy])]:text-[10px] [&_button:not([aria-busy])]:pt-[7px] [&_button:not([aria-busy])]:pr-[9px] [&_button:not([aria-busy])]:pb-[7px] [&_button:not([aria-busy])]:pl-[9px] [&_button:not([aria-busy])]:border",
+    "mapping-details [&_button:not([aria-busy])]:text-xs [&_button:not([aria-busy])]:pt-[7px] [&_button:not([aria-busy])]:pr-[9px] [&_button:not([aria-busy])]:pb-[7px] [&_button:not([aria-busy])]:pl-[9px] [&_button:not([aria-busy])]:border",
     "[&_button:not([aria-busy])]:border-solid [&_button:not([aria-busy])]:border-devices-item-border-color [&_button:not([aria-busy])]:rounded-control [&_button:not([aria-busy])]:text-inherit [&_button:not([aria-busy])]:bg-none [&_button:not([aria-busy])]:bg-control [&_button:not([aria-busy])]:cursor-pointer [&_button:disabled]:opacity-[0.36]",
-    "[&_button:disabled]:cursor-not-allowed mt-2.5 text-[9px] text-muted [&_summary]:cursor-pointer [&_p]:[overflow-wrap:anywhere]"
+    "[&_button:disabled]:cursor-not-allowed mt-2.5 text-xs text-muted [&_summary]:cursor-pointer [&_p]:[overflow-wrap:anywhere]"
   ].join(" "),
   actions: [
-    "mapping-actions flex flex-wrap gap-1.5 mt-3 [&_button]:text-[11px]"
+    "mapping-actions flex flex-wrap gap-1.5 mt-3 [&_button]:text-xs"
   ].join(" "),
   warning: [
     "mapping-warning pt-2 pr-2 pb-2 pl-2 mt-2 mr-0 mb-2",
-    "ml-0 bg-none bg-mapping-warning-background-color rounded-md text-[10px] leading-[1.8]"
+    "ml-0 bg-none bg-mapping-warning-background-color rounded-md text-xs leading-[1.8]"
   ].join(" "),
 } as const;
 

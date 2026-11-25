@@ -26,7 +26,7 @@ export function SegmentedControl<T extends string>({
         <button
           type="button"
           key={option.value}
-          className={`inline-flex items-center justify-center gap-2 rounded-control border-0 px-[11px] py-1.5 text-[11px] whitespace-nowrap cursor-pointer disabled:opacity-[.36] disabled:cursor-not-allowed ${option.value === value ? variant === "accent" ? "bg-amber text-white" : "bg-selected text-selected-ink" : "bg-transparent text-ink"}`}
+          className={`inline-flex items-center justify-center gap-2 rounded-control border-0 px-[11px] py-1.5 text-xs whitespace-nowrap cursor-pointer disabled:opacity-[.36] disabled:cursor-not-allowed ${option.value === value ? variant === "accent" ? "bg-amber text-white" : "bg-selected text-selected-ink" : "bg-transparent text-ink"}`}
           disabled={disabled}
           aria-pressed={option.value === value}
           onClick={() => onChange(option.value)}

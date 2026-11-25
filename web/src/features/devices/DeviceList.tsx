@@ -11,7 +11,7 @@ import { PairingPanel, type PairingPanelProps } from "./PairingPanel";
 // Complete utility strings keep the finite presentation states visible to Tailwind.
 const ui = {
   presence: [
-    "devices-presence inline-flex items-center gap-1 text-[10px]"
+    "devices-presence inline-flex items-center gap-1 text-xs"
   ].join(" "),
   presenceUnknown: [
     "devices-presence-unknown text-muted"
@@ -30,27 +30,27 @@ const ui = {
     "[&>button]:border-current [&>button]:bg-none [&>button]:bg-transparent [&>button]:pt-1 [&>button]:pr-[7px] [&>button]:pb-1 [&>button]:pl-[7px] [&>button]:text-quiet"
   ].join(" "),
   listTitle: [
-    "devices-list-title mt-0 mr-0 mb-0 ml-0 text-[13px] font-semibold"
+    "devices-list-title mt-0 mr-0 mb-0 ml-0 text-sm font-semibold"
   ].join(" "),
   count: [
-    "devices-count text-[10px] text-muted"
+    "devices-count text-xs text-muted"
   ].join(" "),
   listActions: [
     "devices-list-actions flex items-center gap-2 [&_button]:border-0 [&_button]:border-none [&_button]:border-current [&_button]:bg-none",
     "[&_button]:bg-transparent [&_button]:pt-1 [&_button]:pr-[7px] [&_button]:pb-1 [&_button]:pl-[7px] [&_button]:text-quiet"
   ].join(" "),
   quiet: [
-    "devices-quiet mt-0 mr-0 mb-0 ml-0 text-muted text-[11px] leading-[1.8]"
+    "devices-quiet mt-0 mr-0 mb-0 ml-0 text-muted text-xs leading-[1.8]"
   ].join(" "),
   failure: [
     "devices-failure mt-2 mr-0 mb-2 ml-0 pt-2.5 pr-2.5 pb-2.5",
-    "pl-2.5 text-alert-ink text-[11px] bg-none bg-red-wash rounded-md"
+    "pl-2.5 text-alert-ink text-xs bg-none bg-red-wash rounded-md"
   ].join(" "),
   empty: [
     "devices-empty pt-5 pr-0 pb-5 pl-0"
   ].join(" "),
   emptyTitle: [
-    "devices-empty-title text-[16px] font-[450]"
+    "devices-empty-title text-base font-[450]"
   ].join(" "),
   items: [
     "devices-items list-none pt-0 pr-0 pb-0 pl-0 mt-4 mr-0",
@@ -69,21 +69,21 @@ const ui = {
     "devices-vehicle-identity flex-1 min-w-0"
   ].join(" "),
   itemName: [
-    "devices-item-name block text-[12px] font-medium"
+    "devices-item-name block text-xs font-medium"
   ].join(" "),
   itemId: [
-    "devices-item-id block mt-1 text-[10px] text-ink-dim [overflow-wrap:anywhere]"
+    "devices-item-id block mt-1 text-xs text-ink-dim [overflow-wrap:anywhere]"
   ].join(" "),
   unpairConfirm: [
     "devices-unpair-confirm pt-2.5 pr-2.5 pb-2.5 pl-2.5 bg-none bg-devices-unpair-confirm-background-color rounded-md",
-    "text-[11px] [&_p]:text-[11px]"
+    "text-xs [&_p]:text-xs"
   ].join(" "),
   unpairActions: [
     "devices-unpair-actions flex items-center gap-2.5"
   ].join(" "),
   removePairing: [
     "devices-remove-pairing pt-1 pr-[7px] pb-1 pl-[7px] bg-none bg-transparent border-0",
-    "border-none border-current text-quiet text-[10px] cursor-pointer"
+    "border-none border-current text-quiet text-xs cursor-pointer"
   ].join(" "),
   deviceActions: [
     "devices-device-actions flex items-center gap-2.5 [&>button:first-child]:flex-1"
@@ -91,7 +91,7 @@ const ui = {
   selectionActions: [
     "devices-selection-actions flex items-center gap-2.5 justify-between mt-3 [&_button]:pt-1 [&_button]:pr-[7px]",
     "[&_button]:pb-1 [&_button]:pl-[7px] [&_button]:bg-none [&_button]:bg-transparent [&_button]:border-0 [&_button]:border-none [&_button]:border-current [&_button]:text-quiet",
-    "[&_button]:text-[10px]"
+    "[&_button]:text-xs"
   ].join(" "),
 } as const;
 

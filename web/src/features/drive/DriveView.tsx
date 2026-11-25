@@ -12,47 +12,47 @@ import { SegmentedControl } from "../../components/ui/SegmentedControl";
 // Complete utility strings keep the finite presentation states visible to Tailwind.
 const ui = {
   drive: [
-    "drive-drive grid gap-0 max-[460.001px]:grid-cols-[minmax(0,_1fr)_146px] max-[460.001px]:gap-[5px_12px] max-[460.001px]:[&>.drive-quiet]:[grid-column:1/-1] max-[460.001px]:[&>.drive-quiet]:text-[9px] max-[460.001px]:[&>.drive-quiet]:leading-[1.5]",
+    "drive-drive grid gap-0 max-[460.001px]:grid-cols-[minmax(0,_1fr)_146px] max-[460.001px]:gap-[5px_12px] max-[460.001px]:[&>.drive-quiet]:[grid-column:1/-1] max-[460.001px]:[&>.drive-quiet]:text-xs max-[460.001px]:[&>.drive-quiet]:leading-[1.5]",
     "max-[460.001px]:[&>.drive-quiet]:mt-1"
   ].join(" "),
   driveHead: [
-    "drive-drive-head flex items-center justify-between gap-2.5 [&_h3]:text-[15px] [&_h3]:font-medium [&_h3]:mt-0",
-    "[&_h3]:mr-0 [&_h3]:mb-[5px] [&_h3]:ml-0 max-[460.001px]:[grid-column:1] max-[460.001px]:[&_h3]:text-[14px]"
+    "drive-drive-head flex items-center justify-between gap-2.5 [&_h3]:text-base [&_h3]:font-medium [&_h3]:mt-0",
+    "[&_h3]:mr-0 [&_h3]:mb-[5px] [&_h3]:ml-0 max-[460.001px]:[grid-column:1] max-[460.001px]:[&_h3]:text-sm"
   ].join(" "),
   english: [
-    "drive-english font-normal text-[9px] leading-[normal] font-mono tracking-[1px] text-english"
+    "drive-english font-normal text-xs leading-[normal] font-mono tracking-[1px] text-english"
   ].join(" "),
   subtitle: [
-    "drive-subtitle text-[11px] leading-[1.8] text-muted mt-0 mr-0 mb-0 ml-0",
-    "max-[460.001px]:[grid-column:1] max-[460.001px]:text-[9px]"
+    "drive-subtitle text-xs leading-[1.8] text-muted mt-0 mr-0 mb-0 ml-0",
+    "max-[460.001px]:[grid-column:1] max-[460.001px]:text-xs"
   ].join(" "),
   measurement: [
-    "drive-measurement font-light text-[42px] leading-[normal] font-number tracking-[-1.4px] mt-[15px] mr-0",
-    "mb-[3px] ml-0 [&_small]:font-normal [&_small]:text-[11px] [&_small]:leading-[normal] [&_small]:font-ui [&_small]:tracking-[0] [&_small]:text-muted",
-    "max-[760.001px]:text-[32px] max-[760.001px]:mt-2.5 max-[460.001px]:[grid-column:1] max-[460.001px]:text-[29px] max-[460.001px]:mt-0 max-[460.001px]:mr-0 max-[460.001px]:mb-0 max-[460.001px]:ml-0"
+    "drive-measurement font-light text-4xl leading-[normal] font-number tracking-[-1.4px] mt-[15px] mr-0",
+    "mb-[3px] ml-0 [&_small]:font-normal [&_small]:text-xs [&_small]:leading-[normal] [&_small]:font-ui [&_small]:tracking-[0] [&_small]:text-muted",
+    "max-[760.001px]:text-3xl max-[760.001px]:mt-2.5 max-[460.001px]:[grid-column:1] max-[460.001px]:text-3xl max-[460.001px]:mt-0 max-[460.001px]:mr-0 max-[460.001px]:mb-0 max-[460.001px]:ml-0"
   ].join(" "),
   gears: [
     "drive-gears w-full max-[460.001px]:[grid-column:1]"
   ].join(" "),
   readings: [
-    "drive-readings flex justify-center gap-5.5 text-[10px] text-drive-readings-color whitespace-nowrap max-[460.001px]:[grid-column:2]",
-    "max-[460.001px]:text-[8px] max-[460.001px]:gap-[5px]"
+    "drive-readings flex flex-wrap justify-center gap-5.5 text-xs text-drive-readings-color whitespace-nowrap max-[460.001px]:[grid-column:2]",
+    "max-[460.001px]:text-xs max-[460.001px]:gap-[5px]"
   ].join(" "),
   leaseTag: [
-    "drive-lease-tag text-drive-lease-tag-color text-[10px] mt-[15px] mr-0 mb-2.5 ml-0 max-[760.001px]:mt-2.5",
+    "drive-lease-tag text-drive-lease-tag-color text-xs mt-[15px] mr-0 mb-2.5 ml-0 max-[760.001px]:mt-2.5",
     "max-[760.001px]:mr-0 max-[760.001px]:mb-2.5 max-[760.001px]:ml-0 max-[460.001px]:[grid-column:1] max-[460.001px]:[grid-row:5] max-[460.001px]:mt-1 max-[460.001px]:mr-0 max-[460.001px]:mb-1",
-    "max-[460.001px]:ml-0 max-[460.001px]:text-[9px]"
+    "max-[460.001px]:ml-0 max-[460.001px]:text-xs"
   ].join(" "),
   authority: [
-    "drive-authority [&_button]:w-full max-[460.001px]:[grid-column:1] max-[460.001px]:[grid-row:6] max-[460.001px]:[&_button]:text-[11px] max-[460.001px]:[&_button]:pt-2 max-[460.001px]:[&_button]:pr-2 max-[460.001px]:[&_button]:pb-2",
+    "drive-authority [&_button]:w-full max-[460.001px]:[grid-column:1] max-[460.001px]:[grid-row:6] max-[460.001px]:[&_button]:text-xs max-[460.001px]:[&_button]:pt-2 max-[460.001px]:[&_button]:pr-2 max-[460.001px]:[&_button]:pb-2",
     "max-[460.001px]:[&_button]:pl-2"
   ].join(" "),
   quiet: [
-    "drive-quiet text-muted mt-2.5 mr-0 mb-0 ml-0 leading-[1.8] text-[11px]"
+    "drive-quiet text-muted mt-2.5 mr-0 mb-0 ml-0 leading-[1.8] text-xs"
   ].join(" "),
   failure: [
     "drive-failure text-warning-ink bg-none bg-red-wash pt-2 pr-2 pb-2 pl-2",
-    "rounded-md text-[11px] max-[460.001px]:[grid-column:1/-1] max-[460.001px]:text-[9px] max-[460.001px]:leading-[1.5] max-[460.001px]:mt-1"
+    "rounded-md text-xs max-[460.001px]:[grid-column:1/-1] max-[460.001px]:text-xs max-[460.001px]:leading-[1.5] max-[460.001px]:mt-1"
   ].join(" "),
 } as const;
 

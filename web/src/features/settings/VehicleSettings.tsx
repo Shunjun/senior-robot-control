@@ -1,4 +1,4 @@
-import { RefreshCw } from "lucide-react";
+import { LogOut, RefreshCw } from "lucide-react";
 import { newId } from "../../ids";
 import { memo, useEffect, useRef, useState, type ReactElement } from "react";
 import { validateSettingsRequest } from "../../api/vehicleState";
@@ -21,15 +21,15 @@ const ui = {
     "settings-sr-only absolute w-[1px] h-[1px] overflow-hidden [clip-path:inset(50%)]"
   ].join(" "),
   fields: [
-    "settings-fields mt-4.5 grid grid-cols-[1fr_1fr] gap-4 [&_label]:text-[11px] [&_label]:flex [&_label]:flex-col",
+    "settings-fields mt-4.5 grid grid-cols-[1fr_1fr] gap-4 [&_label]:text-xs [&_label]:flex [&_label]:flex-col",
     "[&_label]:gap-[7px] [&_label]:text-field [&_input]:w-full [&_input]:pt-2.5 [&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:bg-none",
     "[&_input]:bg-input [&_input]:border [&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input [&_input]:text-input-ink [&_input]:min-w-0",
     "[&_select]:w-full [&_select]:pt-2.5 [&_select]:pr-2.5 [&_select]:pb-2.5 [&_select]:pl-2.5 [&_select]:bg-none [&_select]:bg-input [&_select]:border",
-    "[&_select]:border-solid [&_select]:border-login-input-border-color [&_select]:rounded-input [&_select]:text-input-ink [&_select]:min-w-0 [&_small]:text-ink-dim [&_small]:text-[10px]",
+    "[&_select]:border-solid [&_select]:border-login-input-border-color [&_select]:rounded-input [&_select]:text-input-ink [&_select]:min-w-0 [&_small]:text-ink-dim [&_small]:text-xs",
     "[&_.settings-check]:flex-row [&_.settings-check]:items-center max-[460.001px]:grid-cols-[1fr]"
   ].join(" "),
   configDetails: [
-    "settings-config-details mt-3.5 text-muted text-[10px] [&_summary]:cursor-pointer"
+    "settings-config-details mt-3.5 text-muted text-xs [&_summary]:cursor-pointer"
   ].join(" "),
   actions: [
     "settings-actions flex gap-2 flex-wrap mt-5.5 ",
@@ -40,16 +40,16 @@ const ui = {
   ].join(" "),
   card: [
     "settings-card absolute inset-0 overflow-auto pt-7 pr-7 pb-7 pl-7",
-    "bg-none bg-full-view min-w-0 z-[20] [&>header]:flex [&>header]:items-center [&>header]:justify-between [&>header]:gap-3",
-    "[&>header]:mb-6 [&_h1]:text-[23px] [&_h1]:font-[450] [&_h1]:mt-0 [&_h1]:mr-0 [&_h1]:mb-2 [&_h1]:ml-0 [&_h2]:text-[16px]",
-    "[&_h2]:font-medium [&_h2]:mt-0 [&_h2]:mr-0 [&_h2]:mb-0 [&_h2]:ml-0 [&_p]:text-[11px] [&_p]:text-ink-dim [&_p]:leading-[1.8]",
+    "bg-none bg-full-view min-w-0 z-[20] [&>header]:flex [&>header]:items-center [&>header]:justify-between [&>header]:gap-3 [&>header]:flex-wrap",
+    "[&>header]:mb-6 [&_h1]:text-2xl [&_h1]:font-[450] [&_h1]:mt-0 [&_h1]:mr-0 [&_h1]:mb-2 [&_h1]:ml-0 [&_h2]:text-base",
+    "[&_h2]:font-medium [&_h2]:mt-0 [&_h2]:mr-0 [&_h2]:mb-0 [&_h2]:ml-0 [&_p]:text-xs [&_p]:text-ink-dim [&_p]:leading-[1.8]",
     "[&_button:not([aria-busy])]:pt-2 [&_button:not([aria-busy])]:pr-3 [&_button:not([aria-busy])]:pb-2 [&_button:not([aria-busy])]:pl-3 [&_button:not([aria-busy])]:border [&_button:not([aria-busy])]:border-solid [&_button:not([aria-busy])]:border-line [&_button:not([aria-busy])]:rounded-control",
-    "[&_button:not([aria-busy])]:bg-none [&_button:not([aria-busy])]:bg-control [&_button:not([aria-busy])]:text-ink [&_button:not([aria-busy])]:cursor-pointer [&_button:not([aria-busy])]:text-[11px] [&&_.settings-nav_button]:text-left [&&_.settings-nav_button]:border-0 [&&_.settings-nav_button]:border-none",
+    "[&_button:not([aria-busy])]:bg-none [&_button:not([aria-busy])]:bg-control [&_button:not([aria-busy])]:text-ink [&_button:not([aria-busy])]:cursor-pointer [&_button:not([aria-busy])]:text-xs [&&_.settings-nav_button]:text-left [&&_.settings-nav_button]:border-0 [&&_.settings-nav_button]:border-none",
     "[&&_.settings-nav_button]:border-current [&&_.settings-nav_button]:bg-none [&&_.settings-nav_button]:bg-transparent [&&_.settings-nav_button[aria-pressed=true]]:text-settings-card-color [&&_.settings-nav_button[aria-pressed=true]]:bg-none [&&_.settings-nav_button[aria-pressed=true]]:bg-settings-card-background-color [&_button:disabled]:opacity-[0.45] [&_button:disabled]:cursor-not-allowed",
     "[&_fieldset]:border-0 [&_fieldset]:border-none [&_fieldset]:border-current [&_fieldset]:pt-0 [&_fieldset]:pr-0 [&_fieldset]:pb-0 [&_fieldset]:pl-0 [&_fieldset]:mt-0",
-    "[&_fieldset]:mr-0 [&_fieldset]:mb-0 [&_fieldset]:ml-0 [&_fieldset]:min-w-0 [&_legend]:text-[10px] [&_legend]:text-ink-dim [&_legend]:mb-4.5 max-[760.001px]:pt-4.5",
+    "[&_fieldset]:mr-0 [&_fieldset]:mb-0 [&_fieldset]:ml-0 [&_fieldset]:min-w-0 [&_legend]:text-xs [&_legend]:text-ink-dim [&_legend]:mb-4.5 max-[760.001px]:pt-4.5",
     "max-[760.001px]:pr-4.5 max-[760.001px]:pb-4.5 max-[760.001px]:pl-4.5 max-[460.001px]:pt-3.5 max-[460.001px]:pr-3.5 max-[460.001px]:pb-3.5 max-[460.001px]:pl-3.5 max-[460.001px]:[&&_.settings-nav_button]:pt-2",
-    "max-[460.001px]:[&&_.settings-nav_button]:pr-2 max-[460.001px]:[&&_.settings-nav_button]:pb-2 max-[460.001px]:[&&_.settings-nav_button]:pl-2 max-[460.001px]:[&&_.settings-nav_button]:text-[10px] [&_header_p]:mt-0 [&_header_p]:mr-0 [&_header_p]:mb-0 [&_header_p]:ml-0"
+    "max-[460.001px]:[&&_.settings-nav_button]:pr-2 max-[460.001px]:[&&_.settings-nav_button]:pb-2 max-[460.001px]:[&&_.settings-nav_button]:pl-2 max-[460.001px]:[&&_.settings-nav_button]:text-xs [&_header_p]:mt-0 [&_header_p]:mr-0 [&_header_p]:mb-0 [&_header_p]:ml-0"
   ].join(" "),
   layout: [
     "settings-layout grid grid-cols-[185px_minmax(0,_650px)] gap-5.5 max-[760.001px]:grid-cols-[1fr]"
@@ -78,6 +78,9 @@ const ui = {
 } as const;
 
 export interface VehicleSettingsProps {
+  // Compatible: existing standalone settings mounts have no session action.
+  onLogout?: (() => void) | undefined;
+  loggingOut?: boolean | undefined;
   cameraOn?: boolean;
   onCameraChange?: ((value: boolean) => void) | undefined;
   port?: VehiclePort;
@@ -329,6 +332,8 @@ function LoggingForm({ data, busy, enabled, submit, refreshControls }: FormProps
   );
 }
 export const VehicleSettings = memo(function VehicleSettings({
+  onLogout,
+  loggingOut = false,
   port,
   enabled,
   cameraOn = false,
@@ -472,7 +477,10 @@ export const VehicleSettings = memo(function VehicleSettings({
           <h1>车辆设置</h1>
           <p>管理当前车辆的操控、预览与状态配置。</p>
         </div>
-        {onBack && <Button onClick={onBack}>返回控制 ↗</Button>}
+        <div className="flex flex-wrap items-center gap-2">
+          {onBack && <Button onClick={onBack}>返回控制 ↗</Button>}
+          {onLogout && <Button onClick={onLogout} busy={loggingOut}><LogOut />退出登录</Button>}
+        </div>
       </header>
       <div className={ui.layout}>
         <nav className={ui.nav} aria-label="设置分类">
@@ -522,7 +530,7 @@ export const VehicleSettings = memo(function VehicleSettings({
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <h2>驾驶与操控</h2>
                 {data && (
-                  <span className="text-[10px] text-ink-dim">
+                  <span className="text-xs text-ink-dim">
                     · 修订 {data.snapshot.driving_version}
                   </span>
                 )}
@@ -544,7 +552,7 @@ export const VehicleSettings = memo(function VehicleSettings({
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
                 <h2>日志配置</h2>
                 {data && (
-                  <span className="text-[10px] text-ink-dim">
+                  <span className="text-xs text-ink-dim">
                     · 修订 {data.snapshot.logging_version}
                   </span>
                 )}

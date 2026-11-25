@@ -45,28 +45,29 @@ const ui = {
     "[&[data-primary=video]_.workspace-video-viewport]:[border-radius:0] [&[data-primary=video]_.workspace-video-viewport]:z-[0] [&[data-mode=tasks]_.workspace-operations:has([data-task-stage=editor])]:w-[315px] [&[data-mode=tasks]_.workspace-operations:has([data-task-stage=editor])]:p-[19px] [&[data-mode=tasks]_.workspace-operations:has([data-task-stage=editor])]:z-[11] [&[data-task-picking=true]_.workspace-operations]:hidden [&[data-nav-picking=true]_.workspace-operations]:hidden min-[1500px]:[&[data-primary=video]_.workspace-map-viewport]:w-[300px] min-[1500px]:[&[data-primary=video]_.workspace-map-viewport]:h-[180px]",
     "max-[760.001px]:[--edge:12px] max-[760.001px]:[--bottom:80px] max-[760.001px]:[&[data-primary=video]_.workspace-map-viewport]:w-[180px] max-[760.001px]:[&[data-primary=video]_.workspace-map-viewport]:h-[125px] max-[460.001px]:[&[data-mode=tasks]_.workspace-operations:has([data-task-stage=editor])]:left-[var(--edge)] max-[460.001px]:[&[data-mode=tasks]_.workspace-operations:has([data-task-stage=editor])]:w-auto max-[460.001px]:[&[data-mode=tasks]_.workspace-operations:has([data-task-stage=editor])]:max-h-[calc(100%_-_var(--bottom)_-_72px)] max-[460.001px]:[&[data-primary=video]_.workspace-map-viewport]:w-[127px]",
     "max-[460.001px]:[&[data-primary=video]_.workspace-map-viewport]:h-[90px] max-[460.001px]:[&[data-primary=video]_.workspace-map-viewport]:top-[65px] max-[460.001px]:[&[data-primary=video]_.workspace-map-viewport]:bottom-auto max-[460.001px]:[&[data-mode=manual]_.workspace-video-viewport]:top-auto max-[460.001px]:[&[data-mode=manual]_.workspace-video-viewport]:bottom-[calc(var(--bottom)_+_var(--drive-card-height,_250px)_+_12px)] max-[460.001px]:[&[data-mode=manual][data-primary=video]_.workspace-map-viewport]:top-auto max-[460.001px]:[&[data-mode=manual][data-primary=video]_.workspace-map-viewport]:bottom-[calc(var(--bottom)_+_var(--drive-card-height,_250px)_+_12px)] max-[460.001px]:[&[data-primary=video]_.workspace-video-viewport]:inset-0",
-    "max-[460.001px]:[&[data-primary=video]_.workspace-video-viewport]:w-auto max-[460.001px]:[&[data-primary=video]_.workspace-video-viewport]:h-auto"
+    "max-[460.001px]:[&[data-primary=video]_.workspace-video-viewport]:w-auto max-[460.001px]:[&[data-primary=video]_.workspace-video-viewport]:h-auto",
+    "max-[460.001px]:[&[data-mode=manual]_.workspace-toast]:top-24 max-[460.001px]:[&[data-mode=manual]_.workspace-toast]:bottom-auto"
   ].join(" "),
   previewHead: [
     "workspace-preview-head absolute top-[var(--edge)] left-[var(--edge)] right-[var(--edge)] flex items-center gap-3",
     "z-[6] pointer-events-none [&_button]:pointer-events-auto max-[760.001px]:gap-[5px]"
   ].join(" "),
   viewName: [
-    "workspace-view-name text-[12px] text-workspace-view-name-color bg-none bg-workspace-view-name-background-color pt-2 pr-3 pb-2",
-    "pl-3 border border-solid border-devices-pairing-receipt-border-color rounded-md max-[760.001px]:text-[10px] max-[760.001px]:pt-[7px] max-[760.001px]:pr-[7px]",
-    "max-[760.001px]:pb-[7px] max-[760.001px]:pl-[7px] max-[460.001px]:whitespace-nowrap max-[460.001px]:text-[9px] max-[460.001px]:pt-[7px] max-[460.001px]:pr-2 max-[460.001px]:pb-[7px] max-[460.001px]:pl-2",
+    "workspace-view-name text-xs text-workspace-view-name-color bg-none bg-workspace-view-name-background-color pt-2 pr-3 pb-2",
+    "pl-3 border border-solid border-devices-pairing-receipt-border-color rounded-md max-[760.001px]:text-xs max-[760.001px]:pt-[7px] max-[760.001px]:pr-[7px]",
+    "max-[760.001px]:pb-[7px] max-[760.001px]:pl-[7px] max-[460.001px]:whitespace-nowrap max-[460.001px]:text-xs max-[460.001px]:pt-[7px] max-[460.001px]:pr-2 max-[460.001px]:pb-[7px] max-[460.001px]:pl-2",
     "max-[460.001px]:max-w-[112px] max-[460.001px]:overflow-hidden max-[460.001px]:text-ellipsis"
   ].join(" "),
   badge: [
     "workspace-badge pt-1 pr-[7px] pb-1 pl-[7px] rounded-xs bg-none bg-workspace-badge-background-color",
-    "text-workspace-badge-color text-[9px] max-[460.001px]:hidden"
+    "text-workspace-badge-color text-xs max-[460.001px]:hidden"
   ].join(" "),
   grow: [
     "workspace-grow flex-1"
   ].join(" "),
   mapMessage: [
     "workspace-map-message absolute top-11.5 left-0 max-w-full pt-2 pr-3 pb-2",
-    "pl-3 bg-none bg-workspace-map-message-background-color rounded-md text-[11px] pointer-events-none"
+    "pl-3 bg-none bg-workspace-map-message-background-color rounded-md text-xs pointer-events-none"
   ].join(" "),
   mapViewport: [
     "workspace-map-viewport absolute inset-0 [&>div]:h-full [&>div>section]:h-full"
@@ -103,15 +104,15 @@ const ui = {
     "workspace-dock flex gap-[3px] pt-1.5 pr-1.5 pb-1.5 pl-1.5 border",
     "border-solid border-workspace-dock-border-color rounded-dock bg-none bg-devices-connection-notice-background-color shadow-workspace-dock [&_button]:flex [&_button]:items-center",
     "[&_button]:justify-center [&_button]:border-0 [&_button]:border-none [&_button]:border-current [&_button]:rounded-dock-item [&_button]:bg-none [&_button]:bg-transparent [&_button]:text-workspace-dock-color",
-    "[&_button]:pt-3 [&_button]:pr-4 [&_button]:pb-3 [&_button]:pl-4 [&_button]:cursor-pointer [&_button]:whitespace-nowrap [&_button]:text-[12px]",
+    "[&_button]:pt-3 [&_button]:pr-4 [&_button]:pb-3 [&_button]:pl-4 [&_button]:cursor-pointer [&_button]:whitespace-nowrap [&_button]:text-xs",
     "[&_button_svg]:hidden [&_button[aria-pressed=true]]:bg-none [&_button[aria-pressed=true]]:bg-amber [&_button[aria-pressed=true]]:text-white max-[1050.001px]:pt-1 max-[1050.001px]:pr-1 max-[1050.001px]:pb-1 max-[1050.001px]:pl-1",
-    "max-[1050.001px]:gap-px max-[1050.001px]:[&_button]:text-[10px] max-[1050.001px]:[&_button]:pt-2.5 max-[1050.001px]:[&_button]:pr-[11px] max-[1050.001px]:[&_button]:pb-2.5 max-[1050.001px]:[&_button]:pl-[11px] max-[760.001px]:[&_button]:pt-2.5 max-[760.001px]:[&_button]:pr-2",
-    "max-[760.001px]:[&_button]:pb-2.5 max-[760.001px]:[&_button]:pl-2 max-[760.001px]:[&_button]:text-[9px] max-[460.001px]:w-[140px] max-[460.001px]:justify-center max-[460.001px]:pt-[3px] max-[460.001px]:pr-[3px] max-[460.001px]:pb-[3px]",
+    "max-[1050.001px]:gap-px max-[1050.001px]:[&_button]:text-xs max-[1050.001px]:[&_button]:pt-2.5 max-[1050.001px]:[&_button]:pr-[11px] max-[1050.001px]:[&_button]:pb-2.5 max-[1050.001px]:[&_button]:pl-[11px] max-[760.001px]:[&_button]:pt-2.5 max-[760.001px]:[&_button]:pr-2",
+    "max-[760.001px]:[&_button]:pb-2.5 max-[760.001px]:[&_button]:pl-2 max-[760.001px]:[&_button]:text-xs max-[460.001px]:w-[140px] max-[460.001px]:justify-center max-[460.001px]:pt-[3px] max-[460.001px]:pr-[3px] max-[460.001px]:pb-[3px]",
     "max-[460.001px]:pl-[3px] max-[460.001px]:gap-px max-[460.001px]:rounded-panel max-[460.001px]:[&_button]:w-[32px] max-[460.001px]:[&_button]:min-w-0 max-[460.001px]:[&_button]:pt-2 max-[460.001px]:[&_button]:pr-[3px] max-[460.001px]:[&_button]:pb-2",
-    "max-[460.001px]:[&_button]:pl-[3px] max-[460.001px]:[&_button]:text-[9px] max-[460.001px]:[&_button]:leading-[1.5] max-[460.001px]:[&_button]:whitespace-normal max-[460.001px]:[&_button]:rounded-md max-[460.001px]:[&_button]:flex-none"
+    "max-[460.001px]:[&_button]:pl-[3px] max-[460.001px]:[&_button]:text-xs max-[460.001px]:[&_button]:leading-[1.5] max-[460.001px]:[&_button]:whitespace-normal max-[460.001px]:[&_button]:rounded-md max-[460.001px]:[&_button]:flex-none"
   ].join(" "),
   legend: [
-    "workspace-legend relative justify-self-end text-[9px] rounded-input bg-none bg-workspace-legend-background-color border",
+    "workspace-legend relative justify-self-end text-xs rounded-input bg-none bg-workspace-legend-background-color border",
     "border-solid border-workspace-legend-border-color text-workspace-legend-color [&_span]:flex [&_span]:gap-[5px] [&_span]:items-center [&_span]:whitespace-nowrap [&_i]:w-[7px]",
     "[&_i]:h-[7px] [&_i]:bg-none [&_i]:bg-map-structure [&_i]:rounded-2xs [&_i[data-kind=free]]:bg-none [&_i[data-kind=free]]:bg-map-free [&_i[data-kind=unknown]]:bg-none [&_i[data-kind=unknown]]:bg-map-unknown",
     "[&_i[data-kind=scan]]:bg-none [&_i[data-kind=scan]]:bg-amber [&_i[data-kind=scan]]:rounded-full [&_button]:pt-0 [&_button]:pr-0 [&_button]:pb-0 [&_button]:pl-0 [&_button]:bg-none",
@@ -120,15 +121,15 @@ const ui = {
   ].join(" "),
   legendItems: [
     "workspace-legend-items flex flex-wrap gap-2 items-center justify-end pt-2 pr-2.5",
-    "pb-2 pl-2.5 [&>button]:w-[14px] [&>button]:h-[14px] [&>button]:text-[12px] [&>button]:leading-[1] max-[1050.001px]:gap-[5px_7px] max-[1050.001px]:text-[8px]",
-    "max-[760.001px]:text-[7px] max-[760.001px]:pt-1.5 max-[760.001px]:pr-1.5 max-[760.001px]:pb-1.5 max-[760.001px]:pl-1.5 max-[760.001px]:gap-1 max-[460.001px]:flex-col max-[460.001px]:items-start",
-    "max-[460.001px]:justify-start max-[460.001px]:text-[6px] max-[460.001px]:pt-[5px] max-[460.001px]:pr-[5px] max-[460.001px]:pb-[5px] max-[460.001px]:pl-[5px] max-[460.001px]:gap-[3px] max-[460.001px]:[&>button]:[align-self:flex-end]",
-    "max-[460.001px]:[&>button]:h-[8px] max-[460.001px]:[&>button]:text-[10px]"
+    "pb-2 pl-2.5 [&>button]:w-[14px] [&>button]:h-[14px] [&>button]:text-xs [&>button]:leading-[1] max-[1050.001px]:gap-[5px_7px] max-[1050.001px]:text-xs",
+    "max-[760.001px]:text-xs max-[760.001px]:pt-1.5 max-[760.001px]:pr-1.5 max-[760.001px]:pb-1.5 max-[760.001px]:pl-1.5 max-[760.001px]:gap-1 max-[460.001px]:flex-col max-[460.001px]:items-start",
+    "max-[460.001px]:justify-start max-[460.001px]:text-xs max-[460.001px]:pt-[5px] max-[460.001px]:pr-[5px] max-[460.001px]:pb-[5px] max-[460.001px]:pl-[5px] max-[460.001px]:gap-[3px] max-[460.001px]:[&>button]:[align-self:flex-end]",
+    "max-[460.001px]:[&>button]:h-[8px] max-[460.001px]:[&>button]:text-xs"
   ].join(" "),
   toast: [
     "workspace-toast absolute left-[50%] bottom-[91px] [transform:translateX(-50%)] z-[27] pt-[11px] pr-[17px]",
     "pb-[11px] pl-[17px] bg-none bg-workspace-toast-background-color border border-solid border-workspace-toast-border-color rounded-lg",
-    "text-workspace-toast-color text-[11px] max-w-[70%] pointer-events-none shadow-workspace-toast max-[760.001px]:bottom-19.5 max-[760.001px]:max-w-[90%]"
+    "text-workspace-toast-color text-xs max-w-[70%] pointer-events-none shadow-workspace-toast max-[760.001px]:bottom-19.5 max-[760.001px]:max-w-[90%]"
   ].join(" "),
 } as const;
 

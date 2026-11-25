@@ -20,7 +20,7 @@ const ui = {
   pairingPanel: [
     "devices-pairing-panel w-full max-w-[510px] max-h-[calc(100%_-_30px)] overflow-auto bg-none bg-card border",
     "border-solid border-line rounded-card pt-[19px] pr-[19px] pb-[19px] pl-[19px] shadow-ui-card",
-    "backdrop-blur-[15px] [&_p]:mt-[11px] [&_p]:mr-0 [&_p]:mb-[11px] [&_p]:ml-0 [&_p]:leading-[1.9] [&>button]:w-full [&_.devices-pair-initial-hint]:text-[10px]",
+    "backdrop-blur-[15px] [&_p]:mt-[11px] [&_p]:mr-0 [&_p]:mb-[11px] [&_p]:ml-0 [&_p]:leading-[1.9] [&>button]:w-full [&_.devices-pair-initial-hint]:text-xs",
     "[&_.devices-pair-initial-hint]:mt-[15px] [&_.devices-pair-initial-hint]:text-muted"
   ].join(" "),
   listHead: [
@@ -28,35 +28,35 @@ const ui = {
     "[&>button]:border-current [&>button]:bg-none [&>button]:bg-transparent [&>button]:pt-1 [&>button]:pr-[7px] [&>button]:pb-1 [&>button]:pl-[7px] [&>button]:text-quiet"
   ].join(" "),
   pairingHeading: [
-    "devices-pairing-heading text-[17px] font-medium mt-0 mr-0 mb-3 ml-0"
+    "devices-pairing-heading text-base font-medium mt-0 mr-0 mb-3 ml-0"
   ].join(" "),
   pairSteps: [
-    "devices-pair-steps flex justify-between gap-2.5 text-devices-pair-steps-color text-[9px] mb-5 [&_[data-active=true]]:text-devices-pair-steps-color-2",
-    "max-[460.001px]:text-[8px] max-[460.001px]:gap-[5px]"
+    "devices-pair-steps flex justify-between gap-2.5 text-devices-pair-steps-color text-xs mb-5 [&_[data-active=true]]:text-devices-pair-steps-color-2",
+    "max-[460.001px]:text-xs max-[460.001px]:gap-[5px]"
   ].join(" "),
   quiet: [
-    "devices-quiet mt-0 mr-0 mb-0 ml-0 text-muted text-[11px] leading-[1.8]"
+    "devices-quiet mt-0 mr-0 mb-0 ml-0 text-muted text-xs leading-[1.8]"
   ].join(" "),
   pairError: [
-    "devices-pair-error text-devices-pair-error-color text-[11px] min-h-[22px] mt-2 mr-0 mb-2 ml-0"
+    "devices-pair-error text-devices-pair-error-color text-xs min-h-[22px] mt-2 mr-0 mb-2 ml-0"
   ].join(" "),
   pairingReceipt: [
     "devices-pairing-receipt flex justify-between gap-3 items-center bg-none bg-devices-pairing-receipt-background-color border",
     "border-solid border-devices-pairing-receipt-border-color pt-4 pr-4 pb-4 pl-4 rounded-lg mt-4.5",
-    "mr-0 mb-2 ml-0 [&_button]:text-[10px] [&_button]:pt-[7px] [&_button]:pr-2.5 [&_button]:pb-[7px] [&_button]:pl-2.5",
+    "mr-0 mb-2 ml-0 [&_button]:text-xs [&_button]:pt-[7px] [&_button]:pr-2.5 [&_button]:pb-[7px] [&_button]:pl-2.5",
     "max-[460.001px]:pt-[13px] max-[460.001px]:pr-[9px] max-[460.001px]:pb-[13px] max-[460.001px]:pl-[9px]"
   ].join(" "),
   pairingCode: [
-    "devices-pairing-code font-normal text-[25px] leading-[normal] font-code tracking-[3px] text-devices-pairing-code-color select-all",
-    "max-[460.001px]:text-[20px] max-[460.001px]:tracking-[1.5px]"
+    "devices-pairing-code font-normal text-2xl leading-[normal] font-code tracking-[3px] text-devices-pairing-code-color select-all",
+    "max-[460.001px]:text-xl max-[460.001px]:tracking-[1.5px]"
   ].join(" "),
   remaining: [
-    "devices-remaining text-devices-remaining-color text-[10px]"
+    "devices-remaining text-devices-remaining-color text-xs"
   ].join(" "),
   pairingCommand: [
     "devices-pairing-command block whitespace-pre-wrap [overflow-wrap:anywhere] bg-none bg-devices-pairing-command-background-color border border-solid",
     "border-devices-pairing-command-border-color rounded-md pt-3 pr-3 pb-3 pl-3 mt-2.5 mr-0",
-    "mb-2.5 ml-0 font-normal text-[10px] leading-[1.8] font-code select-all"
+    "mb-2.5 ml-0 font-normal text-xs leading-[1.8] font-code select-all"
   ].join(" "),
   pairInitialHint: [
     "devices-pair-initial-hint"

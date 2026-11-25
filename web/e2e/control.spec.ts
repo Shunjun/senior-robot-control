@@ -33,12 +33,42 @@ for (const viewport of [
           return {
             x: r.x, y: r.y, width: r.width, height: r.height,
             hit: element.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)),
+            hitTarget: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML.slice(0, 400),
+            text: element.textContent,
           };
         });
-        expect(result.hit).toBe(true);
+        expect(result.hit, JSON.stringify(result)).toBe(true);
         return result;
       }
+      async function typography(name: string) {
+        const metrics = await page.evaluate(() => {
+          const probe = document.createElement("span");
+          probe.className = "text-xs";
+          document.body.appendChild(probe);
+          const minimum = Number.parseFloat(getComputedStyle(probe).fontSize);
+          probe.remove();
+          const sizes: Array<{ text: string; size: number; tag: string }> = [];
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const element = node.parentElement;
+            if (!node.textContent?.trim() || !element?.checkVisibility() || element.closest(".app-sr-only, .settings-sr-only, script, style")) continue;
+            if (!element.getBoundingClientRect().width) continue;
+            sizes.push({ text: node.textContent.trim().slice(0, 80), size: Number.parseFloat(getComputedStyle(element).fontSize), tag: element.tagName });
+          }
+          return { minimum, sizes, width: innerWidth, scrollWidth: document.documentElement.scrollWidth };
+        });
+        expect(metrics.sizes.filter(s => s.size < metrics.minimum), name).toEqual([]);
+        expect(metrics.scrollWidth, name).toBeLessThanOrEqual(viewport.width);
+        followup[`typography-${name}`] = metrics;
+      }
+      async function expandedTypography(name: string) {
+        const opened = await page.locator("details").evaluateAll(elements => elements.filter(e => e.checkVisibility() && !(e as HTMLDetailsElement).open).map(e => { (e as HTMLDetailsElement).open = true; e.setAttribute("data-typography-opened", ""); return true; }));
+        await typography(`${name}-details-${opened.length}`);
+        await page.locator("details[data-typography-opened]").evaluateAll(elements => elements.forEach(e => { (e as HTMLDetailsElement).open = false; e.removeAttribute("data-typography-opened"); }));
+      }
       async function capture(name: string) {
+        await expandedTypography(name);
         await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
       }
       await page.setViewportSize(viewport);
@@ -76,6 +106,12 @@ for (const viewport of [
       await expect(
         page.getByRole("button", { name: "急停", exact: true }),
       ).toHaveCount(0);
+      await page.getByRole("button", { name: "设置", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "车辆设置", exact: true })).toBeVisible();
+      followup.emptyLogout = await boundsAndHit(page.getByRole("button", { name: "退出登录", exact: true }));
+      await capture("empty-settings");
+      await page.getByRole("button", { name: "返回控制 ↗", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "还没有选择车辆", exact: true })).toBeVisible();
       await expect(
         page.getByRole("navigation", { name: "设备列表" }),
       ).toHaveCount(0);
@@ -181,9 +217,26 @@ for (const viewport of [
         w.stickOwner = document.querySelector("[aria-label=驾驶摇杆]");
       });
       const measurement = page.getByTestId("measured-speed");
-      expect(
-        await measurement.evaluate((el) => getComputedStyle(el).fontSize),
-      ).toBe(viewport.width === 390 ? "29px" : "42px");
+      const standardReadout = await page.evaluate((mobile) => {
+        const probe = document.createElement("span");
+        probe.style.fontSize = mobile ? "var(--text-3xl)" : "var(--text-4xl)";
+        document.body.appendChild(probe);
+        const size = getComputedStyle(probe).fontSize;
+        probe.remove();
+        return size;
+      }, viewport.width === 390);
+      const readoutSize = await measurement.evaluate(el => getComputedStyle(el).fontSize);
+      expect(readoutSize).toBe(standardReadout);
+      followup.readout = { actual: readoutSize, standard: standardReadout };
+      const readingBounds = await page.getByLabel("车辆测量读数", { exact: true }).evaluate(element => {
+        const parent = element.getBoundingClientRect();
+        return Array.from(element.children).map(child => {
+          const rect = child.getBoundingClientRect();
+          return { text: child.textContent, contained: rect.left >= parent.left && rect.right <= parent.right };
+        });
+      });
+      expect(readingBounds.every(reading => reading.contained)).toBe(true);
+      followup.readingBounds = readingBounds;
       await expect(
         page.getByRole("button", { name: "释放控制权", exact: true }),
       ).toHaveCount(0);
@@ -248,7 +301,8 @@ for (const viewport of [
         path: testInfo.outputPath("mini-map.png"),
         fullPage: true,
       });
-      await map.click({ position: { x: 40, y: 40 } });
+      // The enlarged auxiliary text wraps the mini-map toolbar; click clear map space.
+      await map.click({ position: { x: 12, y: 12 } });
       expect(
         await page.evaluate(() =>
           document
@@ -345,6 +399,15 @@ for (const viewport of [
         await page.screenshot({ path: testInfo.outputPath("followup-layers-feedback-viewport.png") });
       }
       await page.evaluate(() => window.scrollTo(0, 0));
+      const readingToastOverlap = await page.getByLabel("车辆测量读数", { exact: true }).evaluate(element => {
+        const toast = document.querySelector(".workspace-toast");
+        if (!toast) return false;
+        const a = element.getBoundingClientRect(), b = toast.getBoundingClientRect();
+        return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      });
+      expect(readingToastOverlap).toBe(false);
+      followup.readingToastOverlap = readingToastOverlap;
+      await expandedTypography("drive");
       await page.screenshot({
         path: testInfo.outputPath("drive.png"),
         fullPage: true,
@@ -379,6 +442,7 @@ for (const viewport of [
       ).toBeVisible();
       await expect(page.locator("img")).toHaveCount(0);
       await expect(page.getByText(/安全 fixture：逐行日志/)).toBeVisible();
+      await capture("logs");
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await expect(page.getByLabel("低速线速度上限")).toHaveValue("1.8");
       await expect(page.getByLabel("高速角速度请求上限")).toBeVisible();
@@ -390,14 +454,17 @@ for (const viewport of [
       await page
         .getByRole("switch", { name: "显示摄像头预览", exact: true })
         .click();
+      await capture("settings-camera");
       await page
         .getByRole("button", { name: "状态与性能", exact: true })
         .click();
+      await capture("settings-status");
       await expect(
         page.getByText("车辆诊断与固定回波校准", { exact: true }),
       ).toBeVisible();
       await page.getByRole("button", { name: "日志配置", exact: true }).click();
       await expect(page.getByLabel(/^保留时间（小时）/)).toBeVisible();
+      await capture("settings-logging");
       await page.getByRole("button", { name: "驾驶与操控", exact: true }).click();
       await expect(page.getByLabel("低速线速度上限")).toHaveValue("2.16");
       await page.getByRole("button", { name: "切换速度单位" }).click();
@@ -584,6 +651,7 @@ for (const viewport of [
         ),
       ).toBe(true);
       await page.evaluate(() => window.scrollTo(0, 0));
+      await expandedTypography("tasks");
       await page.screenshot({
         path: testInfo.outputPath("tasks.png"),
         fullPage: true,
@@ -658,6 +726,16 @@ for (const viewport of [
             }
           ).__wheelFixture.calls,
       );
+      await page.getByRole("button", { name: "设置", exact: true }).click();
+      const logout = page.locator(".settings-card > header").getByRole("button", { name: "退出登录", exact: true });
+      await expect(logout).toBeEnabled();
+      followup.logout = await boundsAndHit(logout);
+      await capture("settings-logout");
+      await logout.click();
+      await expect(page.getByRole("heading", { name: "登录控制台", exact: true })).toBeVisible();
+      const deletes = await page.evaluate(() => (window as unknown as { __wheelFixture: { calls: Array<{ http?: string; method?: string }> } }).__wheelFixture.calls.filter(c => c.http === "/api/session" && c.method === "DELETE"));
+      expect(deletes).toHaveLength(1);
+      await capture("logged-out");
       await writeFile(testInfo.outputPath("followup-bounds.json"), JSON.stringify(followup, null, 2));
       expect(calls.some((call) => call.type === "control.release")).toBe(true);
       expect(
