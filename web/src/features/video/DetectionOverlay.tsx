@@ -1,5 +1,15 @@
 import type { ReactElement } from "react";
-import styles from "./Video.module.css";
+
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  overlay: [
+    "video-overlay absolute inset-0 pointer-events-none"
+  ].join(" "),
+  box: [
+    "video-box absolute block text-teal font-normal text-xs leading-[normal] font-data",
+    "border-[2px] border-solid border-teal [background:rgb(16_15_12_/_.55)]"
+  ].join(" "),
+} as const;
 
 export interface Detection {
   frameTimestamp: number;
@@ -18,10 +28,10 @@ export function DetectionOverlay({ frameTimestamp, detections }: {
   const matching =
     frameTimestamp === null ? [] : detections.filter((detection) => detection.frameTimestamp === frameTimestamp);
   return (
-    <div className={styles.overlay} aria-label="检测结果">
+    <div className={ui.overlay} aria-label="检测结果">
       {matching.map((detection, index) => (
         <span
-          className={styles.box}
+          className={ui.box}
           key={`${detection.label}-${index}`}
           style={{
             left: `${detection.x * 100}%`,

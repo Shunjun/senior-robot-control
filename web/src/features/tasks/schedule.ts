@@ -1,3 +1,4 @@
+import { newId } from "../../ids";
 import type { TaskSchedule } from '../../api/workspace';
 
 export type { TaskSchedule };
@@ -34,7 +35,7 @@ const INITIAL_SCHEDULE: ScheduleDraft = {
 export const NEW_TASK: TaskDraft = { name: '', task_id: '', timezone: 'Asia/Shanghai', ...INITIAL_SCHEDULE };
 
 export function newTaskDraft(): TaskDraft {
-  return { ...NEW_TASK, task_id: crypto.randomUUID() };
+  return { ...NEW_TASK, task_id: newId() };
 }
 
 function clock(time: string): [number, number] | null {

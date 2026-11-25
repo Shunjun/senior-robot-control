@@ -10,17 +10,22 @@ it('normalizes both axes, snaps with hysteresis and returns to zero in one press
   render(<DriveJoystick disabled={false} resetToken={0} onPress={press} onChange={change} onRelease={release} />);
   const pad = screen.getByRole('group', { name: '驾驶摇杆' });
   vi.spyOn(pad, 'getBoundingClientRect').mockReturnValue({ left:0,top:0,width:200,height:200,right:200,bottom:200,x:0,y:0,toJSON(){} });
-  fireEvent.pointerDown(pad, {pointerId:1,clientX:40,clientY:20});
+  const knob = pad.querySelector('.drive-single-knob')!;
+  vi.spyOn(knob, 'getBoundingClientRect').mockReturnValue({ width:53,height:53 } as DOMRect);
+  pad.style.border = '1px solid';
+  // The 200px disc has 72.5px of legal center travel, not the old 100px radius.
+  const move = (x: number, y: number) => ({pointerId:1, clientX:100+x*72.5, clientY:100+y*72.5});
+  fireEvent.pointerDown(pad, move(-.6,-.8));
   expect(press).toHaveBeenCalledWith(.8,.6);
-  fireEvent.pointerMove(pad,{pointerId:1,clientX:93,clientY:20});
+  fireEvent.pointerMove(pad,move(-0.07,-0.8));
   expect(change).toHaveBeenLastCalledWith(.8,0);
-  fireEvent.pointerMove(pad,{pointerId:1,clientX:87,clientY:20});
+  fireEvent.pointerMove(pad,move(-0.13,-0.8));
   expect(change).toHaveBeenLastCalledWith(.8,0);
-  fireEvent.pointerMove(pad,{pointerId:1,clientX:78,clientY:20});
+  fireEvent.pointerMove(pad,move(-0.22,-0.8));
   expect(change).toHaveBeenLastCalledWith(.8,.2);
-  fireEvent.pointerMove(pad,{pointerId:1,clientX:20,clientY:97});
+  fireEvent.pointerMove(pad,move(-0.8,-0.03));
   expect(change).toHaveBeenLastCalledWith(0,.8);
-  fireEvent.pointerMove(pad,{pointerId:1,clientX:100,clientY:100});
+  fireEvent.pointerMove(pad,move(0,0));
   expect(change).toHaveBeenLastCalledWith(0,0);
   fireEvent.pointerUp(pad,{pointerId:1});
   expect(release).toHaveBeenCalledWith('release');

@@ -1,18 +1,44 @@
+import { newId } from "../../ids";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactElement } from "react";
 import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
 import { readMappingCatalog, sendMapCommand, type MappingCatalog, type MapCommand } from "../../api/mapping";
 import type { ResponsePayload, ResponseStatus } from "../../api/protocol";
 import { MapCatalog } from "./MapCatalog";
-import styles from "./Mapping.module.css";
 
-interface MapCatalogControllerProps { robotId: string; link: RobotLink; live: boolean; }
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  panel: [
+    "mapping-panel pt-0 pr-0 pb-0 pl-0 bg-none bg-transparent border-0",
+    "border-none border-current [&_h3]:text-base [&_h3]:font-medium [&_h3]:mt-0 [&_h3]:mr-0 [&_h3]:mb-[5px] [&_h3]:ml-0",
+    "[&_label]:block [&_label]:text-xs [&_label]:text-field [&_label]:mt-[15px] [&_input]:w-full [&_input]:min-w-0 [&_input]:mt-[7px] [&_input]:pt-2.5",
+    "[&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:text-input-ink [&_input]:bg-none [&_input]:bg-input [&_input]:border",
+    "[&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input [&_button:not([aria-busy])]:text-xs [&_button:not([aria-busy])]:pt-[7px] [&_button:not([aria-busy])]:pr-[9px] [&_button:not([aria-busy])]:pb-[7px]",
+    "[&_button:not([aria-busy])]:pl-[9px] [&_button:not([aria-busy])]:border [&_button:not([aria-busy])]:border-solid [&_button:not([aria-busy])]:border-devices-item-border-color [&_button:not([aria-busy])]:rounded-control [&_button:not([aria-busy])]:text-inherit [&_button:not([aria-busy])]:bg-none [&_button:not([aria-busy])]:bg-control",
+    "[&_button:not([aria-busy])]:cursor-pointer [&_.mapping-actions_button]:text-xs [&_button:disabled]:opacity-[0.36] [&_button:disabled]:cursor-not-allowed [&_.mapping-danger]:text-mapping-panel-color [&_.mapping-danger]:border-mapping-panel-border-color [&>details]:mt-2.5 [&>details]:text-xs",
+    "[&>details]:text-muted [&>details_summary]:cursor-pointer max-[460.001px]:[&_h3]:text-sm"
+  ].join(" "),
+  details: [
+    "mapping-details [&_button:not([aria-busy])]:text-xs [&_button:not([aria-busy])]:pt-[7px] [&_button:not([aria-busy])]:pr-[9px] [&_button:not([aria-busy])]:pb-[7px] [&_button:not([aria-busy])]:pl-[9px] [&_button:not([aria-busy])]:border",
+    "[&_button:not([aria-busy])]:border-solid [&_button:not([aria-busy])]:border-devices-item-border-color [&_button:not([aria-busy])]:rounded-control [&_button:not([aria-busy])]:text-inherit [&_button:not([aria-busy])]:bg-none [&_button:not([aria-busy])]:bg-control [&_button:not([aria-busy])]:cursor-pointer [&_button:disabled]:opacity-[0.36]",
+    "[&_button:disabled]:cursor-not-allowed mt-2.5 text-xs text-muted [&_summary]:cursor-pointer [&_p]:[overflow-wrap:anywhere]"
+  ].join(" "),
+  actions: [
+    "mapping-actions flex flex-wrap gap-1.5 mt-3 [&_button]:text-xs"
+  ].join(" "),
+  warning: [
+    "mapping-warning pt-2 pr-2 pb-2 pl-2 mt-2 mr-0 mb-2",
+    "ml-0 bg-none bg-mapping-warning-background-color rounded-md text-xs leading-[1.8]"
+  ].join(" "),
+} as const;
+
+interface MapCatalogControllerProps { robotId: string; link: RobotLink; live: boolean; onExport?: (() => void) | undefined; onImport?: (() => void) | undefined; overlayTarget?: Element | null | undefined; }
 interface CatalogResult { robotId: string; link: RobotLink; data: MappingCatalog; revision: number; }
 interface PendingOperation { id: string; status: ResponseStatus; }
 const FINISHED = new Set<ResponseStatus>(["succeeded", "failed", "needs_review"]);
 const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "medium" });
 const explain = (error: unknown) => error instanceof CommandError ? describeCommandError(error.code) : "操作结果未确认";
 
-export function MapCatalogController({ robotId, link, live }: MapCatalogControllerProps): ReactElement {
+export function MapCatalogController({ robotId, link, live, onExport, onImport, overlayTarget }: MapCatalogControllerProps): ReactElement {
   const [result, setResult] = useState<CatalogResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [readError, setReadError] = useState<string | null>(null);
@@ -54,7 +80,7 @@ export function MapCatalogController({ robotId, link, live }: MapCatalogControll
 
   async function mutate(kind: MapCommand, fields: Record<string, unknown>): Promise<boolean> {
     if (busy || data === null || inFlight.current !== null) return false;
-    const token = Symbol(), owner = scope.current, id = crypto.randomUUID();
+    const token = Symbol(), owner = scope.current, id = newId();
     inFlight.current = token;
     setOperation({ id, status: "accepted" }); setError(null);
     let status: ResponseStatus = "running";
@@ -90,15 +116,66 @@ export function MapCatalogController({ robotId, link, live }: MapCatalogControll
     const entry = data?.entries.find(row => row.map_ref.map_id === id);
     if (entry !== undefined) void mutate(kind, { ...entry.map_ref });
   }
-  return <>
-    {data !== null ? <MapCatalog entries={data.entries.map(row => ({ map_id: row.map_ref.map_id, name: row.name,
-      saved_at: row.saved_at === null ? null : dateFormat.format(new Date(row.saved_at * 1000)) }))}
-      activeId={data.selection.map_ref?.map_id ?? null} status={readError === null ? data.phase : "unavailable"} busy={busy}
-      onCreate={name => mutate("map.create", { name })} onActivate={id => target("map.activate", id)} onDelete={id => target("map.delete", id)} />
-      : <section className={styles.panel} aria-label="活动地图管理"><h3>地图管理</h3><p>{live ? "地图目录暂不可用" : "车辆未实时连接"}</p></section>}
-    <div className={styles.actions}><button disabled={!live} onClick={reload}>刷新地图目录</button></div>
-    {readError !== null && <p className={styles.warning} role="alert">目录更新失败：{readError}</p>}
-    {error !== null && <p className={styles.warning} role="alert">{error}</p>}
-    {operation !== null && <p role="status">操作 {operation.id}：{operation.status}</p>}
-  </>;
+  return (
+    <>
+      {data !== null ? (
+        <MapCatalog
+          entries={data.entries.map((row) => ({
+            map_id: row.map_ref.map_id,
+            name: row.name,
+            saved_at:
+              row.saved_at === null
+                ? null
+                : dateFormat.format(new Date(row.saved_at * 1000)),
+          }))}
+          onExport={onExport}
+          onImport={onImport}
+          overlayTarget={overlayTarget}
+          activeId={data.selection.map_ref?.map_id ?? null}
+          status={readError === null ? data.phase : "unavailable"}
+          busy={busy}
+          onCreate={(name) => mutate("map.create", { name })}
+          onActivate={(id) => target("map.activate", id)}
+          onDelete={(id) => target("map.delete", id)}
+        />
+      ) : (
+        <section className={ui.panel} aria-label="活动地图管理">
+          <h3>地图管理</h3>
+          <p>{live ? "地图目录暂不可用" : "车辆未实时连接"}</p>
+        </section>
+      )}
+      <details className={ui.details}>
+        <summary>地图目录状态</summary>
+        <div className={ui.actions}>
+          <button disabled={!live} onClick={reload}>
+            刷新地图目录
+          </button>
+        </div>
+        {operation !== null && (
+          <p>
+            操作 {operation.id}：{operation.status}
+          </p>
+        )}
+      </details>
+      {readError !== null && (
+        <p className={ui.warning} role="alert">
+          目录更新失败：{readError}
+        </p>
+      )}
+      {error !== null && (
+        <p className={ui.warning} role="alert">
+          {error}
+        </p>
+      )}
+      {operation !== null && (
+        <p role="status">
+          {operation.status === "succeeded"
+            ? "地图操作已完成。"
+            : operation.status === "needs_review"
+              ? "地图操作结果需核查。"
+              : "正在处理地图操作…"}
+        </p>
+      )}
+    </>
+  );
 }

@@ -1,3 +1,4 @@
+import { newId } from "../ids";
 import { BrowserVehicleLogs } from "./logs";
 import { IntentBackpressureError, VehicleTransport, VEHICLE_REQUEST_TYPES, type VehiclePort, type VehicleLogPort } from "./vehicleState";
 import {
@@ -352,7 +353,7 @@ export class RobotClient implements RobotLink {
     if (this.robotId !== robotId) this.vehicle.reset();
     const generation = ++this.generation;
     this.robotId = robotId;
-    this.sessionId = `web-${crypto.randomUUID()}`;
+    this.sessionId = `web-${newId()}`;
     this.epoch = 0;
     this.epochFrontier = 0;
     this.retiredEpoch = 0;
@@ -407,7 +408,7 @@ export class RobotClient implements RobotLink {
   }
 
 
-  request<T = ResponsePayload>(type: string, payload: unknown, requestId: string = crypto.randomUUID()): Promise<T> {
+  request<T = ResponsePayload>(type: string, payload: unknown, requestId: string = newId()): Promise<T> {
     if (!isRequestType(type) && !VEHICLE_REQUEST_TYPES.includes(type)) return Promise.reject(new CommandError("validation", "unsupported request type"));
     if (type === "drive.intent") return Promise.reject(new CommandError("validation", "intent uses the send-only stream"));
     const manual = type === "control.acquire" || type === "control.release";
@@ -467,7 +468,7 @@ export class RobotClient implements RobotLink {
     if (socket.bufferedAmount > 0) throw new IntentBackpressureError();
     const frame = JSON.stringify({
       v: PROTOCOL_VERSION, robot_id: robotId, session_id: this.sessionId,
-      connection_epoch: this.epoch, request_id: crypto.randomUUID(), seq: ++this.seq,
+      connection_epoch: this.epoch, request_id: newId(), seq: ++this.seq,
       expires_at: Date.now() / 1000 + COMMAND_TTL_SECONDS, type: "drive.intent", payload
     });
     if (new TextEncoder().encode(frame).length > MAX_MESSAGE_BYTES) throw new CommandError("validation", "intent is too large");
@@ -494,7 +495,7 @@ export class RobotClient implements RobotLink {
       robot_id: robotId,
       session_id: this.sessionId,
       connection_epoch: this.epoch,
-      request_id: crypto.randomUUID(),
+      request_id: newId(),
       seq: ++this.seq,
       expires_at: Date.now() / 1000 + COMMAND_TTL_SECONDS,
       type,

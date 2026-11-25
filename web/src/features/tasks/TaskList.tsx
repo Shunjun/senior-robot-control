@@ -1,3 +1,4 @@
+import { newId } from "../../ids";
 import { isTaskName, normalizeTaskName } from "../../api/vehicleState";
 import {
   useEffect,
@@ -37,8 +38,134 @@ import {
   scheduleSummary,
   type TaskDraft,
 } from "./schedule";
+import { X, Plus, GripVertical, ArrowUp, ArrowDown } from "lucide-react";
+import { TaskExecutionControls } from "../devices/VehicleStateView";
+import { Button } from "../../components/ui/Button";
 import { Switch } from "../../components/ui/Switch";
-import styles from "./Tasks.module.css";
+
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  map: [
+    "tasks-map min-w-0 min-h-0 h-full overflow-hidden [&>.tasks-note]:absolute [&>.tasks-note]:left-4 [&>.tasks-note]:top-25",
+    "[&>.tasks-note]:pt-[5px] [&>.tasks-note]:pr-2 [&>.tasks-note]:pb-[5px] [&>.tasks-note]:pl-2 [&>.tasks-note]:bg-none [&>.tasks-note]:bg-tasks-map-background-color [&>.tasks-note]:rounded-sm [&>.tasks-note]:text-xs",
+    "[&>.tasks-note]:pointer-events-none"
+  ].join(" "),
+  warning: [
+    "tasks-warning mt-2 mr-0 mb-2 ml-0 pt-2 pr-2 pb-2",
+    "pl-2 bg-none bg-amber-wash rounded-md text-xs"
+  ].join(" "),
+  note: [
+    "tasks-note text-muted text-xs leading-[1.8] mt-0 mr-0 mb-0 ml-0"
+  ].join(" "),
+  picking: [
+    "tasks-picking absolute top-[65px] left-[50%] [transform:translateX(-50%)] z-[14] flex items-center",
+    "gap-2.5 w-[max-content] max-w-[90%] pt-[11px] pr-[15px] pb-[11px] pl-[15px] border",
+    "border-solid border-map-pose-banner-border-color rounded-lg bg-none bg-map-pose-banner-background-color text-xs shadow-map-pose-banner [&_button]:text-xs",
+    "[&_button]:pt-1.5 [&_button]:pr-[9px] [&_button]:pb-1.5 [&_button]:pl-[9px] max-[760.001px]:top-15 max-[760.001px]:text-xs max-[460.001px]:flex-wrap max-[460.001px]:justify-center",
+    "max-[460.001px]:gap-1.5 max-[460.001px]:w-[max-content] max-[460.001px]:[&>span]:[flex-basis:100%] max-[460.001px]:[&>span]:text-center"
+  ].join(" "),
+  panel: [
+    "tasks-panel min-w-0 [&[data-task-stage=editor]_.tasks-header_h3]:text-base [&[data-task-stage=editor]_.tasks-header_h3]:font-bold [&_.tasks-close]:border-0 [&_.tasks-close]:border-none [&_.tasks-close]:border-current [&_.tasks-close]:pt-1 [&_.tasks-close]:pr-[7px] [&_.tasks-close]:pb-1",
+    "[&_.tasks-close]:pl-[7px] [&_.tasks-close]:bg-none [&_.tasks-close]:bg-transparent [&_.tasks-close]:text-quiet [&_.tasks-close]:text-xs [&[hidden]]:hidden"
+  ].join(" "),
+  header: [
+    "tasks-header flex items-center justify-between gap-2.5 [&_h3]:text-base [&_h3]:font-medium [&_h3]:mt-0",
+    "[&_h3]:mr-0 [&_h3]:mb-[5px] [&_h3]:ml-0 max-[460.001px]:[&_h3]:text-sm"
+  ].join(" "),
+  english: [
+    "tasks-english font-normal text-xs leading-[normal] font-mono tracking-[1px] text-english"
+  ].join(" "),
+  close: [
+    "tasks-close"
+  ].join(" "),
+  body: [
+    "tasks-body min-w-0"
+  ].join(" "),
+  description: [
+    "tasks-description text-muted leading-[1.8] mt-0 mr-0 mb-0 ml-0 text-xs",
+    "max-[460.001px]:text-xs"
+  ].join(" "),
+  taskActions: [
+    "tasks-task-actions flex gap-[7px] mt-3 [&>button]:flex-1 [&>button]:text-xs [&>button]:gap-1 [&>button]:px-[9px] [&+.tasks-task-item]:mt-3"
+  ].join(" "),
+  taskItem: [
+    "tasks-task-item border-t [border-top-style:solid] border-t-control-hover pt-3.5 pr-0 pb-[9px] pl-0",
+    "mt-0"
+  ].join(" "),
+  taskIdentity: [
+    "tasks-task-identity flex items-center justify-between gap-2.5 [&_strong]:min-w-0 [&_strong]:[overflow-wrap:anywhere] [&_strong]:text-xs",
+    "[&_strong]:font-medium"
+  ].join(" "),
+  taskStatus: [
+    "tasks-task-status text-xs text-map-stale-banner-color block mt-1.5"
+  ].join(" "),
+  taskButtons: [
+    "tasks-task-buttons flex gap-[5px] flex-wrap mt-[9px] [&_button]:text-xs [&_button]:pt-[7px] [&_button]:pr-2.5",
+    "[&_button]:pb-[7px] [&_button]:pl-2.5 max-[460.001px]:gap-1 max-[460.001px]:[&_button]:pt-1.5 max-[460.001px]:[&_button]:pr-2 max-[460.001px]:[&_button]:pb-1.5 max-[460.001px]:[&_button]:pl-2"
+  ].join(" "),
+  taskDetails: [
+    "tasks-task-details text-xs text-muted mt-[7px] [&_summary]:cursor-pointer [&_code]:block [&_code]:[overflow-wrap:anywhere] [&_code]:mt-[7px]",
+    "[&_code]:mr-0 [&_code]:mb-[7px] [&_code]:ml-0 [&_button]:text-xs [&_button]:pt-[5px] [&_button]:pr-2 [&_button]:pb-[5px] [&_button]:pl-2"
+  ].join(" "),
+  queueInfo: [
+    "tasks-queue-info text-xs bg-none bg-control rounded-md pt-[9px] pr-[9px] pb-[9px]",
+    "pl-[9px] mt-3 text-tasks-queue-info-color leading-[1.8]"
+  ].join(" "),
+  routePreview: [
+    "tasks-route-preview [&_button]:pt-[7px] [&_button]:pr-[9px] [&_button]:pb-[7px] [&_button]:pl-[9px] [&_button]:text-xs [&_button]:text-inherit [&_button]:bg-none",
+    "[&_button]:bg-control [&_button]:border [&_button]:border-solid [&_button]:border-devices-item-border-color [&_button]:rounded-control [&_button]:cursor-pointer pt-2.5 pr-2.5",
+    "pb-2.5 pl-2.5 mt-3 mr-0 mb-3 ml-0 border border-solid",
+    "border-line rounded-md [&_h4]:text-xs [&_h4]:mt-0 [&_h4]:mr-0 [&_h4]:mb-2 [&_h4]:ml-0"
+  ].join(" "),
+  fields: [
+    "tasks-fields border-0 border-none border-current mt-0 mr-0 mb-0 ml-0",
+    "pt-0 pr-0 pb-0 pl-0 min-w-0 [&[hidden]]:hidden"
+  ].join(" "),
+  enableRow: [
+    "tasks-enable-row flex items-center justify-between gap-2 text-muted text-xs mt-3.5"
+  ].join(" "),
+  pointHead: [
+    "tasks-point-head flex items-center justify-between gap-2 text-muted text-xs mt-4.5"
+  ].join(" "),
+  route: [
+    "tasks-route list-none pt-0 pr-0 pb-0 pl-0 mt-3 mr-0",
+    "mb-3 ml-0 [&_li]:bg-none [&_li]:bg-control [&_li]:border [&_li]:border-solid [&_li]:border-logs-caption-border-bottom-color [&_li]:rounded-md",
+    "[&_li]:mb-[5px] [&_li]:pt-[7px] [&_li]:pr-2 [&_li]:pb-[7px] [&_li]:pl-2 [&_li]:text-xs [&_li]:cursor-grab [&_.tasks-task-row]:flex-nowrap",
+    "[&_button]:grid [&_button]:place-items-center [&_button]:flex-none [&_button]:pt-[3px] [&_button]:pr-[5px] [&_button]:pb-[3px] [&_button]:pl-[5px] [&_button]:text-xs",
+    "[&_button]:bg-none [&_button]:bg-control [&_button]:border [&_button]:border-solid [&_button]:border-devices-item-border-color [&_button]:rounded-control [&_button]:cursor-pointer [&_button:disabled]:opacity-[0.36]",
+    "[&_button:disabled]:cursor-not-allowed max-[460.001px]:[&_.tasks-task-row]:gap-[5px]"
+  ].join(" "),
+  taskRow: [
+    "tasks-task-row [&_label]:grid [&_label]:gap-[7px] [&_label]:text-field [&_label]:text-xs [&_input]:min-w-0 [&_input]:w-full [&_input]:pt-2.5",
+    "[&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:text-input-ink [&_input]:bg-none [&_input]:bg-input [&_input]:border",
+    "[&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input [&_select]:min-w-0 [&_select]:w-full [&_select]:pt-2.5 [&_select]:pr-2.5 [&_select]:pb-2.5",
+    "[&_select]:pl-2.5 [&_select]:text-input-ink [&_select]:bg-none [&_select]:bg-input [&_select]:border [&_select]:border-solid [&_select]:border-login-input-border-color",
+    "[&_select]:rounded-input flex items-center gap-[7px] flex-wrap"
+  ].join(" "),
+  grip: [
+    "tasks-grip text-tasks-grip-color flex-none"
+  ].join(" "),
+  pointNumber: [
+    "tasks-point-number grid place-items-center w-[21px] h-[21px] rounded-full bg-none bg-amber",
+    "text-white text-xs flex-none"
+  ].join(" "),
+  pointLabel: [
+    "tasks-point-label flex-1 min-w-0 whitespace-nowrap [&_small]:text-muted [&_small]:text-xs [&_small]:ml-[5px] max-[460.001px]:text-xs",
+    "max-[460.001px]:[&_small]:text-xs max-[460.001px]:[&_small]:ml-[3px]"
+  ].join(" "),
+  waypointDetails: [
+    "tasks-waypoint-details [&_summary]:cursor-pointer mt-2.5 text-xs text-muted [&_.tasks-task-row]:mt-2 [&_.tasks-task-row]:mr-0 [&_.tasks-task-row]:mb-2",
+    "[&_.tasks-task-row]:ml-0 [&_button]:pt-[7px] [&_button]:pr-[9px] [&_button]:pb-[7px] [&_button]:pl-[9px] [&_button]:text-xs [&_button]:text-inherit [&_button]:bg-none",
+    "[&_button]:bg-control [&_button]:border [&_button]:border-solid [&_button]:border-devices-item-border-color [&_button]:rounded-control [&_button]:cursor-pointer"
+  ].join(" "),
+  footer: [
+    "tasks-footer [&_p]:text-xs [&_p]:[overflow-wrap:anywhere] [&_p]:mt-2.5 [&_p]:mr-0 [&_p]:mb-2.5 [&_p]:ml-0"
+  ].join(" "),
+  workspace: [
+    "tasks-workspace grid grid-cols-[minmax(0,_3fr)_minmax(320px,_2fr)] gap-1.5 [&_.tasks-panel]:pt-[19px] [&_.tasks-panel]:pr-[19px] [&_.tasks-panel]:pb-[19px] [&_.tasks-panel]:pl-[19px]",
+    "max-[680.001px]:grid-cols-[1fr]"
+  ].join(" "),
+} as const;
 
 export interface TaskWorkspaceData {
   grid_id: string;
@@ -52,10 +179,15 @@ interface TaskListProps {
   link: RobotLink;
   workspace?: TaskWorkspaceData | undefined;
   unavailable?: string | undefined;
+  onPickStart?: (() => void) | undefined;
   map?: OccupancySnapshot | undefined;
   mapCanvasProps?: Partial<MapCanvasProps> | undefined;
   renderWorkspace?:
-    | ((mapView: ReactElement, panel: ReactElement) => ReactElement)
+    | ((
+        mapView: ReactElement,
+        panel: ReactElement,
+        picking?: ReactElement | null,
+      ) => ReactElement)
     | undefined;
 }
 
@@ -66,7 +198,7 @@ export function TaskList({
   unavailable,
   map,
   mapCanvasProps,
-  renderWorkspace,
+  renderWorkspace, onPickStart,
 }: TaskListProps): ReactElement {
   const ref = snapshot.map_ref;
   //Compatible: older snapshots omit map_generation; still require matching map_ref.
@@ -96,6 +228,7 @@ export function TaskList({
       map={map}
       mapCanvasProps={mapCanvasProps}
       renderWorkspace={renderWorkspace}
+      onPickStart={onPickStart}
     />
   );
 }
@@ -107,9 +240,49 @@ function TaskEditor({
   unavailable,
   map,
   mapCanvasProps,
-  renderWorkspace,
+  renderWorkspace, onPickStart,
 }: TaskListProps): ReactElement {
+  //Compatible: standalone task editor callers retain their combined list/editor layout.
+  const [stage, setStage] = useState<"list" | "editor">(
+    renderWorkspace ? "list" : "editor",
+  );
+  const [details, setDetails] = useState<Record<string, TaskDetails>>({});
+  const detailReads = useRef(new Set<string>());
+  useEffect(() => {
+    if (
+      !renderWorkspace ||
+      !workspace ||
+      !snapshot.connected ||
+      snapshot.stale ||
+      !snapshot.map_ref
+    )
+      return;
+    for (const task of snapshot.tasks ?? []) {
+      const key = `${task.task_id}:${task.revision}`;
+      if (detailReads.current.has(key)) continue;
+      detailReads.current.add(key);
+      void getTaskDetails(
+        link,
+        snapshot.robot_id,
+        snapshot.map_ref,
+        task.task_id,
+      )
+        .then((value) => {
+          if (
+            alive.current &&
+            value.revision === task.revision &&
+            value.grid_id === workspace.grid_id
+          )
+            setDetails((previous) => ({ ...previous, [task.task_id]: value }));
+        })
+        .catch(() => {
+          /* A list may still be used without a readable definition. */
+        });
+    }
+  }, [snapshot.tasks, workspace, link, renderWorkspace]);
   const [draft, setDraft] = useState<TaskDraft>(newTaskDraft);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const [planEnabled, setPlanEnabled] = useState(true);
   const [editing, setEditing] = useState<TaskDetails | null>(null);
   const [preview, setPreview] = useState<TaskDetails | null>(null);
   const [routeBlocked, setRouteBlocked] = useState(false);
@@ -131,7 +304,6 @@ function TaskEditor({
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(true);
   const [creatingWaypoint, setCreatingWaypoint] = useState(false);
   const [waypointDraft, setWaypointDraft] = useState<Pose | null>(null);
   const [waypointName, setWaypointName] = useState("");
@@ -143,18 +315,23 @@ function TaskEditor({
   } | null>(null);
   useEffect(() => () => saveWaypointOperation.current?.abort(), [link]);
 
-  const namesSupported = snapshot.vehicle_ui?.capabilities.includes('task.names.v1') === true;
+  const namesSupported =
+    snapshot.vehicle_ui?.capabilities.includes("task.names.v1") === true;
   function taskLabel(task: { task_id: string; name?: string }): string {
     //Compatible: an old vehicle always displays its stable ID.
-    return namesSupported ? task.name ?? task.task_id : task.task_id;
+    return namesSupported ? (task.name ?? task.task_id) : task.task_id;
   }
   const live = snapshot.connected && !snapshot.stale;
   const progress =
     live && snapshot.route_progress?.map_generation === snapshot.map_generation
       ? snapshot.route_progress
       : undefined;
-  const progressTask = (snapshot.tasks ?? []).find(task => task.task_id === progress?.task_id);
-  const progressLabel = taskLabel(progressTask ?? { task_id: progress?.task_id ?? "导航" });
+  const progressTask = (snapshot.tasks ?? []).find(
+    (task) => task.task_id === progress?.task_id,
+  );
+  const progressLabel = taskLabel(
+    progressTask ?? { task_id: progress?.task_id ?? "导航" },
+  );
   const persisted = catalog ?? workspace?.waypoints ?? [];
   const available = [...persisted, ...draftPoints];
   const waypoints = new Map(
@@ -220,7 +397,7 @@ function TaskEditor({
       if (waypointAttempt.current?.body !== signature) {
         waypointAttempt.current = {
           body: signature,
-          operationId: crypto.randomUUID(),
+          operationId: newId(),
         };
       }
       const response = await link.request<ResponsePayload>("waypoint.create", {
@@ -279,11 +456,14 @@ function TaskEditor({
   }
 
   function newTask(): void {
+    setShowAdvanced(false);
+    setStage(renderWorkspace ? "list" : "editor");
     clearWaypointDraft();
     setPickingRoute(false);
     setDraftPoints([]);
     confirmedCount.current = 0;
     setEditing(null);
+    setPlanEnabled(true);
     setPreview(null);
     setRouteBlocked(false);
     setDraft(newTaskDraft());
@@ -321,6 +501,7 @@ function TaskEditor({
         setConflict(true);
         return;
       }
+      setDetails(previous => ({ ...previous, [task.task_id]: task }));
       setRouteBlocked(false);
       setHighlight(null);
       setMessage(null);
@@ -328,7 +509,10 @@ function TaskEditor({
         setPreview(task);
         return;
       }
+      setStage("editor");
+      if (renderWorkspace && workspace.waypointWrites) { onPickStart?.(); setPickingRoute(true); }
       setEditing(task);
+      setPlanEnabled(task.enabled);
       setDraft({
         ...NEW_TASK,
         task_id: task.task_id,
@@ -408,7 +592,7 @@ function TaskEditor({
       timezone: draft.timezone.trim() || NEW_TASK.timezone,
       schedule,
       waypoint_ids: waypointIds,
-      enabled: editing?.enabled ?? true,
+      enabled: planEnabled,
     };
     let waypointRecovery: "failed" | "unknown" | null = null;
     try {
@@ -444,7 +628,7 @@ function TaskEditor({
               setDraftPoints((previous) =>
                 previous.map((candidate) =>
                   candidate.operationId === point.operationId
-                    ? { ...candidate, operationId: crypto.randomUUID() }
+                    ? { ...candidate, operationId: newId() }
                     : candidate,
                 ),
               );
@@ -474,7 +658,7 @@ function TaskEditor({
       const response = await link.request<ResponsePayload>(
         editing === null ? "task.create" : "task.update",
         {
-          operation_id: crypto.randomUUID(),
+          operation_id: newId(),
           ...(editing === null ? {} : { expected_revision: editing.revision }),
           body,
         },
@@ -526,7 +710,7 @@ function TaskEditor({
       const response = await link.request<ResponsePayload>(
         action === "delete" ? "task.delete" : "task.enable",
         {
-          operation_id: crypto.randomUUID(),
+          operation_id: newId(),
           expected_revision: task.revision,
           body:
             action === "delete"
@@ -557,9 +741,9 @@ function TaskEditor({
     snapshot.map_ref.reference_revision ===
       displayedMap.map_ref.reference_revision;
   const mapView = (
-    <div className={styles.map}>
+    <div className={ui.map}>
       {displayedMap === undefined ? (
-        <p className={styles.warning}>{unavailable ?? "地图不可用"}</p>
+        <p className={ui.warning}>{unavailable ?? "地图不可用"}</p>
       ) : (
         <>
           <MapCanvas
@@ -587,7 +771,7 @@ function TaskEditor({
                 setWaypointDraft(pose);
                 return;
               }
-              const id = `point-${crypto.randomUUID().slice(0, 16)}`;
+              const id = `point-${newId().slice(0, 16)}`;
               setDraftPoints((previous) => [
                 ...previous,
                 {
@@ -595,7 +779,7 @@ function TaskEditor({
                   waypoint_id: id,
                   kind: "waypoint",
                   status: "draft",
-                  operationId: crypto.randomUUID(),
+                  operationId: newId(),
                 },
               ]);
               setWaypointIds((previous) => [...previous, id]);
@@ -608,105 +792,205 @@ function TaskEditor({
           {(mapCanvasProps?.robot !== undefined
             ? mapCanvasProps.robot === null
             : !liveMapTelemetry || snapshot.robot_pose == null) && (
-            <p className={styles.note}>车辆位置暂不可用</p>
+            <p className={ui.note}>车辆位置暂不可用</p>
           )}
         </>
       )}
     </div>
   );
+  const pickingBanner = pickingRoute ? (
+    <div className={ui.picking} role="status">
+      <span>地图选点 · 已选 {waypointIds.length} 点</span>
+      <Button
+        disabled={!waypointIds.length || pending}
+        onClick={() => setWaypointIds((ids) => ids.slice(0, -1))}
+      >
+        撤销上一点
+      </Button>
+      <Button
+        variant="primary"
+        disabled={!waypointIds.length || pending}
+        onClick={() => {
+          setPickingRoute(false);
+          setStage("editor");
+        }}
+      >
+        下一步
+      </Button>
+      <Button
+        onClick={() => {
+          setPickingRoute(false);
+          setStage("list");
+        }}
+      >
+        取消选点
+      </Button>
+    </div>
+  ) : null;
+  function beginTask(): void {
+    newTask();
+    setStage("editor");
+    if (renderWorkspace && workspace?.waypointWrites) { onPickStart?.(); setPickingRoute(true); }
+  }
+  const listVisible = (stage === "list" || !renderWorkspace) && !pickingRoute;
   const panel = (
     <section
-      className={styles.panel}
+      className={ui.panel}
       aria-label="任务管理"
-      data-open={drawerOpen}
+      data-task-stage={stage}
     >
-      <header className={styles.header}>
-        <h3>任务与计划</h3>
-        <button
-          type="button"
-          className={styles.drawerToggle}
-          aria-expanded={drawerOpen}
-          onClick={() => setDrawerOpen(!drawerOpen)}
-        >
-          {drawerOpen ? "收起任务编辑" : "展开任务编辑"}
-        </button>
+      <header className={ui.header}>
+        <h3>
+          {stage === "editor"
+            ? editing
+              ? "编辑任务"
+              : "新建任务"
+            : "任务管理"}
+        </h3>
+        {stage === "list" ? (
+          <span className={ui.english}>TASKS</span>
+        ) : (
+          renderWorkspace && (
+            <div className="flex items-center gap-1">
+              <Button
+                className={ui.close}
+                aria-expanded={showAdvanced}
+                disabled={pending}
+                onClick={() => setShowAdvanced((value) => !value)}
+              >
+                高级
+              </Button>
+              <Button
+                aria-label="关闭任务编辑"
+                className={ui.close}
+                disabled={pending}
+                onClick={newTask}
+              >
+                <X size={16} />
+              </Button>
+            </div>
+          )
+        )}
       </header>
-      <div className={styles.body}>
-        <p className={styles.note}>
-          车端状态 {snapshot.execution_status} · 任务目录 r
-          {snapshot.task_revision}
-        </p>
-        {progress && (
-          <p className={styles.note}>
-            {progressLabel}
-            {progress.active_waypoint_index !== null &&
-              ` · 第 ${progress.active_waypoint_index + 1} 个航点`}
+      <div className={ui.body}>
+        {listVisible && (
+          <>
+            <p className={ui.description}>
+              地图标点建任务，定时触发后执行。
+            </p>
+            <div className={ui.taskActions}>
+              <Button
+                variant="primary"
+                disabled={pending || !workspace || !namesSupported}
+                onClick={beginTask}
+              >
+                <Plus size={14} />
+                新建任务
+              </Button>
+              <Button onClick={() => setMessage("暂未实现：FIFO 等待队列")}>
+                等待队列
+              </Button>
+            </div>
+            {(snapshot.tasks ?? []).length === 0 && (
+              <p className={ui.note}>暂无任务</p>
+            )}
+            {(snapshot.tasks ?? []).map((task) => {
+              const definition = details[task.task_id];
+              const plan =
+                definition && definition.revision === task.revision
+                  ? definition
+                  : null;
+              return (
+                <article className={ui.taskItem} key={task.task_id}>
+                  <div className={ui.taskIdentity}>
+                    <strong>{taskLabel(task)}</strong>
+                    <Switch
+                      compact
+                      label={task.enabled ? "停用计划" : "启用计划"}
+                      checked={task.enabled}
+                      disabled={!live || pending}
+                      onChange={(enabled) =>
+                        void changeTask(task, enabled ? "enable" : "disable")
+                      }
+                    />
+                  </div>
+                  <p className={ui.note}>
+                    {plan
+                      ? `${scheduleSummary({ ...NEW_TASK, ...scheduleDraft(plan.schedule), timezone: plan.timezone }).split(" · 时区")[0]} · ${plan.waypoint_ids.length} 个点 · `
+                      : ""}
+                    {task.enabled ? "定时已启用" : "定时已停用"}
+                  </p>
+                  <span className={ui.taskStatus}>
+                    {progress?.task_id === task.task_id
+                      ? `${progressLabel}${progress.active_waypoint_index !== null ? ` · 第 ${progress.active_waypoint_index + 1} 个航点` : ""}`
+                      : "执行状态以车端报告为准"}
+                  </span>
+                  <div className={ui.taskButtons}>
+                    <Button
+                      variant="primary"
+                      onClick={() => setMessage("暂未实现：立即执行已保存任务")}
+                    >
+                      立即执行
+                    </Button>
+                    <Button
+                      aria-label={`编辑 ${task.task_id}`}
+                      disabled={!workspace || pending}
+                      onClick={() => void openTask(task.task_id)}
+                    >
+                      编辑
+                    </Button>
+                    <Button
+                      aria-label={`查看路线 ${task.task_id}`}
+                      aria-pressed={preview?.task_id === task.task_id}
+                      disabled={!workspace || pending}
+                      onClick={() => void openTask(task.task_id, "view")}
+                    >
+                      查看点位
+                    </Button>
+                  </div>
+                  <TaskExecutionControls
+                    port={link.vehicle}
+                    compact
+                    definitionId={task.task_id}
+                  />
+                  <details className={ui.taskDetails}>
+                    <summary>任务详情</summary>
+                    <code>
+                      {task.task_id} · r{task.revision}
+                    </code>
+                    <Button
+                      disabled={!live || pending}
+                      onClick={() => void changeTask(task, "delete")}
+                    >
+                      删除
+                    </Button>
+                  </details>
+                </article>
+              );
+            })}
+            <div className={ui.queueInfo}>
+              <TaskExecutionControls
+                port={link.vehicle}
+                compact
+                unmatchedIds={(snapshot.tasks ?? []).map(
+                  (task) => task.task_id,
+                )}
+              />
+              {progress
+                ? `${progressLabel} · ${progress.status}`
+                : "当前无路线执行报告"}
+              <br />
+              FIFO 等待队列暂未实现。
+            </div>
+          </>
+        )}
+        {!namesSupported && (
+          <p className={ui.warning}>
+            车端需升级以支持独立任务名称；当前仅显示编号，可编辑已有任务的其他设置。
           </p>
         )}
-        <div>
-          <button
-            type="button"
-            onClick={() => setMessage("暂未实现：FIFO 等待队列")}
-          >
-            等待队列
-          </button>
-          {(snapshot.tasks ?? []).length === 0 && <p>暂无任务</p>}
-          {(snapshot.tasks ?? []).map((task) => (
-            <div
-              className={styles.taskRow}
-              key={task.task_id}
-              data-selected={
-                (preview?.task_id ?? editing?.task_id) === task.task_id
-              }
-            >
-              <div className={styles.taskIdentity}>
-                <strong>{taskLabel(task)}</strong>
-                <code>{task.task_id}</code>
-              </div>
-              <button
-                type="button"
-                aria-label={`查看路线 ${task.task_id}`}
-                aria-pressed={preview?.task_id === task.task_id}
-                disabled={!workspace || pending}
-                onClick={() => void openTask(task.task_id, "view")}
-              >
-                查看路线
-              </button>
-              <button
-                type="button"
-                aria-label={`编辑 ${task.task_id}`}
-                disabled={!workspace || pending}
-                onClick={() => void openTask(task.task_id)}
-              >
-                编辑
-              </button>
-              <Switch
-                label={task.enabled ? "停用计划" : "启用计划"}
-                checked={task.enabled}
-                disabled={!live || pending}
-                onChange={(enabled) =>
-                  void changeTask(task, enabled ? "enable" : "disable")
-                }
-              />
-              <button
-                type="button"
-                onClick={() => setMessage("暂未实现：立即执行已保存任务")}
-              >
-                立即执行
-              </button>
-              <button
-                type="button"
-                disabled={!live || pending}
-                onClick={() => void changeTask(task, "delete")}
-              >
-                删除
-              </button>
-            </div>
-          ))}
-        </div>
-        {!namesSupported && <p className={styles.warning}>车端需升级以支持独立任务名称；当前仅显示编号，可编辑已有任务的其他设置。</p>}
         {workspace === undefined && (
-          <p className={styles.warning}>
+          <p className={ui.warning}>
             {!live
               ? "快照已过期或车辆断开，路线编辑已锁定。"
               : (unavailable ??
@@ -714,10 +998,11 @@ function TaskEditor({
           </p>
         )}
         {preview !== null && (
-          <section className={styles.routePreview} aria-label="所选任务路线">
+          <details className={ui.routePreview} aria-label="所选任务路线">
+            <summary>点位详情 · {taskLabel(preview)}</summary>
             <h4>任务路线 · {taskLabel(preview)}</h4>
-            <p className={styles.note}>内部编号 {preview.task_id}</p>
-            <p className={styles.note}>
+            <p className={ui.note}>内部编号 {preview.task_id}</p>
+            <p className={ui.note}>
               {scheduleSummary({
                 ...NEW_TASK,
                 ...scheduleDraft(preview.schedule),
@@ -730,191 +1015,236 @@ function TaskEditor({
               ))}
             </ol>
             {previewMissing && (
-              <p className={styles.warning}>
+              <p className={ui.warning}>
                 路线含当前目录中不存在的航点，无法显示完整路线。
               </p>
             )}
             <button type="button" onClick={() => setPreview(null)}>
               返回当前草稿
             </button>
-          </section>
+          </details>
         )}
         <fieldset
-          className={styles.fields}
+          hidden={stage !== "editor" || pickingRoute}
+          className={ui.fields}
           disabled={!workspace || pending || preview !== null}
         >
-          <legend>
-            {editing === null ? "新建任务" : `编辑任务 · r${editing.revision}`}
-          </legend>
-          {workspace?.waypointWrites && (
-            <button
-              type="button"
-              onClick={() => setPickingRoute(!pickingRoute)}
-            >
-              {pickingRoute ? "完成选点" : "多点路线选取"}
-            </button>
-          )}
-          {pickingRoute && (
-            <p>
-              在地图上依次选点；键盘方向键移动，Enter
-              添加中心点。完成后编辑定时与顺序，再保存。
-            </p>
-          )}
           <ScheduleEditor
+            compact={renderWorkspace !== undefined}
+            showAdvanced={showAdvanced}
             value={draft}
             onChange={setDraft}
             namesSupported={namesSupported}
             editing={editing !== null}
-          />
-          <div className={styles.taskRow}>
-            <label>
-              可用航点
-              <select
-                value={selected}
-                onChange={(event) => {
-                  setSelected(event.target.value);
-                  setHighlight(event.target.value);
-                }}
-              >
-                <option value="">请选择</option>
-                {available.map((point) => (
-                  <option key={point.waypoint_id}>{point.waypoint_id}</option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              disabled={!waypoints.has(selected)}
-              onClick={() => addWaypoint(selected)}
+          >
+            <div className={ui.enableRow}>
+              <span>启用定时计划</span>
+              <Switch
+                compact
+                label="启用此计划"
+                checked={planEnabled}
+                disabled={pending}
+                onChange={setPlanEnabled}
+              />
+            </div>
+            <div className={ui.pointHead}>
+              <span>任务点 · 拖拽排序</span>
+              {workspace?.waypointWrites && (
+                <Button
+                  className={ui.close}
+                  onClick={() => { onPickStart?.(); setPickingRoute(true); }}
+                >
+                  ＋ 继续标点
+                </Button>
+              )}
+            </div>
+            <ol aria-label="任务航点顺序" className={ui.route}>
+              {waypointIds.map((id, index) => (
+                <li
+                  key={`${index}:${id}`}
+                  draggable={
+                    !pending && workspace !== undefined && preview === null
+                  }
+                  onDragStart={(event) =>
+                    event.dataTransfer.setData("text/plain", String(index))
+                  }
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => reorderWaypoint(event, index)}
+                >
+                  <div
+                    className={ui.taskRow}
+                    onFocus={() => setHighlight(id)}
+                  >
+                    <GripVertical size={13} className={ui.grip} />
+                    <span className={ui.pointNumber}>{index + 1}</span>
+                    <span
+                      className={ui.pointLabel}
+                      data-waypoint-id={id}
+                      title={id}
+                    >
+                      任务点 {index + 1}
+                      <small>
+                        {waypoints.get(id)
+                          ? `${waypoints.get(id)!.x.toFixed(1)}, ${waypoints.get(id)!.y.toFixed(1)}`
+                          : id}
+                      </small>
+                    </span>
+                    <button
+                      type="button"
+                      aria-label={`上移 ${id}`}
+                      disabled={index === 0}
+                      onClick={() => moveWaypoint(index, -1)}
+                    >
+                      <ArrowUp size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`下移 ${id}`}
+                      disabled={index === waypointIds.length - 1}
+                      onClick={() => moveWaypoint(index, 1)}
+                    >
+                      <ArrowDown size={13} />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`移除 ${id}`}
+                      onClick={() =>
+                        setWaypointIds(
+                          waypointIds.filter((_, offset) => offset !== index),
+                        )
+                      }
+                    >
+                      <X size={13} />
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ol>
+            <p className={ui.note}>连线表示执行顺序，不表示规划路径。</p>
+            {(renderWorkspace === undefined || showAdvanced || creatingWaypoint) && <details
+              open={renderWorkspace === undefined || creatingWaypoint}
+              className={ui.waypointDetails}
             >
-              加入路线
-            </button>
-          </div>
-          {workspace?.waypointWrites === true &&
-            (creatingWaypoint ? (
-              <div className={styles.taskRow}>
-                <p className={styles.note}>
-                  {waypointDraft === null
-                    ? "在地图空闲区域选点，可拖动设置朝向。"
-                    : `已选位置 X ${waypointDraft.x.toFixed(2)} m · Y ${waypointDraft.y.toFixed(2)} m`}
-                </p>
+              <summary>高级航点编辑</summary>
+              <p className={ui.note}>
+                车端状态 {snapshot.execution_status} · 任务目录 r
+                {snapshot.task_revision}
+              </p>
+              {workspace?.waypointWrites && (
+                <Button onClick={() => { onPickStart?.(); setPickingRoute(true); }}>
+                  多点路线选取
+                </Button>
+              )}
+              <div className={ui.taskRow}>
                 <label>
-                  新航点编号
-                  <input
-                    value={waypointName}
-                    onChange={(event) => setWaypointName(event.target.value)}
-                  />
+                  可用航点
+                  <select
+                    value={selected}
+                    onChange={(event) => {
+                      setSelected(event.target.value);
+                      setHighlight(event.target.value);
+                    }}
+                  >
+                    <option value="">请选择</option>
+                    {available.map((point) => (
+                      <option key={point.waypoint_id}>
+                        {point.waypoint_id}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <button
                   type="button"
-                  disabled={
-                    waypointDraft === null ||
-                    waypointName.trim() === "" ||
-                    waypoints.has(waypointName.trim())
-                  }
-                  onClick={() => void saveWaypoint()}
+                  disabled={!waypoints.has(selected)}
+                  onClick={() => addWaypoint(selected)}
                 >
-                  保存航点
-                </button>
-                <button type="button" onClick={clearWaypointDraft}>
-                  取消新航点
+                  加入路线
                 </button>
               </div>
-            ) : (
-              <button type="button" onClick={() => setCreatingWaypoint(true)}>
-                在地图上新建航点
-              </button>
-            ))}
-          <ol aria-label="任务航点顺序" className={styles.route}>
-            {waypointIds.map((id, index) => (
-              <li
-                key={`${index}:${id}`}
-                draggable={
-                  !pending && workspace !== undefined && preview === null
-                }
-                onDragStart={(event) =>
-                  event.dataTransfer.setData("text/plain", String(index))
-                }
-                onDragOver={(event) => event.preventDefault()}
-                onDrop={(event) => reorderWaypoint(event, index)}
-              >
-                <div
-                  className={styles.taskRow}
-                  onFocus={() => setHighlight(id)}
-                >
-                  <code>{id}</code>
+              {workspace?.waypointWrites === true &&
+                (creatingWaypoint ? (
+                  <div className={ui.taskRow}>
+                    <p className={ui.note}>
+                      {waypointDraft === null
+                        ? "在地图空闲区域选点，可拖动设置朝向。"
+                        : `已选位置 X ${waypointDraft.x.toFixed(2)} m · Y ${waypointDraft.y.toFixed(2)} m`}
+                    </p>
+                    <label>
+                      新航点编号
+                      <input
+                        value={waypointName}
+                        onChange={(event) =>
+                          setWaypointName(event.target.value)
+                        }
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      disabled={
+                        waypointDraft === null ||
+                        waypointName.trim() === "" ||
+                        waypoints.has(waypointName.trim())
+                      }
+                      onClick={() => void saveWaypoint()}
+                    >
+                      保存航点
+                    </button>
+                    <button type="button" onClick={clearWaypointDraft}>
+                      取消新航点
+                    </button>
+                  </div>
+                ) : (
                   <button
                     type="button"
-                    aria-label={`上移 ${id}`}
-                    disabled={index === 0}
-                    onClick={() => moveWaypoint(index, -1)}
+                    onClick={() => setCreatingWaypoint(true)}
                   >
-                    上移
+                    在地图上新建航点
                   </button>
-                  <button
-                    type="button"
-                    aria-label={`下移 ${id}`}
-                    disabled={index === waypointIds.length - 1}
-                    onClick={() => moveWaypoint(index, 1)}
-                  >
-                    下移
-                  </button>
-                  <button
-                    type="button"
-                    aria-label={`移除 ${id}`}
-                    onClick={() =>
-                      setWaypointIds(
-                        waypointIds.filter((_, offset) => offset !== index),
-                      )
-                    }
-                  >
-                    移除
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ol>
-          {missingWaypoint && (
-            <p className={styles.warning}>
-              路线含当前目录中不存在的航点，提交已锁定。
-            </p>
-          )}
+                ))}
+            </details>}
+            {missingWaypoint && (
+              <p className={ui.warning}>
+                路线含当前目录中不存在的航点，提交已锁定。
+              </p>
+            )}
+          </ScheduleEditor>
         </fieldset>
       </div>
-      <footer className={styles.footer}>
+      <footer className={ui.footer}>
         {message !== null && <p role="status">{message}</p>}
         {conflict && editing !== null && (
-          <button
-            type="button"
+          <Button
             disabled={pending}
             onClick={() => void openTask(editing.task_id)}
           >
             重载车端版本
-          </button>
+          </Button>
         )}
-        <button
-          type="button"
-          disabled={pending || !workspace || !namesSupported}
-          onClick={newTask}
-        >
-          新建任务
-        </button>
-        <button
-          type="button"
-          className={styles.primary}
-          disabled={!canSubmit}
-          onClick={() => void submit()}
-        >
-          提交任务
-        </button>
+        {stage === "editor" && !pickingRoute && (
+          <div className={ui.taskActions}>
+            {renderWorkspace && (
+              <Button disabled={pending} onClick={newTask}>
+                取消
+              </Button>
+            )}
+            <Button
+              variant="primary"
+              disabled={!canSubmit}
+              onClick={() => void submit()}
+            >
+              保存任务
+            </Button>
+          </div>
+        )}
       </footer>
     </section>
   );
   return renderWorkspace ? (
-    renderWorkspace(mapView, panel)
+    renderWorkspace(mapView, panel, pickingBanner)
   ) : (
-    <div className={styles.workspace}>
+    <div className={ui.workspace}>
       {mapView}
+      {pickingBanner}
       {panel}
     </div>
   );
