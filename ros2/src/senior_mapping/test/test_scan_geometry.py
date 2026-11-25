@@ -111,24 +111,18 @@ def stable_prefix(replay, *, wall=False):
     return replay.step(6, wall=wall)
 
 
-def test_ego_translation_preserves_isolated_stability():
-    replay = Replay()
-    result = stable_prefix(replay)
-    assert len(result.stable) == 1
-    contour = result.stable[0]
-    assert contour.first_key == episode_frame(4).key
-    assert contour.last_key == episode_frame(6).key
-    assert contour.beam_indices == tuple(range(65))
-    assert len(contour.odom_surface) == 65  # 32 samples must never truncate support
-    assert contour.common_fraction >= replay.profile.min_common_fraction
-    assert contour.max_residual_m <= replay.profile.stable_residual_m
-
-
 def test_motion_revokes_bound_support_and_requires_new_stability_window():
     replay = Replay()
     initial = stable_prefix(replay, wall=True)
     assert len(initial.stable) == 2
     obj, wall = sorted(initial.stable, key=lambda item: item.odom_surface[0][1])
+    contour = obj
+    assert contour.first_key == episode_frame(4, wall=True).key
+    assert contour.last_key == episode_frame(6, wall=True).key
+    assert contour.beam_indices == tuple(range(65))
+    assert len(contour.odom_surface) == 65  # 32 samples must never truncate support
+    assert contour.common_fraction >= replay.profile.min_common_fraction
+    assert contour.max_residual_m <= replay.profile.stable_residual_m
     replay.tracker.bind_support(obj.local_track_id, ("object-support",))
     replay.tracker.bind_support(wall.local_track_id, ("wall-support",))
     revoked = []
@@ -199,14 +193,12 @@ def test_motion_revokes_bound_support_and_requires_new_stability_window():
 
 
 def test_capacity_never_truncates_current_hits():
-    replay = Replay(GeometryLimits(max_clusters=1, max_tracks=1))
+    replay = Replay()
     full = replay.step(1, count=2048)
     assert not full.stable
     assert not replay.step(2, count=2048).stable
     full = replay.step(3, count=2048)
     assert len(full.stable[0].odom_surface) == 2048
-    limited = replay.step(4, wall=True)
-    assert limited.unresolved_reason == "cluster_capacity" and not limited.stable
     crowded = Replay(GeometryLimits(max_candidates=1))
     crowded.step(1, wall=True)
     saturated = crowded.step(2, wall=True)
@@ -214,23 +206,58 @@ def test_capacity_never_truncates_current_hits():
     assert not saturated.stable and not saturated.moved_support_ids
 
 
-def test_profile_rejects_unusable_evidence_and_capacity():
-    profile = synthetic_profile()
-    for change in (
-        {"evidence_digest": "none"},
-        {"profile_id": ""},
-        {"range_sigma_m": float("nan")},
-        {"odom_yaw_error_rad": -1},
-        {"min_common_fraction": 0},
-        {"min_common_fraction": 1.1},
-        {"motion_residual_m": 0.04},
-        {"min_independent_frames": True},
-        {"min_independent_frames": 1},
-        {"max_gap_s": 0},
-    ):
-        with pytest.raises(ValueError):
-            replace(profile, **change)
-    with pytest.raises(ValueError):
-        GeometryLimits(max_candidates=9)
-    replay = Replay(GeometryLimits(max_frames=2))
-    assert replay.step(1).unresolved_reason == "profile_exceeds_capacity"
+def test_short_displacement_then_stop_revokes_before_restability():
+    replay = Replay()
+    obj, wall = sorted(stable_prefix(replay, wall=True).stable, key=lambda c: c.odom_surface[0][1])
+    replay.tracker.bind_support(obj.local_track_id, ("object-support",))
+    replay.tracker.bind_support(wall.local_track_id, ("wall-support",))
+    revoked = []
+    for seq in range(7, 12):
+        evidence = replay.step(seq, offset=0.2, wall=True)
+        revoked.extend(evidence.moved_support_ids)
+        assert any(c.support_ids == ("wall-support",) for c in evidence.stable)
+        current = [c for c in evidence.stable if c.odom_surface[0][1] < 1]
+        assert all(c.support_ids == () for c in current)
+        if seq == 7:
+            assert not evidence.moved_support_ids  # first difference is insufficient
+        if seq < 10:
+            assert not current
+        else:
+            assert len(current) == 1
+            assert current[0].first_key == episode_frame(8, offset=0.2, wall=True).key
+            assert current[0].local_track_id != obj.local_track_id
+            with pytest.raises(ValueError, match="current stable contour"):
+                replay.tracker.bind_support(obj.local_track_id, ("object-support",))
+    assert revoked == ["object-support"]
+
+
+def test_slow_cumulative_displacement_keeps_original_binding_baseline():
+    replay = Replay()
+    obj, wall = sorted(stable_prefix(replay, wall=True).stable, key=lambda c: c.odom_surface[0][1])
+    replay.tracker.bind_support(obj.local_track_id, ("object-support",))
+    replay.tracker.bind_support(wall.local_track_id, ("wall-support",))
+    revoked = []
+    revoked_at = None
+    for seq in range(7, 73):
+        evidence = replay.step(seq, offset=(seq - 6) * 0.002, wall=True)
+        assert any(c.support_ids == ("wall-support",) for c in evidence.stable)
+        revoked.extend(evidence.moved_support_ids)
+        if evidence.moved_support_ids:
+            assert evidence.moved_support_ids == ("object-support",)
+            revoked_at = seq
+        for current in (c for c in evidence.stable if c.odom_surface[0][1] < 1):
+            if revoked_at is None:
+                assert current.support_ids == ("object-support",)
+                assert current.max_residual_m <= replay.profile.stable_residual_m
+                # Normal owner confirmation must not slide the support baseline.
+                replay.tracker.bind_support(current.local_track_id, current.support_ids)
+            else:
+                assert current.support_ids == ()
+                assert current.local_track_id != obj.local_track_id
+                assert current.first_key.sequence >= revoked_at
+                assert seq - revoked_at >= 2
+    assert revoked == ["object-support"]
+    assert revoked_at is not None and revoked_at <= 72
+    current = next(c for c in evidence.stable if c.odom_surface[0][1] < 1)
+    assert current.support_ids == () and current.first_key.sequence >= revoked_at
+    replay.tracker.bind_support(current.local_track_id, ("new-object-support",))

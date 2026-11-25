@@ -14,6 +14,8 @@ from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from senior_perception.vision.raw_capture import RawCaptureHeader
+
 from .shared_scan import Beam, QualifiedScan, ScanKey
 
 Point = tuple[float, float]
@@ -119,9 +121,8 @@ class GeometryEvidence:
 
 
 @dataclass(frozen=True)
-class _Contour:
-    indices: tuple[int, ...]
-    points: tuple[Point, ...]
+class _Surface:
+    count: int
     samples: tuple[Point, ...]
     center: Point
     diameter: float
@@ -129,10 +130,26 @@ class _Contour:
 
 
 @dataclass(frozen=True)
+class _Contour(_Surface):
+    indices: tuple[int, ...]
+    points: tuple[Point, ...]
+
+
+@dataclass(frozen=True)
 class _Frame:
     key: ScanKey
     stamp_ns: int
     contour: _Contour
+    capture: RawCaptureHeader
+    valid_until_steady_ns: int
+
+
+@dataclass(frozen=True)
+class _BoundSurface:
+    key: ScanKey
+    capture: RawCaptureHeader
+    valid_until_steady_ns: int
+    surface: _Surface
 
 
 @dataclass(frozen=True)
@@ -150,13 +167,14 @@ class _Track:
     motion_window: deque[_Frame]
     supports: tuple[str, ...] = ()
     confirmed: bool = False
+    baseline: _BoundSurface | None = None
 
 
 def _distance(a: Point, b: Point) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
-def _residual(a: _Contour, b: _Contour, tolerance: float) -> _Residual:
+def _residual(a: _Surface, b: _Surface, tolerance: float) -> _Residual:
     """Translation aligns SHAPE for association only; odom distances test motion.
 
     Both directions must explain the visible surface. Coverage includes extent
@@ -172,7 +190,7 @@ def _residual(a: _Contour, b: _Contour, tolerance: float) -> _Residual:
     common = min(
         sum(d <= tolerance for d in aligned_a) / len(aligned_a),
         sum(d <= tolerance for d in aligned_b) / len(aligned_b),
-        min(len(a.points), len(b.points)) / max(len(a.points), len(b.points)),
+        min(a.count, b.count) / max(a.count, b.count),
     )
     diameter = max(a.diameter, b.diameter)
     if diameter:
@@ -222,27 +240,47 @@ class GeometryTracker:
         # IDs/revisions do not rewind: a late bind cannot attach to a new track.
 
     def bind_support(self, local_track_id: int, support_ids: tuple[str, ...]) -> None:
-        """Replace bounded references after the sole fixed owner commits support."""
+        """Replace references after the sole fixed owner commits support.
+
+        Every nonempty replacement (including partial/repeated binding) retains
+        the first binding's surface. Empty binding ends this local lifetime;
+        subsequent observations must form a complete new stable track.
+        """
         if (
             type(local_track_id) is not int
             or not isinstance(support_ids, tuple)
             or len(support_ids) > 2048
-            or len(set(support_ids)) != len(support_ids)
             or any(
                 not isinstance(s, str) or not s.strip() or len(s.encode("utf-8")) > 128
                 for s in support_ids
             )
         ):
             raise ValueError("invalid support binding")
+        requested = set(support_ids)
+        if len(requested) != len(support_ids):
+            raise ValueError("invalid support binding")
         track = self._tracks.get(local_track_id)
         if track is None or not track.confirmed:
             raise ValueError("binding requires a current stable contour")
         if any(
-            set(support_ids).intersection(other.supports)
+            requested.intersection(other.supports)
             for other in self._tracks.values()
             if other is not track
         ):
             raise ValueError("support cannot belong to ambiguous local tracks")
+        if not support_ids:
+            del self._tracks[local_track_id]
+            return
+        if track.baseline is None:
+            frame, contour = track.last, track.last.contour
+            track.baseline = _BoundSurface(
+                frame.key,
+                frame.capture,
+                frame.valid_until_steady_ns,
+                _Surface(
+                    contour.count, contour.samples, contour.center, contour.diameter, contour.error
+                ),
+            )
         track.supports = support_ids
 
     def _evidence(
@@ -293,7 +331,13 @@ class GeometryTracker:
             )
             result.append(
                 _Contour(
-                    tuple(beam.index for beam in group), points, samples, center, diameter, error
+                    len(points),
+                    samples,
+                    center,
+                    diameter,
+                    error,
+                    tuple(beam.index for beam in group),
+                    points,
                 )
             )
         return result
@@ -353,8 +397,8 @@ class GeometryTracker:
     def _advance(self, track: _Track, frame: _Frame, profile: GeometryProfile):
         """Stable and motion windows use independent, original capture frames."""
         prior = track.last
-        # Every retained stable frame must agree, preventing slow drift from
-        # masquerading as stability by comparing only adjacent frames.
+        # A rolling window alone cannot constrain cumulative displacement from
+        # a still-bound support. Its original compact surface does not roll.
         metrics = [
             _residual(old.contour, frame.contour, profile.stable_residual_m)
             for old in track.stable_window
@@ -363,24 +407,48 @@ class GeometryTracker:
             m.common >= profile.min_common_fraction and m.upper <= profile.stable_residual_m
             for m in metrics
         )
+        bound_motion = None
+        if track.baseline is not None:
+            bound_motion = _residual(
+                track.baseline.surface, frame.contour, profile.stable_residual_m
+            )
+            stable = stable and (
+                bound_motion.common >= profile.min_common_fraction
+                and bound_motion.upper <= profile.stable_residual_m
+            )
+            metrics.append(bound_motion)
         if stable:
             track.stable_window.append(frame)
             track.motion_window = deque((frame,), maxlen=self.limits.max_frames)
         else:
             track.stable_window = deque((frame,), maxlen=self.limits.max_frames)
             track.confirmed = False
+            # A locally stable candidate at a displaced position cannot erase
+            # pending verification against the still-bound original surface.
             track.motion_window.append(frame)
         moved: tuple[str, ...] = ()
         if not stable and self._complete(track.motion_window, profile):
-            motion = _residual(
-                track.motion_window[0].contour, frame.contour, profile.stable_residual_m
+            motion = (
+                bound_motion
+                if bound_motion is not None
+                else _residual(
+                    track.motion_window[0].contour, frame.contour, profile.stable_residual_m
+                )
             )
             if (
                 motion.common >= profile.min_common_fraction
                 and motion.lower >= profile.motion_residual_m
             ):
                 moved, track.supports = track.supports, ()
+                track.baseline = None
                 track.motion_window = deque((frame,), maxlen=self.limits.max_frames)
+                track.stable_window = deque((frame,), maxlen=self.limits.max_frames)
+                track.confirmed = False
+                if moved:
+                    # Late owner callbacks for the withdrawn lifetime cannot
+                    # reattach old supports after the fresh stable window.
+                    self._next_id += 1
+                    track.identity = self._next_id
         track.last = frame
         if stable and self._complete(track.stable_window, profile):
             track.confirmed = True
@@ -455,7 +523,13 @@ class GeometryTracker:
         # Mutual unique edges are the conservative greedy matching case. Any
         # competition/split/merge drops identity and binding instead of guessing.
         for i, contour in enumerate(contours):
-            frame = _Frame(scan.key, scan.capture.time.stamp_ns, contour)
+            frame = _Frame(
+                scan.key,
+                scan.capture.time.stamp_ns,
+                contour,
+                scan.capture,
+                scan.valid_until_steady_ns,
+            )
             candidates = edges.get(i, ())
             if len(candidates) == 1 and len(reverse[candidates[0]]) == 1:
                 track = self._tracks[candidates[0]]
