@@ -1,6 +1,6 @@
 # 共享障碍层与 Nav2 未知区域导航设计
 
-2026-11-25。**用户已明确“可以就按这个实施吧”，以下行为及主技术选择已批准。** 本文归档正式设计；产品尚未实施。执行采用 Orca 分阶段开发/审核，负责人亲阅本设计与[实施计划](../plans/2026-11-25-shared-obstacle-layers.md)后派发开发。本次仅文档归档，不启动实施。
+2026-11-25。**用户已明确“可以就按这个实施吧”，以下行为及主技术选择已批准。** 本文为已获批正式设计；执行采用Orca分阶段开发/审核，负责人已亲阅并派发有界T1。本次独立评审收口仅修改本文与[实施计划](../plans/2026-11-25-shared-obstacle-layers.md)，不把计划契约冒称已实现。原“仅归档、不实施/安装/merge/推送”仅为历史归档轮状态；实施按既有用户/仓库授权完成必要安全离线依赖、测试和构建，验收后push功能分支/PR、不自动合main；本次worker只本地提交两文档。
 
 本文取代[旧前沿导航设计](2026-11-25-frontier-navigation-design.md)及其计划；旧文保留历史主体，不能继承其中的前沿选择、临时等待、语义否决或未知必须先变 free 的要求。
 
@@ -70,7 +70,7 @@ unknown允许通过不等于允许穿越已知障碍。必须在实际部署Nav2
 
 以下细化吸收几何草稿独立审核发现的问题，不改变上述获批行为。原临时审计材料的必要结论在本节与[计划的证据、契约及验收表](../plans/2026-11-25-shared-obstacle-layers.md)归档；实施不依赖临时文件链接。
 
-- 核验基线：功能分支 `feat/frontier-navigation`，文档HEAD `390bd6235c4e0dab434ce93f69dd11691e6a0dff`，产品基线 `11a26906c9831b000b09e2279ad7ef4ea514d903`。2026-11-25只读远端查询确认 main=`66125807b7189ef28b250168df944a308eac9d33`，PR42已MERGED、非Draft，UI头=`1adcaf8503c3c78a4267a2e2f6f5b74cddb291a1`。本轮未fetch/merge/checkout；开发前重查并正常merge最新main进原功能分支，保留UI最终结构。
+- 核验基线：功能分支 `feat/frontier-navigation`，文档HEAD `390bd6235c4e0dab434ce93f69dd11691e6a0dff`，产品基线 `11a26906c9831b000b09e2279ad7ef4ea514d903`。2026-11-25只读远端查询确认 main=`66125807b7189ef28b250168df944a308eac9d33`，PR42已MERGED、非Draft，UI头=`1adcaf8503c3c78a4267a2e2f6f5b74cddb291a1`。以上为历史归档状态；T0已正常merge main，修订起点`1567d9b9b38f3cd3f880f4150d2ec98060c6ad90`保留PR42最终UI。本次不操作分支、不覆盖并行T1成果。
 - [`bounded_scan_ingress.cpp`](../../../ros2/src/senior_mapping/src/slam/bounded_scan_ingress.cpp)资格入口与[`slam_graph_node.cpp`](../../../ros2/src/senior_mapping/src/slam/slam_graph_node.cpp)的graph gate目前串联。每scan事实须在原source/clock/exact TF/static mount及cached geometry验证后、graph gate前产出；不能只从`ReadGraphCommit`取Q。adapter最新槽与Q发布订阅不经过`RosMappingBackend.request`通用锁或`NativeSession._save`锁。
 - 原native入口和capture当前共用默认执行器，移到gate前仍可能被序列化阻塞；计划明确独立合格入口callback group/受生命周期管理的单线程，与graph owner间用有界队列及immutable资格/几何见证，分类不占入口锁。
 - [`store.py`](../../../ros2/src/senior_mapping/senior_mapping/store.py)现`_prepare_ingest`既要求连续graph sequence，也要求anchor集合每次恰增1。应保留graph连续性，另加同一已验证anchor cut下的证据水位/fixed修订，不伪造keyframe。source gap使短期稳定窗口重启，不给漏帧累计稳定证据。
@@ -81,7 +81,7 @@ unknown允许通过不等于允许穿越已知障碍。必须在实际部署Nav2
 - Nav2插件保留的是“上次实际渲染域”，不能用上条收到的Q代替；合并旧域及本周期固定快照域，master重置后重铺fixed→Q→inflation。expiry、reset/disable、rolling origin变化均保留一次清旧域机会；当前hit覆盖unknown为lethal，不作`max(255,254)`。local StaticLayer使用`use_maximum=false`，并对部署实现验证。
 - [`simulation_motion.launch.py`](../../../ros2/src/senior_sim/launch/simulation_motion.launch.py)确有map_server/AMCL静态图装配；这不是已复现双发布。保留该模式，进入可更新mapping时由原生命周期交接发布资格，不能并列启动第二地图写owner。
 - 预算区分：共享Workspace读取上限来自[`workspace_limits.py`](../../../vehicle_core/workspace_limits.py)，是16,777,216格；现native导航raster/bridge上限1,048,576格，不能混称。scan≤2048束、pending=8；store总records≤65536、单批changes≤8192；旧occupancy tracks≤100000不能保证free或支持总容量。native raster≤16384 scans是读预算，不能声称graph写入已受同一上限限制。
-- 真实构建证据另有差异：mapping CMake要求`slam_toolbox 2.6.10 EXACT`，package.xml却写`version_eq=2.6.8`；应在部署取证后按原2.6.10源码契约修正声明并做安装态校验。Nav2包未精确锁版，本机没有`/opt/ros`和`ros2`，本轮不能真实构建/安装或验Nav2。
+- 真实构建证据另有差异：mapping CMake要求`slam_toolbox 2.6.10 EXACT`，package.xml却写`version_eq=2.6.8`；应在部署取证后按原2.6.10源码契约修正声明并做安装态校验。Nav2包未精确锁版，本机没有`/opt/ros`和`ros2`，部署ABI和安装态验证仍未取得，本次文档worker不执行构建/安装；后续按既有授权离线验证。
 
 - 实际IPC帧上限8192字节，不能把2048点硬塞原state.get。计划将UI现96点界面明确为有hit_count/preview_count的同源当前扫描预览，沿角桶最近hit选取；Nav2仍接收完整Q。原UI结构沿用，独立期限通过原state/协议/cloud缓存传递，缓存驻留及重复快照不得续期；跨主机单程网络延迟边界须如实记录，不冒称与同机Nav2截止完全同步。
 
@@ -90,3 +90,18 @@ unknown允许通过不等于允许穿越已知障碍。必须在实际部署Nav2
 [实施计划](../plans/2026-11-25-shared-obstacle-layers.md)列出四部分、原owner、具体文件/接口、有界状态、S01–S16和逐任务文件并集预测。先取得部署Nav2/补丁版本、传感器无回波协议及odom/雷达误差证据，再冻结依赖它们的参数和ABI。代码能锁定的身份/三态规则可先实现；没有物理证据不能靠虚构阈值宣布可靠判稳，没有部署环境不能拿mock或本地跳过代替Nav2验证。
 
 地图外目标尚无经查证的目标驱动扩图接口：本轮只承诺已发布有限栅格内unknown。自然建图扩展后，新落入栅格的目标可重新按当前G准入；任意图外坐标需要负责人依据范围/owner证据另行收敛。速度alpha/k及来源无关反向ramp单列独立依赖，不作为共享层实施前置条件。raw对定位的影响、四核资源及实车行为继续明确为未验。
+
+
+## 独立评审收口与C3持久契约冻结（2026-11-25）
+
+详细字段、类型、编码、校验和更新顺序以[计划C3](../plans/2026-11-25-shared-obstacle-layers.md#c3-persistence-contract)为唯一持久契约定义；同一fixed/store/archive owner实施，不新增owner或框架。StableSupport明确区分≤32关联摘要与全部anchor-local端点/支持格（每组各≤2048，完整成员计入65536总cap），保留原support anchor及source/provenance；局部真实free按触发anchor存证、按原支持成员撤销，运动只撤可靠对象支持，同格独立墙保留。
+
+FreeTile固定32×32、实际resolution及anchor-local tile坐标，128字节低位优先有效位图和单调tile_revision；occupied交叠立即清所有相关anchor旧free位并增局部代次，清位持久化，撤occupied或重投影不能复活，只有新合格free可置回。expected完整watermark的fixed/evidence CAS拒废止前迟到替换，无需百万格对象或无限tombstone。FixedDelta核对MapRef/R、boot/source、graph sequence/digest、evidence与trigger anchor，commit_evidence允许同anchor而不放松graph连续+新增anchor；extent-only也推进fixed/dirty水位。容量满/无法完整编码时停止新增fixed升级、保留墙及可完整表达撤销，Q继续全量。
+
+FixedSnapshot及V2 payload真正包含absolute O/F/U、全部anchors/basis、完整supports/free、legacy不可变三态base及局部live掩码/原绑定、waypoint和profile来源、完整watermark/checkpoint hash。支持成员与legacy(base_id,index)提供可重建支持引用；absolute为同cut证据的确定materialization，恢复重渲染逐字节相等才接受，不一致拒cut。一次V1迁移清旧removals、保留原档，V2禁止raw重画的已批准行为不变。PGM与dense枚举分开：dense O/F/U=100/0/255；PGM O/F/U灰度=0/254/205，negate=0、occupied_thresh=.65、free_thresh=.196，行row映射y=height−1−row，重读须与权威三态一致。
+
+T1冻结latest changed/unchanged信封、无scan退休事件、新R接纳floor、迟到写入fence、管理侧已验证map/odom basis传递，以及保存期间同scan reference/map→odom TF和旧pose轮询fence；具体字段待T1最终交接记录准确名称，本文不声明已交付。latest沿私有RAM目录独立原子文件、无fsync，最多进行中+替换候选；8MiB只是拒绝上限，2048束实际编码/在途内存和fallback I/O归T1证据。LearningClient周期poll并在shutdown正确close，bootstrap scan仍允许原graph初始化，关闭先停接纳/退休/等待写入再清目录。
+
+bridge ACK只证明bridge installed；Nav2插件本周期按真实master范围/current验证覆盖，扩域未消费时coverage_pending/current=false，保持全量Q、旧域清理和原运动资格，不发明分布式确认服务。静态/live均须覆盖planner/global和DedicatedController/local的实际参数入口；controller真实路径为`ros2/src/senior_navigation/senior_navigation/dedicated_controller.py`，启动overlay不等于动态交接完成。T0源码Nav2 footprint=.674×.540m，sim safety/profile=.674×.552m，硬件取所选HardwareMotionProfile；example不是部署事实，不采用未经证实的.55×.55m。新增实际launch/profile文件依赖须凭消费路径先报告负责人，未擅加产品清单。
+
+协议hit_count/preview_count/display_mode保留，UI只复用已有legend/可访问名称“当前扫描预览”，不强制n/N、sequence、新元素或布局，不删除有效既有行为。S01–S16主输入保留，只在原S05/S09/S12/S15补相应契约断言，不生成新测试矩阵。C3纯schema不被物理profile/Nav2 ABI阻塞；可靠几何激活、插件ABI、安装态及四核实测仍按实际证据分级，不把源码风险说成已复现bug。本次工具文档A0/M2/D0与原未来75路径实施预测分开，合并并集77路径（A12/M65/D0），没有新增产品manifest条目。

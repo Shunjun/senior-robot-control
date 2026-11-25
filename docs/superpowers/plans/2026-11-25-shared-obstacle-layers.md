@@ -12,12 +12,12 @@
 
 ## Global Constraints
 
-- 本轮只归档设计和计划：仓库文档A2/M2/D0；产品/测试/配置/构建/工具均0。不安装、不运行测试/构建/ROS/服务/实车，不checkout/merge，不改UI树，不推送/操作PR。以下命令和勾选项全部是**未来开发派单**，本轮未执行。
+- 历史归档轮（93a08b）：文档A2/M2/D0，未实施、安装、测试、构建、merge或推送；该限制仅描述当轮历史。当前实施已获用户授权，执行按用户/仓库既有授权完成必要安全离线依赖准备、测试和构建，验收后push功能分支/建PR，不自动合main、不自行启动实车或部署。本次独立评审收口worker仅修订本计划和spec（工具文档A0/M2/D0），只本地commit，不推送/PR、不执行产品验证。
 - 用户已经批准孤立静止可入图、移动撤旧贡献、重新稳定可再入图；无语义类别、墙连接要求、永久motion veto、自研frontier、几秒/30秒等待、通道封锁。
 - Q第一帧合格hit即可避障；分类、keyframe gate、存盘及通用RPC锁不能阻塞Q。缺测/遮挡/撤销不证明free；稳定墙出范围保留；仍有独立可信occupied支持的格不能降unknown。
 - 只有原mapping owner写fixed/保存/迁移；ROS桥、Nav2和UI只读。原运动最终输出、任务/action/epoch、取消终态屏障、来源/时钟/TF/定位资格继续有效。
 - 原档保留；首次V1迁移可冻结一次旧native三态为legacy-derived，后续权威副本不从raw重绘。恢复Q为空且未就绪；新格式缺失/损坏拒该cut。
-- 固定功能主分支始终为`feat/frontier-navigation`。本轮起点HEAD=`390bd6235c4e0dab434ce93f69dd11691e6a0dff`，产品基线=`11a26906c9831b000b09e2279ad7ef4ea514d903`。
+- 固定功能主分支始终为`feat/frontier-navigation`。历史归档起点HEAD=`390bd6235c4e0dab434ce93f69dd11691e6a0dff`，历史产品基线=`11a26906c9831b000b09e2279ad7ef4ea514d903`；T0正常merge main后，本次契约修订起点为`1567d9b9b38f3cd3f880f4150d2ec98060c6ad90`。
 - 产品开工前负责人重查最新main，正常merge进本功能分支；子工作从这个功能主分支分叉，正常merge回它，不cherry-pick，不重命名/替换功能分支。只为确实并行的几何、Nav2、UI工作使用短期工作分支，不给每小任务另建永久分支或准备scaffold。
 - 2026-11-25只读远端：main=`66125807b7189ef28b250168df944a308eac9d33`，PR42 MERGED/非Draft，mergeCommit同main，UI head=`1adcaf8503c3c78a4267a2e2f6f5b74cddb291a1`。[PR42](https://github.com/Shunjun/senior-robot-control/pull/42)已满足当时UI布局依赖；开工仍重查，不把本工作树旧UI覆写最新UI。若届时依赖不在合入基线，UI阶段等待或只读设计，其余后端可推进。
 - 不拿mock/静态配置/跳过测试冒称实际Nav2通过，不拿离线fixture冒称实车通过，不编造性能门槛。统一速度alpha/k与来源无关反向ramp单列独立工作，不是共享层必需前置条件。
@@ -34,7 +34,7 @@
 
 ## 源码证据、开工输入与冻结边界
 
-路径均相对仓库根；`M=ros2/src/senior_mapping`、`N=ros2/src/senior_navigation`、`I=ros2/src/senior_interfaces`仅作正文缩写，末尾manifest使用完整路径。新增API为本计划决策，**不是现有能力**。
+路径均相对仓库根；`M=ros2/src/senior_mapping`、`N=ros2/src/senior_navigation`、`I=ros2/src/senior_interfaces`仅作正文缩写，末尾manifest使用完整路径。新增API为本计划决策，**不是现有能力**。2026-11-25独立评审B1/B2/B4、I1–I4及PGM歧义在本次收口；B3的C3纯schema/事务在下文完整冻结。T1并行负责latest信封/退休floor、basis传递、保存TF/旧pose fence的具体交付，最终准确字段以其交接报告/源码为准，不另派不一致接口。
 
 | 实际接点（390bd源码；UI为1adcaf85） | 现状及本计划决定 |
 |---|---|
@@ -55,7 +55,7 @@
 
 ### Task 0：取得真实部署与物理证据，收口契约（负责人/原装配owner）
 
-**Files:** 只读`M/CMakeLists.txt/package.xml`、`N/config/nav2.yaml`、`N/launch/navigation.launch.py`、`ros2/src/senior_robot/senior_robot/{platform_runtime,real_runtime,dedicated_controller}.py`、`ros2/src/senior_sim/launch/simulation_motion.launch.py`、现sensor/odom profile；记录到`docs/operations/slam-backend.md`（D0）。不预造工具/服务。
+**Files:** 只读`M/CMakeLists.txt/package.xml`、`N/config/nav2.yaml`、`N/launch/navigation.launch.py`、`ros2/src/senior_robot/senior_robot/{platform_runtime,real_runtime}.py`、`N/senior_navigation/dedicated_controller.py`、`ros2/src/senior_sim/launch/simulation_motion.launch.py`、现sensor/odom profile；记录到`docs/operations/slam-backend.md`（D0）。不预造工具/服务。
 
 **Interfaces:** 输出可复查的部署清单（包版本、源码/补丁SHA、编译器/架构、参数实际消费点、profile及证据来源），和`GeometryProfile`参数证据表；不是一个虚构运行时DTO。
 
@@ -65,7 +65,7 @@
 - [ ] 从部署包对应源码确认`Layer::updateBounds/updateCosts`、reset/disable及rolling StaticLayer ABI，和FootprintCollisionChecker/Smac/MPPI unknown路径；只能从本仓代码锁定的身份、字段和持久格式先冻结。Nav2版本缺失时Task 5仅能实现接口无关的状态逻辑、准入及配置草案，插件ABI和安装态S12–S14等待该最小版本证据，不写占位接口。
 - [ ] 将地图extent及预算证据提交负责人：本轮承诺地图内unknown，任意图外目标需要新增产品边界决定；不自行加目标驱动扩图服务。记录版本/profile/误差缺口、可先完成项及取证责任人；提交`docs: record shared layer deployment evidence`供审核。
 
-## 契约（Task 1先冻结；物理参数与Nav2 ABI由Task 0证据门控）
+## 契约（C1具体接线由T1冻结交付；C3纯schema本次冻结；物理参数与Nav2 ABI按证据门控）
 
 ### C1：逐scan事实、当前Q及独立传播
 
@@ -75,8 +75,10 @@
 
 - `ScanKey(backend_boot: str, bridge_boot_id: str, source_epoch: str, capture_generation: int, clock_generation: int, raw_gid: str, bridge_gid: str, sequence: int)`；capture原字段保存在`QualifiedScan.capture`中，不转换成仅float stamp。
 - `Beam(index: int, origin_odom: tuple[float,float], endpoint_odom: tuple[float,float] | None, kind: Literal['hit','self','invalid','clear'], clear_limit_m: float | None)`；保留原束索引，倒装重排时索引显式映射。finite max-range若协议不明不能凭数字臆断hit/free，应按Task 0来源profile降该束未判定，不降低整条原source资格。
-- `QualifiedScan(key: ScanKey, capture: dict, geometry_id: str, odom_base: Pose2D, beams: tuple[Beam,...], valid_until_steady_ns: int, host_boot_id: str)`；`decode_qualified_scan(message: object, profile: DeviceProfile, *, learning_view: LearningFilterView | None, host_boot_id: str) -> QualifiedScan`只执行一次原自体过滤和束转换，不跑分类。沿现`ScanAdapter`采用`DeviceProfile()`与`LearningClient`只读claim：`RosMappingBackend`从原`SENIOR_STARTUP_LEARNING_CLAIM`持有只读client，回调只取其immutable view，调用现`filter_self`及`external_feature_ranges`，不信任用户自造mask、不每scan读文件；关闭时释放client。缺学习模型沿原未知自体语义，不假设已校准。
-- `LatestScanSlot.write(scan: QualifiedScan | None, *, retired: bool) -> None`、`read_after(previous: ScanKey | None) -> QualifiedScan | None`：adapter写、管理owner读，启动握手返回私有目录`qualified_scan_path`及session nonce。独立`latest-scan.json`原子replace，单记录含schema=1/nonce/完整capture和payload，≤8MiB，权限0700目录/0600文件，同uid/非symlink验证；读者先打开inode再读一份，避免path+digest跨代。不复用串行`cut.json`，不每scan发RPC，不用另一个永久队列。内部校验值在同一记录内，不把散列误当授权。写文件工作只保留一个进行中及一个可替换最新候选，慢I/O不挡ROS Q发布；source/reference退休立即失效。
+- `QualifiedScan(key: ScanKey, capture: dict, geometry_id: str, odom_base: Pose2D, beams: tuple[Beam,...], valid_until_steady_ns: int, host_boot_id: str)`；`decode_qualified_scan(message: object, profile: DeviceProfile, *, learning_view: LearningFilterView | None, host_boot_id: str) -> QualifiedScan`只执行一次原自体过滤和束转换，不跑分类。沿现`ScanAdapter`采用`DeviceProfile()`与`LearningClient`只读claim：`RosMappingBackend`从原`SENIOR_STARTUP_LEARNING_CLAIM`持有只读client，回调只取其immutable view，调用现`filter_self`及`external_feature_ranges`，不信任用户自造mask、不每scan读文件；沿adapter事件循环周期`LearningClient.poll()`刷新immutable view，关闭时`close()`释放其后台线程；不把poll变成逐scan文件读取。缺学习模型沿原未知自体语义，不假设已校准。
+- 最新私有槽的**具体类型、编码字段名与读写签名由并行T1冻结交付**；不把旧`read_after(ScanKey)->scan|None`当最终接口。最小读结果必须区分`unchanged`和`changed`，changed信封承载status（启动无scan/qualified/invalid/retired）、slot revision或退休token、session nonce、backend/host boot、可空ScanKey、source身份、MapRef/R reference token和原absolute deadline。退休无新scan也可读，旧在途写入不得覆盖退休；新R安装scan接纳floor，拒绝旧reference捕获及清槽前候选。字段名在T1最终交接后据实际接口记录，本文不声称目前已实现。
+- 握手沿原私有RAM目录返回独立latest文件path、nonce和schema；优先/dev/shm、原临时目录fallback。不复用串行cut.json，不发逐scan RPC。目录0700/文件0600、同uid/非symlink，reader先打开inode再有界读取并验证一份记录；内部digest不是授权。latest原子replace但**不fsync**，最多一个进行中编码/写入和一个可替换候选；8MiB仅是拒绝上限。T1给出2048束最坏合法编码长度、编码/旧inode读取/解析/Beam对象同时在途份数和内存计算，并记录fallback I/O字节/频率；这些证据尚未取得，不编RSS数字，不逐scan复制anchor全表/dense图。
+- shutdown先停止subscription/timer接纳，提交退休/fence，再取消或等待进行中写入，最后清目录并close LearningClient；禁止迟到任务重建有效槽。异常撤就绪且不阻塞ROS Q，慢I/O替换旧候选，不另起IPC服务。
 
 新增`I/msg/CurrentObstacles.msg`，topic=`/senior/mapping/current_obstacles`：
 
@@ -88,9 +90,9 @@
 | `valid`, `reason`, `valid_until_steady_ns` | `bool`, `string<=64`, `uint64`；合格空Q可valid=true；失格空Q为false |
 | `frame_id`, `points` | `string<=128`固定map；`geometry_msgs/Point32[<=2048]`，z=0；全部当前外部hit，不采样，不加历史/预测点 |
 
-adapter先以同一qualified事实的原capture/odom调用原`LiveMappingReference.observe`，不依赖gate后的`ReadMappingPose`轮询保鲜；再用当前合格`LiveMappingReference.map_to_odom()`投影同一份QualifiedScan到map后先发Q，再把事实交最新槽；无定位不能冒用odom作map点。截止从原sample/receipt资格计算且不超过原0.5s，桥与插件无新消息也独立检查单调期限。发布Q使用KEEP_LAST=1、volatile，校验唯一owner/publisher GID、backend boot、host boot、MapRef/R和源capture完整身份；旧消息不能刷新截止。桥向原`LiveMappingReference`增加`set_current_coverage(valid: bool, reason: str | None) -> None`，原`qualified/state.navigation_ready`同时要求当次Q有效且所有hit落在已安装global范围；不新造导航就绪owner，不改变原raw运动保护。新R只接受新合格scan，不重投旧Q续期。退休/断流输出失格清空并撤贡献。DDS跨主机不能比较该steady字段，本计划部署限定现同机Nav2；远程消费者需额外时钟协议，未授权扩展。
+adapter先以同一qualified事实的原capture/odom调用原`LiveMappingReference.observe`，不依赖gate后的`ReadMappingPose`轮询保鲜；同一独立回调按原整数capture stamp发布map→odom TF；旧`ReadMappingPose`轮询退出生产保鲜职责，或以reference/capture水位拒绝迟到observe及invalidate。T1交接明确该fence、reference basis及保存期间TF调度证据，不另造TF owner。再用当前合格`LiveMappingReference.map_to_odom()`投影同一份QualifiedScan到map后先发Q，再把事实交最新槽；无定位不能冒用odom作map点。截止从原sample/receipt资格计算且不超过原0.5s，桥与插件无新消息也独立检查单调期限。发布Q使用KEEP_LAST=1、volatile，校验唯一owner/publisher GID、backend boot、host boot、MapRef/R和源capture完整身份；旧消息不能刷新截止。桥向原`LiveMappingReference`增加`set_current_coverage(valid: bool, reason: str | None) -> None`，原`qualified/state.navigation_ready`保持既有运动资格保护；bridge安装ACK仅证明bridge installed，实际global覆盖必须由插件在本周期master范围/current检查，超域报告coverage_pending/current=false，不能以publish返回冒称Nav2已经消费；不新造导航就绪owner，不改变原raw运动保护。新R只接受新合格scan，不重投旧Q续期。退休/断流输出失格清空并撤贡献。DDS跨主机不能比较该steady字段，本计划部署限定现同机Nav2；远程消费者需额外时钟协议，未授权扩展。
 
-**线程/锁边界：** native合格入口、static receipt/source/clock检查和TF订阅置于一个串行callback group，使用一个受生命周期管理的独立executor线程；graph/capture留原owner执行器。入口只读graph侧原子发布的immutable cached mount/几何见证，不跨线程访问`lasers_`/mapper；首次见证尚未建立时不发布合格map Q，由原graph初始化后提供，拒绝未核几何。入口先发布qualified事实，再将scan以≤8项有界队列交原graph owner；graph gate关闭可以丢弃其建图候选，但Q不断。所有graph/cache写仍在原锁内；新线程加入/退出有join，不能把原非线程安全StaticLidarTfIngress跨组随意读取。adapter的Q回调/失效timer不await通用request锁，重存盘工作不占该callback。两个ingress构造函数在原参数后增加`rclcpp::CallbackGroup::SharedPtr group`，subscription options/timer显式绑定它；graph读`source_active`也只读原子资格见证，不能跨组调用mutable ingress方法。几何不在native ingress锁内运行。Task 7测executor调度/CPU竞争；不是仅声称“gate前”即完成。
+**线程/锁边界：** native合格入口、static receipt/source/clock检查和TF订阅置于一个串行callback group，使用一个受生命周期管理的独立executor线程；graph/capture留原owner执行器。入口只读graph侧原子发布的immutable cached mount/几何见证，不跨线程访问`lasers_`/mapper；首次见证尚未建立时不发布合格map Q，但经原入口资格的bootstrap scan仍须进入graph初始化以建立laser/cache，不能以未qualified拒队列造成启动死锁。见证建立后先发布qualified事实，再将scan以≤8项有界队列交原graph owner；graph gate关闭可以丢弃其建图候选，但Q不断。所有graph/cache写仍在原锁内；新线程加入/退出有join，不能把原非线程安全StaticLidarTfIngress跨组随意读取。adapter的Q回调/失效timer不await通用request锁，重存盘工作不占该callback。两个ingress构造函数在原参数后增加`rclcpp::CallbackGroup::SharedPtr group`，subscription options/timer显式绑定它；graph读`source_active`也只读原子资格见证，不能跨组调用mutable ingress方法。几何不在native ingress锁内运行。Task 7测executor调度/CPU竞争；不是仅声称“gate前”即完成。
 
 ### C2：轻量几何（无持久写权限）
 
@@ -101,25 +103,46 @@ adapter先以同一qualified事实的原capture/odom调用原`LiveMappingReferen
 - `GeometryTracker.update(scan: QualifiedScan, *, profile: GeometryProfile | None) -> GeometryEvidence`；`reset() -> None`。`GeometryEvidence(key: ScanKey, evidence_revision: int, stable: tuple[ContourEvidence,...], moved_support_ids: tuple[str,...], unresolved_reason: str | None)`；`ContourEvidence(local_track_id: int, beam_indices: tuple[int,...], odom_surface: tuple[tuple[float,float],...], first_key: ScanKey, last_key: ScanKey, common_fraction: float, max_residual_m: float, support_ids: tuple[str,...])`。support_ids由唯一fixed owner回绑：`bind_support(local_track_id: int, support_ids: tuple[str,...]) -> None`；纯算法不分配永久地图ID。
 - 有限角顺序分簇，局部bin的最多8候选、共同可见表面双向残差与有界采样贪心关联；不用质心位移单独判断。状态`unresolved → stable_candidate → stable_confirmed`，显著运动变`motion_evidenced`并清旧稳定窗口；再稳定按完整新窗口准入。split/merge、遮挡歧义、gap/误差不足reset候选，不强行传递支持撤销身份。source/ref切换清短期关联；loop correction只改map投影，不进入odom运动判断。
 
-### C3：原owner的fixed证据与修订
+### C3：原owner的fixed证据、无损持久schema与事务（本次冻结）
 
-扩`M/senior_mapping/evidence.py`定义（不再增加第二个fixed模块/owner）：
+<a id="c3-persistence-contract"></a>
 
-- `FixedWatermark(map_ref: MapRef, reference_generation: str, backend_boot: str, graph_sequence: int, anchor_digest: str, fixed_revision: int, evidence_key: ScanKey | None, evidence_revision: int)`；graph sequence与fixed revision各自单调，不互相代替，anchor_digest涵盖实际ID/pose集合。
-- `StableSupport(support_id: str, anchor_id: str, local_surface: tuple[tuple[float,float],...], first_key: ScanKey | None, last_key: ScanKey | None, provenance: Literal['geometric','legacy','legacy-derived'])`；同格可多support，但每组关联摘要最多32表面采样，固定支持保留本scan已确认的全部端点/格（单组≤2048，聚合索引计入65536 cap），不能以关联抽样截断固定墙，重复观察复用/更新支持。重见无法可靠关联时只靠真实free清旧贡献，不新增无限永久轨迹。
-- `FreeTile(anchor_id: str, tile_x: int, tile_y: int, cells: bytes, evidence_revision: int)`；32×32局部格，bytes只存有效free/unknown及必要局部废止代次；短期计数仍有界稀疏状态。occupied写入覆盖的free立即作废，该区域以后只有新合格free可再次成立。
-- `FixedDelta(key: ScanKey, evidence_revision: int, upsert_supports: tuple[StableSupport,...], revoke_support_ids: tuple[str,...], free_tiles: tuple[FreeTile,...])`；运动撤销原因新增`motion_evidenced`，不能伪装`observed_free_space`；触发free的观测anchor独立保存，不覆盖support原anchor。
-- `FixedSnapshot(watermark: FixedWatermark, grid: WorkspaceGrid, supports: tuple[StableSupport,...], free_tiles: tuple[FreeTile,...])`；dense cells=0/100/255，wire tile=0/100/-1；snapshot不含Q/短期tracker。持久化还保存legacy绝对三态base（存在时）、局部覆盖/撤销后的绝对结果和支持引用，不无限累积tombstone。
+本节是同一`evidence.py → store.py/ActiveMap → references.py/archive.py/checkpoints.py` owner的实现契约，不新增模块、运行时DTO框架或写owner。真实旧`CellEvidence/CellBinding`只有单格单anchor，`SlamSnapshot.write/from_json`仅存bindings和removed，不能承载本契约；以下字段是批准后的待实施schema，不声称旧代码已支持。纯schema/store事务可立即开发，不等物理GeometryProfile或Nav2 ABI；几何证据准入仍依赖T2。
 
-`ActiveMap.commit`保留graph验证职责；新增`ActiveMap.apply_evidence(source: object, *, expected_graph_sequence: int, expected_anchor_digest: str, delta: FixedDelta) -> FixedSnapshot`调用`MapReferenceStore.commit_evidence(binding: OccupancyIngestBinding, *, expected_graph_sequence: int, expected_anchor_digest: str, delta: FixedDelta) -> FixedSnapshot`。只接受当前已验证anchor cut，允许同cut多次证据，拒旧boot/source/重复/倒序证据；source sequence可因最新槽跳帧，gap必须重启稳定窗口，graph连续性不变。graph校正先reproject再使新delta绑定新cut；无可用anchor时暂缓fixed升级，Q独立。
+**公共类型及编码。** `u64`为0..2^64−1的JSON整数（Python严格int、拒bool），`u8/u32`分别为0..255/0..2^32−1整数，`i32`为有符号32位整数，所有浮点为finite binary64、拒NaN/Inf，负零规范化为0；文本ID沿原canonical校验且≤128 UTF-8字节，boot≤36、SHA256为64位小写hex。`MapRef={map_id,reference_revision:u64}`；R=`reference_generation`（原map_generation定位nonce），G仅为grid内容身份，三者不得互换。`SourceIdentity`完整保存ScanKey中除sequence外的backend/bridge boot、epoch、capture/clock generation与raw/bridge GID；ScanKey沿C1完整身份元组保存整数sequence/generation；C1 capture的原整数stamp/steady用于提交资格验证，不用float时间替代，也不把身份元组冒称完整capture或用持久key重新签期限。持久来源仅供审计/拒重放，恢复不赋予旧scan有效期。
 
-`ActiveMap.ensure_observed_extent(source: object, *, expected: FixedWatermark, bounds: tuple[float,float,float,float]) -> FixedSnapshot`仅供桥对**当次合格Q**覆盖申请；沿原地图owner扩大unknown边框，≤1Mi格、不改MapRef/R；重复无变化不递增fixed修订。管理侧直接从独立latest-scan槽取得同一QualifiedScan，以当前已验证anchor/map←odom投影其bounds，复核ScanKey/期限后调用；不发反向`map.backend`RPC，不开放用户坐标/导航目标padding端口。通过原owner下一轮fixed安装确认后才能声称该Q已进入global覆盖；等待期间Q仍全量发送且桥报告pending，不新增Q阻塞依赖。
+JSON以UTF-8、sort_keys、紧凑分隔符、allow_nan=false序列化；bytes用严格RFC4648 base64（拒尾随/长度错误），数组按稳定ID或tile键排序，拒重复键/ID。坐标/摘要JSON浮点以binary64往返保真；大数组使用下述显式little-endian编码，长度先验证再分配。存储内存结构可不同，但`decode(encode(snapshot))`所有权威字段等值；未知schema/非法引用/不完整成员拒cut，不静默丢字段。
 
-预算：总支持/索引/waypoint记录沿现65536聚合cap，单次delta≤8192项；free anchor tiles总量≤1024（32×32，对应生产1Mi格预算），几何短期cap见C2；绝对legacy dense base最多1Mi格，不强制拆成百万CellBinding。独立支持不能为压缩而合并丢失撤销关系。dirty更新正常O(ray格步数+dirty格)，reprojection只重算受影响anchor块；达到record/tile/字节cap时停止新增fixed升级并上报`fixed_capacity`，保留旧墙，仍接受可安全表达的撤销/真实free，Q不受影响。捕获一个immutable cut后解锁做I/O，fixed冻结期间只保留1份最新scan候选，gap重开稳定窗口，不把丢帧当连续。8MiB用于传输，archive/checkpoint原64MiB总字节边界仍验证；这些cap不是实测内存承诺。
+| 记录 | 冻结字段、类型及含义 |
+|---|---|
+| `FixedWatermark` | `map_ref:MapRef, reference_generation:str, backend_boot:str, host_boot_id:str, source:SourceIdentity|null, graph_sequence:u64, anchor_digest:sha256, fixed_revision:u64, evidence_key:ScanKey|null, evidence_revision:u64, change_sequence:u64`；graph、fixed、evidence各独立，change_sequence沿原dirty checkpoint职责并包括waypoint等编辑。anchor_digest覆盖有序完整anchor ID/available/pose集合；以anchor_id UTF-8字节序排序，记录精确为{anchor_id,available,pose:null|{x,y,yaw}}，anchor_digest=SHA256(上述规范JSON数组字节)，同一规范用于graph capture、store和bridge。 |
+| `StableSupport` | `support_id:str, anchor_id:str, resolution_m:float>0, local_surface:tuple[(float,float),...] (≤32), local_endpoints:tuple[(float,float),...] (≤2048), local_cells:tuple[(i32,i32),...] (≤2048), first_key:ScanKey|null, last_key:ScanKey|null, source:SourceIdentity|null, provenance:'geometric'|'legacy'|'legacy-derived', profile_id:str|null, evidence_digest:sha256|null, created_evidence_revision:u64, updated_evidence_revision:u64`。local_surface仅关联摘要，不能替代全部支持；端点为anchor-local米，local_cells为该anchor原点下分辨率格索引，格区域为[ix*r,(ix+1)*r)×[iy*r,(iy+1)*r)。非legacy须1..2048完整端点及1..2048对应去重支持格，格索引=floor(local_endpoint/r)，重复端点可保留、cells须唯一；partial移除同步删该cell所有端点，摘要仅从剩余端点重取，空支持删除，不能截为32点。support_id由原owner分配且不复用，更新不得迁移原anchor，另anchor重确认建独立支持，避免撤对象误撤墙。upsert必须保留旧支持成员与新确认成员的并集，不能以当前可见子集替换而丢掉扫描外墙；只允许本批显式撤销/partial移除缩减，增长超过单组/总cap则拒新升级。wire端点为交错`<dd`（16*n字节）、cells为交错`<ii`（8*n字节），分别附n及encoding；摘要保留JSON数组。 |
+| `FreeTile` | `anchor_id:str, resolution_m:float>0, tile_x:i32, tile_y:i32, active_mask:bytes[128], tile_revision:u64, last_observed_key:ScanKey, source:SourceIdentity, evidence_revision:u64`；固定32×32，原点是anchor-local `(32*tile_x*r,32*tile_y*r)`。index=32*y+x，低位先行：mask[index//8]的bit(index%8)为1表示已成立且未废止free，0表示无free证据（不是occupied）。长度**恰128字节**，无padding格；同键包括resolution，实际r来自已验证地图分辨率，禁止隐式假设默认值。 |
+| `SupportRevocation` | `support_id:str, expected_support_revision:u64, reason:'motion_evidenced'|'observed_free_space', trigger_key:ScanKey, trigger_anchor_id:str`；expected_support_revision精确匹配该支持的updated_evidence_revision；只撤指定支持，原anchor_id不改写。partial真实free撤销用`SupportCellRemoval(support_id, expected_support_revision, local_cells:<ii bytes, count>, reason='observed_free_space', trigger_key, trigger_anchor_id)`删除指定成员并同步端点/摘要，不能用局部射线撤整面墙；运动只撤可靠关联的对象支持。 |
+| `FixedDelta` | `expected:FixedWatermark, key:ScanKey, evidence_revision:u64, trigger_anchor_id:str, upsert_supports:tuple[StableSupport,...], revocations:tuple[SupportRevocation,...], support_cell_removals:tuple[SupportCellRemoval,...], free_tiles:tuple[FreeTile,...], legacy_edits:tuple[LegacyMaskEdit,...]`。free_tiles为从expected快照准备的完整tile替换；新观测free按trigger_anchor_id存证，不能替换被撤支持的原anchor。legacy_edits定义见下。 |
+| `FixedSnapshot` | `schema_version=2, watermark:FixedWatermark, grid:AbsoluteGrid, anchors:tuple[AnchorPose,...], basis:VerifiedBasis|null, supports:tuple[StableSupport,...], free_tiles:tuple[FreeTile,...], legacy_base:LegacyBase|null, waypoint_bindings:tuple[WaypointBinding,...], profiles:tuple[ProfileProvenance,...], localization_role='localization_only'`。无Q、短期track或可复活旧scan的deadline。 |
+
+**局部free废止是可持久的状态更新。** 采用“每tile单调代次+当前有效位图”这个最小取舍，不为百万格建立对象或保留无限tombstone。每次occupied新增/覆盖、anchor重投影造成occupied新交叠时，按实际投影覆盖区域清除**所有anchor**对应free tile位（保守交叠也清），并递增受影响tile_revision；同时废止legacy free有效位。清零后的位不会在撤occupied、重载或再次reproject时由历史观测补回。只有基于新合格key、经过原free资格/次数/belief/跨度判断的free才能重新置位；free不得清仍有独立可信occupied支持的结果。delta中的expected.fixed_revision/evidence_revision与现值精确匹配，整tile替换也必须基于该cut，拒绝废止前的迟到tile覆盖；无变化不增tile_revision；新tile从1开始，替换候选的tile_revision为旧值+1，store在同事务核对并在派生清位时再赋最终修订，溢出拒提交，不回绕。清空tile可丢弃，后续新建仍由全局fixed/evidence CAS防ABA，不靠保留空tile墓碑。tile的last_observed_key仅记最近新增free观测，废止不伪造新观测；tile_revision记录包括废止在内的修改，顶层watermark绑定本cut。跨anchor清位的逆索引是可重建缓存，不是第二权威。free旋转只在完整目标格被已验证free区域覆盖时输出free，边界退unknown。
+
+**legacy及absolute成员。** `AbsoluteGrid={width:u64,height:u64,resolution_m:float>0,origin:[float,float,0],display_only:bool,waypoint_writes:bool,cells_b64:str,encoding:'u8-ofu-v1',grid_id:str}`，0<width,height≤65536且width*height≤1,048,576，cells解码长度恰width*height，index=y*width+x（y自下向上），枚举O=100/F=0/U=255；tile/ROS输出U转−1；display_only/waypoint_writes沿原定位及编辑授权，不能为安装绕过资格强改。G=SHA256(规范JSON{map_ref,width,height,resolution_m,origin}的UTF-8字节+cells原bytes)，不包含Q或fixed/evidence计数，证据变而栅格不变时G不变。`LegacyBase={base_id:sha256,grid:AbsoluteGrid,provenance:'legacy'|'legacy-derived',original_archive_digest:sha256, migration_id:str, live_mask:bytes[ceil(N/8)], anchor_bindings:tuple[LegacyAnchorBinding,...]}`，最后一字节多余位须0。base原三态及geometry不可改，live_mask为1才允许该base格贡献原O/F，清0是局部覆盖/撤销的权威状态；新O覆盖旧F、可靠撤旧O、以新anchor证据替换来源时只改相应位。`LegacyMaskEdit={base_id:sha256,cell_indices:sorted unique u32[],expected_values:u8[],reason:'motion_evidenced'|'observed_free_space'|'geometric_confirmation',trigger_key:ScanKey,trigger_anchor_id:str}`只能清位（不置回），长度对应、校验旧值及范围。连续索引允许无损runs编码`(start:u32,length:u32)`，不能合并不同来源；撤销对象仅清可靠归属的格，不撤整片legacy墙。
+
+`LegacyAnchorBinding={anchor_id:str,anchor_pose_at_migration:Pose2D,base_cell_indices:sorted unique u32[],local_quads_b64:str,count:u64,original_bindings:tuple[CellBinding,...]}`保存V1实际可用原bindings的anchor关系，count与索引/原bindings长度一致、同base格最多一个原绑定；每个原格四角逆变换到原anchor-local后按左下起逆时针保存`<8d`（64*count字节），校验与base原格/anchor_pose一致。original_bindings保留原CellEvidence全部字段及world_x/world_y/anchor_pose（包括hit_count/free_count、last_valid_time/belief/change_source），避免把旧绑定精度量化成local整数格；已撤旧binding在迁移时体现在base清位，原档继续保留其历史。绑定格按local四边形重投影，未绑定dense格留在冻结base绝对坐标（明确legacy来源，不伪造稳定/anchor）。无需为未绑定每格造CellBinding；虚拟支持引用为`(base_id,base_cell_index)`，可用runs表示，保留撤销粒度。几何support与legacy可同格独立支持，只有明确替换对应来源才清该base位。`ProfileProvenance={profile_id:str,evidence_digest:sha256,parameters:dict[str,float|u64]}`保存实际使用参数；缺物理证据不生成geometric确认。旧removals在一次迁移中清对应base live位，原档hash不变；不保留可再灌回base的raw分支。
+
+absolute结果与anchor证据是**一个cut的materialization和来源**：统一raster投影规则：anchor-local格/legacy四边形随anchor变换，occupied覆盖与其有正面积交叠的目标格，端点另以floor((world-origin)/r)归格；free仅覆盖完全包含于有效free区域的目标格（数值不确定时退unknown），occupied格边界本身不额外扩张。固定渲染规则为有效geometric/legacy occupied优先，其次未废止且保守投影的free，再次unknown；legacy格也遵守live_mask及绑定重投影。absolute不得独立编辑。支持引用由support.local_cells及legacy `(base_id,index)`完整表达，可重建global cell→多支持逆索引，无须每格冗余JSON对象；所有引用存在、support_id唯一、anchor可用且resolution一致。加载先验证字节/hash/范围/水位与引用，再按持久anchors重渲染并逐字节核对absolute cells、geometry及G；不一致拒cut，不选择任一侧“修复”，不调用raw。无损serialize保留完整成员、局部清位及anchor pose，重新保存不能丢free、原支持或provenance。
+
+**验证与提交顺序。** `ActiveMap.apply_evidence(source:object, *, expected_graph_sequence:int, expected_anchor_digest:str, delta:FixedDelta)->FixedSnapshot`调用同store的`commit_evidence(binding:OccupancyIngestBinding, *, expected_graph_sequence:int, expected_anchor_digest:str, delta:FixedDelta)->FixedSnapshot`，参数expected两值必须与delta.expected一致。现opaque source/binding身份校验保留；先核对expected的MapRef/R、backend/host boot、完整source、graph_sequence/digest及fixed/evidence水位，key必须来自本session已接受且未过期的C1事实并满足新R floor。evidence_revision严格递增，key同源sequence严格向前（允许槽跳帧，gap重启稳定窗口；重复不续期、不再次提交）。trigger_anchor必须在当前完整可用cut，管理投影使用该cut的`VerifiedBasis={anchor_id,map_basis:Pose2D,odom_basis:Pose2D,graph_sequence,anchor_digest,map_ref,reference_generation}`，计算map←odom=map_basis∘inverse(odom_basis)；管理进程不能直接调用adapter内存中的LiveMappingReference，也不能当odom即map。basis由原已验证graph/anchor cut派生，T1交接其传输/失效fence准确字段，非新坐标owner。
+
+在原owner锁内完成：(1)全部校验及容量预检，构造staged copy；(2)先应用精确撤销/partial移除与legacy清位，再写新support与已判定free；(3)occupied覆盖使所有相交旧free位失效，本cut仍可信O优先；(4)更新dirty区域/自然观测extent并渲染核对absolute；(5)原子发布support/free/base掩码、grid与完整watermark，任何失败不发布半份。每个已接受证据批（即使没有cells变化）推进evidence_key/revision及fixed_revision/change_sequence，使拒重放和checkpoint一致；被拒或完全重复不推进。`commit_ingest`仍严格graph连续+恰增1 anchor，不借evidence伪造keyframe；graph校正先由原owner安装完整anchor集合/reproject和清交叠free，推进fixed/change水位，再允许以新digest准备delta，旧delta必须重准备。graph_sequence不因同anchor提交而变化。
+
+`ActiveMap.ensure_observed_extent(source:object, *, expected:FixedWatermark,bounds:tuple[float,float,float,float])->FixedSnapshot`仅消费当次合格Q在已验证basis的bounds；bounds需finite、有序且来自本轮已接受scan及该basis，不能仅接受调用者任意矩形；source/ref/floor/期限同样复核。extent-only变更推进fixed_revision/change_sequence，保留evidence_key/revision和graph_sequence；重复bounds无变化不推进。不改MapRef/R、不证明free、不开用户目标padding/反向map.backend端口。bridge ACK只证明owner cut已bridge installed；Nav2插件每周期核对实际master覆盖，超域current=false/coverage_pending，Q全量仍发送，沿原就绪/运动保护，不建分布式确认服务。
+
+**容量、截断及checkpoint。** 支持记录+完整端点/支持格成员+持久waypoint/legacy绑定索引沿65536聚合cap计费（摘要≤32也计成员，不以少量摘要冒充全部支持）；单次delta支持/撤销/格修改合计≤8192，mask以实际改变位计；一条support含全部新端点/支持格成员也计费，occupied派生的free清位为该原子批必须预检的修改，不能只提交一半；free tiles≤1024，仅是局部tile容量，多anchor重叠/稀疏边界可能先耗尽，不能承诺覆盖任意1Mi全free。legacy dense/base掩码不展开百万对象，字节总量仍受64MiB archive/checkpoint及8MiB transfer各自真实编码边界。不能截短支持或payload后声称成功；容量不足先保留旧墙，停止无法完整表达的新固定升级，报告fixed_capacity，仍允许在cap内完整表达的撤销/真实free事务，不能阻断Q。不可容纳的批拒绝后不推进evidence水位，不因拒绝删除墙；下一完整新批可继续，不补造丢帧。
+
+capture在owner fence内取一致immutable FixedSnapshot及匹配graph capture，解锁后I/O，latest Q继续、fixed冻结期间最多保留一个最新候选。checkpoint metadata version=2绑定checkpoint_id/home_id、完整watermark、occupancy payload digest、graph成员hash及manifest成员清单（有界metadata引用清单digest，不将全anchor清单塞现4096字节metadata读上限）；所有成员先stage/校验，沿现durable_replace/durable_move_tree的fsync及可恢复替换发布，最后catalog指向该完整cut。保存期间后续fixed/change增长不能被旧save误清dirty；只确认所保存change_sequence，恢复验证三层version/watermark/hash一致后才安装。保存cut的已应用evidence水位完整保留用于审计；恢复后的新session先沿原恢复/定位校验建立新boot/source/R/floor，原子更新live watermark身份并清live evidence_key（evidence_revision/fixed_revision不回退，身份切换推进fixed/change），支持内历史key不改写，Q为空且不就绪。graph_sequence按原verified resume握手，不能把旧session的sequence直接当新graph进度；该握手前不得接纳新delta，更不能直接重放旧key。V1仅一次明确迁移，V2损坏拒cut且禁止raw fallback的已批准行为不变。
 
 ### C4：fixed安装、存档及UI期限
 
-`NativeNavigationBridge.install_fixed(cut: FixedSnapshot, *, graph_cut: dict) -> None`：owner通过`map.backend.install_fixed`发送私有`fixed.json`只读transfer（≤8MiB、同uid/非symlink、digest；接收确认后释放，最多一个in-flight及一个合并候选）。内容包含C3完整watermark、`width/height/resolution/origin/cells_b64/grid_id`及该anchor cut的定位基础；不传所有短期track或每scan全anchor。adapter复核boot、当前MapRef/R、graph cut/digest、fixed/evidence水位，G按geometry+cells内容身份，installed ACK原样返回watermark/G。owner未收到ACK不宣布导航图就绪；新fixed撤销尽快发布，不沿旧1/5秒native raster刷新节流。graph/raw诊断服务可保留且明确不作生产fallback；唯一/map owner检查与stock图remap保留。
+`NativeNavigationBridge.install_fixed(cut: FixedSnapshot, *, graph_cut: dict) -> None`：owner通过`map.backend.install_fixed`发送私有`fixed.json`只读transfer（≤8MiB、同uid/非symlink、digest；接收确认后释放，最多一个in-flight及一个合并候选）。内容包含C3完整watermark、`width/height/resolution/origin/cells_b64/grid_id`及该anchor cut的定位基础；不传所有短期track或每scan全anchor。adapter复核boot、当前MapRef/R、graph cut/digest、fixed/evidence水位，G按geometry+cells内容身份，bridge-installed ACK原样返回watermark/G，只证明bridge已发布/map并安装reference，不证明Nav2 StaticLayer已消费/resize。owner未收到ACK不宣布bridge安装完成；Nav2就绪另由插件本周期master范围/current和原就绪链判断；新fixed撤销尽快发布，不沿旧1/5秒native raster刷新节流。graph/raw诊断服务可保留且明确不作生产fallback；唯一/map owner检查与stock图remap保留。
 
 内层`references.FORMAT_VERSION=2`、外层`archive.BUNDLE_FORMAT_VERSION=2`、`checkpoint.json.version=2`。新payload保存完整watermark、absolute O/F/U、anchor局部support/free证据和算法profile来源；raw graph标`localization_only`。legacy dense base保留局部cell provenance；新几何支持替换其对应局部来源，不能把整片legacy墙绑定一个短期track一起撤。恢复后支持关联仅在当前局部候选中由owner查持久摘要，歧义不撤，不能靠重启分配新ID绕过已知撤销。V1解析仅由明确迁移入口调用：`migrate_legacy(snapshot: SlamSnapshot, *, legacy_grid: WorkspaceGrid | None, native_legacy_grid: WorkspaceGrid | None) -> FixedSnapshot`放原`references.py`，只有实际V1+未迁移catalog cut可接受一次native legacy图，叠加原removals后原子创建当前副本；V2不调用。manifest/checkpoint checksum绑定所有权威成员；失效拒cut，不默退原档/重绘raw。旧加载器因版本!=1拒新档，实际旧loader验证此断言。
 
@@ -135,7 +158,7 @@ cloud仅维护显示缓存年龄：在`cloud/src/cloud/snapshots.py`按接收mon
 
 **Files:** 下方manifest的T1；不修改`ReadGraphCommit.srv`，保留原capture commit历史。**Consumes:** 原BoundedRawLaserScan、exact TF/static witness和选定DeviceProfile。**Produces:** C1及C4 latest-slot握手；Q无需C2/C3完成即可更新，但无合格reference时为失格。
 
-- [ ] 在新增`M/test/test_shared_scan.py`写`test_original_capture_and_retired_scan_do_not_renew_deadline`：完整整数stamp/GID/epoch不变，重复/退休不续期、有效空与失格空分开；使用已有exact-stamp/epoch输入，不造简化float身份。先运行应因新接口不存在失败。
+- [ ] 在新增`M/test/test_shared_scan.py`写`test_original_capture_and_retired_scan_do_not_renew_deadline`：完整整数stamp/GID/epoch不变，重复/退休不续期、有效空与失格空分开；使用已有exact-stamp/epoch输入，不造简化float身份。先运行记录新增行为断言失败；仅缺类型/导入失败只证明接口未实现，不单独算旧行为缺陷证据。
 - [ ] 扩原`M/test/probes/probe_bounded_scan_ingress.py`：同一来源在graph gate关闭且capture进行时继续供scan，计数QUALIFIED消息；cached geometry不匹配、静态receipt退休均不能产合格事实。探针验证原native入口，不以Python mock顶替。先在安装态观察新增断言失败，再改入口。
 - [ ] 实现C1双消息及有界executor交接，精确采样odom/base和mount签名；static receipt/TF/clock回调在入口同组串行，graph只消费有界队列和发布immutable几何见证；加入关闭join及退休清空。保存不能持入口组锁。
 - [ ] 实现`decode_qualified_scan`：复用`senior_perception.self_filter.filter_self`现语义，保持倒装角序/原beam索引；不得将Shapely coverage全图运算复制到每scan。桥先投影/发Q，latest file写入独立合并I/O。对齐mapping manifest的2.6.10并补原perception运行依赖，不引新库。
@@ -156,12 +179,12 @@ cloud仅维护显示缓存年龄：在`cloud/src/cloud/snapshots.py`按接收mon
 
 ### Task 3：同anchor证据提交、free图块和独立支持（原ActiveMap/store owner）
 
-**Files:** manifest T3。**Consumes:** C1/C2及真实graph cut。**Produces:** C3 FixedSnapshot；Task 3与4由同一责任人顺序执行，不能各自在分支发明格式。
+**Files:** manifest T3。**Consumes:** C3纯schema/事务先按真实graph cut开发，几何接线再消费C1/C2。**Produces:** C3 FixedSnapshot；Task 3与4由同一责任人顺序执行，不能各自在分支发明格式。
 
 - [ ] 扩`tests/unit/test_occupancy.py`和`M/test/test_active_map.py`的S02/S04/S06：多份独立支持同格，运动只撤对象组，墙仍100；不同anchor合格free按原次数+belief+跨度清旧支持，遮挡期间不清；旋转free边界不外溢为free；旧free在occupied后失效，撤对象后无新free为255。新功能前应失败，不删除原稳定累积/缺参数/重复frame保护。
 - [ ] 保留graph `commit_ingest`连续+新增anchor校验，新增C3 `commit_evidence`及`apply_evidence`允许同cut多次证据；graph_boot/anchor digest旧值拒绝，处理per-scan gap不伪造keyframe。`OccupancyMaintainer`只有明确stable证据可新增fixed，旧unknown_static不能作为新生产旁路。
 - [ ] 扩evidence/store/references现结构承载多支持与32×32 free tiles；真实hit前射线积分，遮挡后/缺束/未知无回波不清。hit清旧free代次；motion按支持ID撤销，free触发与原支持anchor分开；active snapshot和renderer输出同一绝对三态。
-- [ ] 沿`ProductionMappingRequests._observe`现0.05s管理循环，在`NativeSession.ingest`即使graph next返回PENDING也读取latest槽、处理同anchor evidence；不因现early-return停fixed更新，不另建长期线程/worker。过载跳帧重启稳定窗口并记录，Task 0取scan频率后验证现owner节奏能提供足够独立有效帧，不能靠重复帧补数。实现C3自然观测extent的同owner复核（管理侧读独立latest槽、adapter核对/map覆盖，不开反向RPC/新服务/用户目标入口），1Mi预算外报告容量并撤就绪声明；原图不裁墙。dirty tiles增量更新，anchor校正更新受影响块，65536/8192/1024及字节cap不丢独立支持、不阻断Q。
+- [ ] 沿`ProductionMappingRequests._observe`现0.05s管理循环，在`NativeSession.ingest`即使graph next返回PENDING也读取latest槽、处理同anchor evidence；不因现early-return停fixed更新，不另建长期线程/worker。过载跳帧重启稳定窗口并记录，Task 0取scan频率后验证现owner节奏能提供足够独立有效帧，不能靠重复帧补数。实现C3自然观测extent的同owner复核（管理侧读独立latest槽、adapter核对bridge安装、插件核对真实master覆盖，不开反向RPC/新服务/用户目标入口），1Mi预算外报告容量并撤就绪声明；原图不裁墙。dirty tiles增量更新，anchor校正更新受影响块，65536/8192/1024及字节cap不丢独立支持、不阻断Q。
 - [ ] 未来运行`python3 -m pytest tests/unit/test_occupancy.py ros2/src/senior_mapping/test/test_active_map.py ros2/src/senior_mapping/test/test_map_references.py -q`；预期同anchor刷新、原连续性、S04/S06及容量断言通过。原不同anchor清除冲突是源码风险，先见新增断言失败再修，不宣称已复现生产故障。
 - [ ] 提交`feat: maintain authoritative anchored tri-state occupancy`并审核数据职责/复杂度；不切给第二保存owner。
 
@@ -171,7 +194,7 @@ cloud仅维护显示缓存年龄：在`cloud/src/cloud/snapshots.py`按接收mon
 
 - [ ] 扩`M/test/{test_map_archive,test_checkpoints,test_map_references}.py`的S07/S08：由**当前V1真实writer**产生checkpoint+bundle，保留原档hash，native旧三态仅迁移一次；运动/真实free撤旧hit→保存→重载/导出不复活。V2损坏拒cut、实际旧V1 parser拒V2，不能用手写“含free”的假旧fixture。先看到现格式/回流断言失败。
 - [ ] 实现C4完整watermark fence：gate/drain只冻结graph和fixed cut，固定immutable快照含已提交撤销；capture核对graph/anchor+fixed/evidence水位后I/O；未一致则拒，不取消旧校验。新scan在独立Q路继续，fixed候选仅1份合并，存盘后重开丢帧稳定窗口。
-- [ ] 升级三个版本、archive/checkpoint校验和及PGM（0/100/255分别真实free/occupied/unknown）；同步`workspace_export.py`、`operations.py`、`slam_adapter.py`的显式导入/历史/导出。native raw明确localization_only；V2渲染、restore、regrid/选图无raster fallback。旧导航资格按原证据保留，不强制所有旧图重校准。
+- [ ] 升级三个版本及archive/checkpoint校验和；dense O/F/U=100/0/255，PGM P5灰度明确O=0/F=254/U=205，不能将dense free=0直接写成黑色。map.yaml沿真实archive约定negate=0、occupied_thresh=0.65、free_thresh=0.196；像素占据概率(255-gray)/255，0为occupied、254为free、205落unknown带；PGM行row对应dense y=height-1-row，resolution/origin一致，重读三态须逐格等于权威结果；同步`workspace_export.py`、`operations.py`、`slam_adapter.py`的显式导入/历史/导出。native raw明确localization_only；V2渲染、restore、regrid/选图无raster fallback。旧导航资格按原证据保留，不强制所有旧图重校准。
 - [ ] 显式`install_fixed` transfer/ACK替换native导航grid路径，桥的内容全取owner，仍用原graph/odom配对授权reference；没有0格不自动pending，不能伪造free。`mapping_navigation.hpp`的raw raster仅用于诊断/一次迁移，生产调用拒绝回流。迟到fixed cut和reference退休不能覆盖新图或续Q。
 - [ ] 在新增`ros2/tests/test_shared_layers_process.py`写S05/S07/S09，用真实管理`NativeSession/ActiveMap`、真实adapter IPC和native进程/临时catalog：无新keyframe同时save，Q继续更新/撤销，fixed证据revision可变；源/参考退休清Q；ACK/map/导出/重载一致。不只扩native child探针然后声称已跨生产owner。
 - [ ] 未来运行`python3 -m pytest ros2/src/senior_mapping/test/test_map_archive.py ros2/src/senior_mapping/test/test_checkpoints.py ros2/src/senior_mapping/test/test_map_references.py ros2/src/senior_mapping/test/test_active_map.py -q`；安装环境再运行`python3 -m pytest ros2/tests/test_shared_layers_process.py -q`，不得以skip作通过。复用`M/test/probes/probe_production_session.py`检查原capture/shutdown回归。预期S05/S07/S08/S09均有真实owner记录，旧cut不回灌。
@@ -190,7 +213,7 @@ cloud仅维护显示缓存年龄：在`cloud/src/cloud/snapshots.py`按接收mon
 - [ ] 用现`senior_control/tests/test_direct_navigation.py` free目标输入明确R≠G，并新增同图unknown目标S10、复用occupied/free-only航点/旧身份拒绝输入S11；先验证现实现失败，再实现上述薄端口，不能绕过持久任务/IPC/RouteService直接发Nav2 goal。
 - [ ] 新增`N/test/test_current_scan_layer.cpp`验证S12同一A→B→撤销序列的pending/last-rendered域及255→254命中，不存第二份fixed；先在真实Nav2库单元实例看到旧行为不满足，再实现插件。数值数组mock不算部署通过。
 - [ ] 插件updateBounds合并上次**实际渲染**与本周期Q域、失效域；master重置该域后fixed StaticLayer重铺，插件只mark当前hit为lethal，inflation重算；不用写free擦墙、不用普通max压过unknown。多个新消息、reset/disable、rolling origin移动在这同一S12序列插入，保留一次清旧域机会；失效current=false。
-- [ ] 两costmap plugins顺序改static_layer/current_scan_layer/inflation_layer，移除原/scan ObstacleLayer重复历史贡献；local rolling也用/map，`use_maximum=false`，保持track_unknown_space=true、footprint和原padding；allow_unknown=true进真正Smac配置。不增加MPPI伪allow_unknown参数，不绕足迹。全量Q测距遵守Task 0协议，不沿用2.5m裁点；global域覆盖C3确认，local窗口外由global承接。现`simulation_motion.launch.py`的map_yaml静态模式沿原controller_params临时overlay明确保留原static/scan/inflation装配（含原scan资格），仅live mapping选shared插件；不额外造永久配置模板。该兼容静态模式不宣称可更新共享fixed，选择可更新旧图需走Task 4原mapping生命周期交接。Task 0若确认硬件仍使用独立fallback，必须先列出它的实际参数消费/交接证据，由负责人收敛需改的原装配路径；未收敛前不能全局启shared配置而让旧静态导航丢障碍输入。
+- [ ] 两costmap plugins顺序改static_layer/current_scan_layer/inflation_layer，移除原/scan ObstacleLayer重复历史贡献；local rolling也用/map，`use_maximum=false`，保持track_unknown_space=true、footprint和原padding；allow_unknown=true进真正Smac配置。不增加MPPI伪allow_unknown参数，不绕足迹。全量Q测距遵守Task 0协议，不沿用2.5m裁点；bridge安装由C3/C4确认；global插件本周期在真实master范围核对全部hit，超域current=false/coverage_pending，保留清旧域机会，直到/map实际装入，不以bridge ACK冒称覆盖。local窗口外由global承接。静态/live配置必须同时覆盖planner/global与DedicatedController/local两消费端：模拟`simulation_motion.launch.py`生成controller_params交agent_adapter的navigation_controller_params，但planner由`N/launch/navigation.launch.py`的parameters/RewrittenYaml单独消费；硬件`platform_runtime.py`把navigation_parameters经`safety_motion.launch.py`传planner，并把navigation_controller_params传agent_adapter，实际controller由`N/senior_navigation/dedicated_controller.py`用--params-file启动。map_yaml静态两端均保留原static/scan/inflation及原scan资格，live两端均选fixed/Q/inflation；沿原临时overlay，不新增永久模板。启动选择overlay不等于已完成动态切换；实际切换须原Nav2/controller生命周期和/map发布权交接。若双端接线要求增加manifest未列launch等实际文件，先按上述消费证据报负责人路径与并集增量，不擅加实施文件。该兼容静态模式不宣称可更新共享fixed，选择可更新旧图需走Task 4原mapping生命周期交接。Task 0若确认硬件仍使用独立fallback，必须先列出它的实际参数消费/交接证据，由负责人收敛需改的原装配路径；未收敛前不能全局启shared配置而让旧静态导航丢障碍输入。
 - [ ] 在原`ros2/tests/test_navigation.py`安装态probe扩S12/S13/S14：同部署库两costmap实际取样A→B→撤销含inflation、固定墙；同图unknown通道让真实Smac和MPPI规划/控制离线fixture，记录路径、controller请求和确定的离线执行模型位置，不声称实车。mixed unknown/lethal footprint按原审计风险构造早边unknown/后边lethal及同输入边序对照，中心不依靠lethal挡住候选；真实FootprintCollisionChecker/Smac/MPPI不得穿已知障碍。**先复现**，未失败仅证明该版本组合；失败记录版本/调用栈/最小输入，阻止unknown发布，向负责人提交最小上游修复或可验证版本选择，不自动扩大产品补丁范围、不关足迹/unknown改free。
 - [ ] 未来先`python3 -m pytest senior_control/tests/test_direct_navigation.py ros2/tests/test_navigation.py -q`验证准入与静态装配；再在Task 0安装态离线环境`colcon build --base-paths ros2/src --packages-up-to senior_navigation senior_robot`、`colcon test --packages-select senior_navigation`及`colcon test-result --verbose`。在隔离域设置`NAV2_TEST_INSTALLED_LAUNCH=1 ROS_LOCALHOST_ONLY=1 ROS_DOMAIN_ID=187`运行原安装态probe；187只是示例，先确保域无其他参与者，不能连车；S12–S14必须实际执行不skip。包XML/插件导出/安装prefix都从install目录加载验证。
 - [ ] 更新navigation README说明部署版本/unknown边界与未验项，提交`feat: consume current scan layers and admit in-map unknown goals`并审核。mixed footprint失败或版本缺失时准入代码可评审，unknown实际交付保持阻塞；其他后端可推进。
@@ -201,22 +224,22 @@ cloud仅维护显示缓存年龄：在`cloud/src/cloud/snapshots.py`按接收mon
 
 **Files:** manifest T6（基于已merge PR42最终布局）。**Consumes:** C1/C4 Q及同源fixed G。**Produces:** C4 `ScanLayerPayload`与`useCurrentScan`；不改变页面结构，不让UI抽样进入导航。
 
-- [ ] 用最新`web/src/api/vehicleState.test.ts`、`features/map/map.test.tsx`和`features/devices/devices.test.tsx`的既有snapshot输入扩S15：G不变/Q更新，tiles读取计数不增加；相同Q重复snapshot不续期限；旧R/旧source、断连、Q到期清空，固定G仍在。以2048点输入断言hit_count=2048、preview_count≤96且标签明确预览；末束若为其角桶最近hit应出现；不声称抽样全量；缺姿态/期望更新等旧回归仍跑且不削弱。
+- [ ] 用最新`web/src/api/vehicleState.test.ts`、`features/map/map.test.tsx`和`features/devices/devices.test.tsx`的既有snapshot输入扩S15：G不变/Q更新，tiles读取计数不增加；相同Q重复snapshot不续期限；旧R/旧source、断连、Q到期清空，固定G仍在。以2048点输入断言hit_count=2048、preview_count≤96、display_mode=preview，复用已有legend/可访问名称“当前扫描预览”；末束若为其角桶最近hit应出现；不声称抽样全量；缺姿态/期望更新等旧回归仍跑且不削弱。
 - [ ] 在`LiveMappingReference.state`接桥已验证Q；C4嵌套scan_layer及最多96 preview scan_points沿现local_state/state_ports/ipc_state/snapshots/snapshot_state/main和contracts唯一wire透传；`main._snapshot_change_key`加入Q source/sequence/期限，不能只看前64点抑制更新。状态采样不得重签scan有效期，退休即失格空层；serialize完整真实state.get后必须≤8192字节，预览可按剩余字节预算再少取并如实标preview_count，不能增IPC帧上限或挤掉原安全字段。cloud同Q缓存截止只取更早并按驻留失效，增量改原snapshot缓存，不能让重连取缓存复活Q。
-- [ ] 实现`web/src/features/map/useCurrentScan.ts`集中C4过期规则，`ControlSurface.tsx`和`TaskList.tsx`用同hook传MapCanvas已有scanPoints；`MapCanvasProps`增加`scanPreview?: { shown: number; total: number }`，来自同一scan_layer的preview_count/hit_count；MapCanvas明确显示“当前扫描预览 preview_count/hit_count”，区分当前点与fixed底图现样式，必要的标识/绘制改动归该组件。`useWorkspaceMap`保留MapRef/R/G scope，不把Q或snapshot整体作为tile effect依赖。
-- [ ] 未来`python3 -m pytest senior_control/tests/test_agent.py senior_control/tests/test_mapping_production.py senior_control/tests/test_mapping_catalog_wire.py cloud/tests/test_agent_snapshots.py -q`与现snapshot/wire回归（Task 7输入表指明）验证字段跨链；`npm --prefix web test -- --run src/api/vehicleState.test.ts src/features/map/map.test.tsx src/features/devices/devices.test.tsx`，再`npm --prefix web run typecheck`。若包未装，记录缺口交负责人安排已授权环境，不能本轮安装。
+- [ ] 实现`web/src/features/map/useCurrentScan.ts`集中C4过期规则，`ControlSurface.tsx`和`TaskList.tsx`用同hook传MapCanvas已有scanPoints；协议hit_count/preview_count/display_mode保留供预算、内部诊断与测试；MapCanvas复用现legend和可访问名称“当前扫描预览”，沿原样式区分当前点与fixed，不强制n/N、sequence、新prop/元素或布局，不删除已有有效行为。`useWorkspaceMap`保留MapRef/R/G scope，不把Q或snapshot整体作为tile effect依赖。
+- [ ] 未来`python3 -m pytest senior_control/tests/test_agent.py senior_control/tests/test_mapping_production.py senior_control/tests/test_mapping_catalog_wire.py cloud/tests/test_agent_snapshots.py -q`与现snapshot/wire回归（Task 7输入表指明）验证字段跨链；`npm --prefix web test -- --run src/api/vehicleState.test.ts src/features/map/map.test.tsx src/features/devices/devices.test.tsx`，再`npm --prefix web run typecheck`。若包未装，按用户/仓库既有授权准备必要安全离线依赖并记录环境证据，不再就既定实施反复求批。
 - [ ] 提交`feat: display qualified current scan with independent expiry`，负责人在PR42结构亲阅审核后合功能主分支。Q刷新不拉fixed tiles且真实UI收到当前Q才可完成S15。
 
 ### Task 7：生产闭环、安装态离线及四核资源收口（负责人协调，原各owner修自己模块）
 
 **Files:** manifest T7。**Consumes:** 已合T1–T6及Task 0版本/profile、同一S01–S16输入集。**Produces:** 分层证据、失败边界、测量报告；不是一套新测试矩阵或新生产调度框架。
 
-- [ ] 在**不接车**的既有同版ROS2离线构建/安装环境完成协调rebuild：`colcon build --base-paths ros2/src --packages-up-to senior_mapping senior_navigation senior_robot`，核对install前缀生成消息typesupport、插件XML及.so、Python包导入与CMake/manifest版本相符。`colcon test --packages-select senior_mapping senior_navigation senior_interfaces`及`colcon test-result --verbose`须无失败；本机无/opt/ros不假装能跑，移交该安装环境而非擅自安装。
+- [ ] 在**不接车**的既有同版ROS2离线构建/安装环境完成协调rebuild：`colcon build --base-paths ros2/src --packages-up-to senior_mapping senior_navigation senior_robot`，核对install前缀生成消息typesupport、插件XML及.so、Python包导入与CMake/manifest版本相符。`colcon test --packages-select senior_mapping senior_navigation senior_interfaces`及`colcon test-result --verbose`须无失败；本机无/opt/ros不假装能跑，使用已授权且ABI明确的安全离线环境，必要依赖准备按既有授权执行，不以本机无ROS冒称构建通过。
 - [ ] 实际管理owner/adapter/native进程的S05–S09使用临时catalog和隔离IPC，记录/map唯一发布者、capture身份/水位及archive字节/hash；包括map_server/AMCL静态模式原启动不回归，切live mapping由原生命周期交接owner，不能把静态模式废掉来让唯一/map检查过。新增`ros2/tests/test_shared_layers_process.py`承担跨进程场景，原native probe只是支撑。
 - [ ] 对照下表逐项填“unit / owner跨进程 / 部署Nav2离线 / 目标四核 / 实车未验”，列真实命令/版本/产物；S13离线fixture的控制输出不能当真实轮速。若发现关键需求缺验证，先报告负责人缺口，不自行扩任意新场景。
 - [ ] 原benchmark只有纯算法trace，不能直接冒称整机测量；扩其`--system-trace PATH --output PATH`读取新增process probe/安装态fixture产出的同机JSONL，`summarize_system_trace(path: Path) -> dict`按原capture关联实测事件与进程资源采样，不新增生产调度框架。保持原纯算法模式及输出，区分tracemalloc临时内存与实际进程RSS/PSS。复用同一输入、相同地图/profile/四核目标设备，基线与新链各一次完整重放，并发SLAM、定位、共用控制、MPPI、UI、存盘；在原probe/fixture记录器输出版本/profile/host boot、capture键、阶段steady_ns及进程PID/资源采样；记录本身开销单列，不为丢trace续Q。按capture关联记录capture→Q→global/local→控制消费p50/p95/p99/max、分类/owner锁等待、queue高水位/丢帧/失格、各进程CPU（单核100%口径）、RSS/PSS、I/O/上下文切换/温度降频。单列loop重投影/save/reload峰值、raw物体移走后pose/匹配/错误loop与重定位质量；不是扩大为native graph清洗。
 - [ ] 资源仅沿原0.5s源资格及既有控制时限验退化，新增CPU/延迟预算依据实基线由负责人收敛；不编Hz/CPU百分比/RSS成功阈值。未取得四核记录则S16未验，不能靠开发机benchmark完成；定位若恶化，保留原失格保护并提交局部scan/cache/constraint证据另派，不默认全graph修复。
-- [ ] 更新`docs/operations/slam-backend.md`和navigation README记录最终证据/版本/边界，提交`test: qualify shared obstacle layers across production owners`。负责人整分支审核实际A/M/D并集、任务生命周期及回归结果；未经新授权不推送、建PR或发布、不启动实车。
+- [ ] 更新`docs/operations/slam-backend.md`和navigation README记录最终证据/版本/边界，提交`test: qualify shared obstacle layers across production owners`。负责人整分支审核实际A/M/D并集、任务生命周期及回归结果；验收通过后按既有用户/仓库授权push功能分支并建PR，不重复求批、不自动合main；部署/实车仍按实际授权边界执行。
 
 ## 验收清单：单一输入序列、预期、现有位置
 
@@ -228,24 +251,24 @@ cloud仅维护显示缓存年龄：在`cloud/src/cloud/snapshots.py`按接收mon
 | S02 / T2/T3/T4 | 同轮廓稳定→移动→再稳定；撤原支持，当前实际hit一直在Q，再稳定完整新窗口可重新入图 | `tests/unit/test_occupancy.py`稳定累积有效用例保留；新geometry、`test_active_map.py`及生产process串成同一输入；unit+owner |
 | S03 / T1/T5 | 临时点离开实际覆盖/遮挡后Q撤，扫描外已稳定墙保留；不凭半径内仍有track续占据 | 现self_filter/coverage与`ros2/tests/test_scan_epoch_live.py`支撑；`test_shared_scan.py`、Nav2 S12序列；owner+Nav2 |
 | S04 / T3 | 原occupied先被遮挡，后真实free射线重访；前段不清，后段按次数/belief/跨度清，缺束/不明无回波不证明free | `tests/unit/test_occupancy.py:test_occlusion_does_not_clear/test_single_miss_preserves_wall`及free用例；unit+owner |
-| S05 / T1/T4/T7 | 无新keyframe且同时save，逐scan Q A→B→失效不等gate/RPC，fixed证据可在同anchor更新 | 现`M/test/probes/probe_bounded_scan_ingress.py`、`probe_production_session.py`；新`ros2/tests/test_shared_layers_process.py`真实manager/adapter/native；跨进程 |
+| S05 / T1/T4/T7 | 无新keyframe且同时save，逐scan Q A→B→失效不等gate/RPC，同段reference/map→odom TF按原stamp继续可用且旧pose迟到observe/invalidate被fence，fixed证据可在同anchor更新 | 现`M/test/probes/probe_bounded_scan_ingress.py`、`probe_production_session.py`；新`ros2/tests/test_shared_layers_process.py`真实manager/adapter/native；跨进程 |
 | S06 / T3 | anchor校正/旋转重投影，墙和对象独立支持同格，撤对象保墙；free边界保守，不同anchor free不伪造原支持anchor | `M/test/test_map_references.py/test_active_map.py`、`tests/unit/test_occupancy.py`；unit+owner |
 | S07 / T4 | raw保留旧hit，权威对象已撤；保存→重载→导出/重grid→选图一致不复活；损坏V2拒cut | `M/test/test_map_archive.py/test_checkpoints.py/test_map_references.py`、`workspace_export`现测试；新process；unit+owner |
 | S08 / T4 | 用真实当前V1 writer形成旧档一次迁移；原档hash不变，更新副本再重载不复活、不再调用native legacy绘图 | 同上archive/checkpoint测试、现V1加载函数；实际旧loader拒V2与新migration入口验证；owner/安装态 |
-| S09 / T1/T4 | 旧source/clock/R退休，迟到Q/分类/安装ACK不得续期或跨图显示；恢复Q为空 | `ros2/tests/test_scan_epoch_live.py/test_scan_exact_stamp.py`、`M/test/test_map_references.py`；新process及UI同输入；owner |
+| S09 / T1/T4 | 旧source/clock/R退休，迟到Q/分类/安装ACK不得续期或跨图显示；槽unchanged/changed、无scan退休事件/新R floor和迟到写入fence可表达，恢复Q为空 | `ros2/tests/test_scan_epoch_live.py/test_scan_exact_stamp.py`、`M/test/test_map_references.py`；新process及UI同输入；owner |
 | S10 / T5 | 图内unknown点击、R≠G；当前G准入，持久task/IPC传R，实际Nav2接收；图外仍拒 | `senior_control/tests/test_direct_navigation.py`、`ros2/tests/test_navigation_reference.py`及原RouteService测试；unit+owner |
 | S11 / T5 | 优先沿现occupied/旧G/权限输入：occupied拒；free航点可创建，unknown航点拒；Home/定位/取消终态保护不变 | `senior_control/tests/test_direct_navigation.py`及现workspace回归，`ros2/tests/test_navigation.py`任务取消用例；unit+owner |
-| S12 / T5 | 实际global/local Q A→B→撤销，旧lethal与膨胀撤，fixed墙仍lethal；在此序列嵌入多消息/reset-disable/rolling origin而非新矩阵 | 新`N/test/test_current_scan_layer.cpp`＋现`ros2/tests/test_navigation.py`安装态；实际部署Nav2离线 |
+| S12 / T5 | 实际global/local Q A→B→撤销，旧lethal与膨胀撤，fixed墙仍lethal；在此序列嵌入多消息/reset-disable/rolling origin及扩域时bridge ACK先到、master未扩current=false，实际装入才覆盖；静态/live两端参数一致 | 新`N/test/test_current_scan_layer.cpp`＋现`ros2/tests/test_navigation.py`安装态；实际部署Nav2离线 |
 | S13 / T5 | 同部署版unknown通道真实Smac生成路径，MPPI实际控制输出并经离线执行fixture跟随；已知障碍重规划，不能称实车 | 现`ros2/tests/test_navigation.py:test_installed_nav2_bringup_with_synthetic_map`扩执行链；部署Nav2离线 |
 | S14 / T5 | 同版mixed unknown/lethal footprint，先unknown边后lethal边/同输入边序对照，真实checker/Smac/MPPI不能穿已知障碍；先复现源码风险 | 同上安装态probe及新插件test的同版库调用，记录真实ABI/补丁；部署Nav2离线，失败需负责人收敛修复 |
-| S15 / T6 | 实际Q/独立deadline、重复snapshot不续期、全量2048的明确96点预览/计数，固定G不因每scan重拉tiles | 最新`web/src/api/vehicleState.test.ts`、`features/map/map.test.tsx`、`features/devices/devices.test.tsx`，`senior_control/tests/test_agent.py`、`cloud/tests/test_agent_snapshots.py`及process实际消息；UI+owner |
+| S15 / T6 | 实际Q/独立deadline、重复snapshot不续期、全量2048的最多96点预览及协议hit_count/preview_count/display_mode，复用legend/可访问名称，不强制数字标签，固定G不因每scan重拉tiles | 最新`web/src/api/vehicleState.test.ts`、`features/map/map.test.tsx`、`features/devices/devices.test.tsx`，`senior_control/tests/test_agent.py`、`cloud/tests/test_agent_snapshots.py`及process实际消息；UI+owner |
 | S16 / T7 | 同输入四核并发重放，记录延迟/CPU/RSS/队列/锁/save-loop峰值及raw动态移走后的定位质量，无编造门槛 | `tools/occupancy_replay_benchmark.py`复用；同一S02/S05/S07输入与已有profile；目标四核实测，实车未验 |
 
 **既有回归复用（默认无需改文件，仍须执行）：** `ros2/tests/test_scan_exact_stamp.py`、`test_scan_epoch_live.py`、`test_navigation_reference.py`、`test_navigation_collision_qualification.py`；`M/test/test_mapping_runtime.py/test_checkpoint_worker.py`；`senior_control/tests/test_direct_navigation.py/test_mapping_production.py/test_mapping_catalog_wire.py`；`tests/unit/test_occupancy.py/test_perception.py`。现snapshot/wire用例已查到`senior_control/tests/test_vehicle_state.py/test_workspace_data.py/test_agent.py`与`tests/integration/test_manual_wire.py/test_settings_logs_wire.py`，先运行涵盖C4字段的已有回归；若需修改其文件，先在下列manifest中报告范围差异，不默删旧失效断言。缺姿态或更新期望的原有效回归必须保留，fixture修复应说明现契约依据，不能弱化保护。
 
 ## 依赖顺序、审核与范围
 
-Task 0证据分两条：身份/store/格式可在部署证据未齐时先做；可靠几何profile和Nav2 ABI/安装资格分别等待物理与版本证据。`T1契约 → (T2纯几何 ∥ T5插件/准入 ∥ T6消费者)`；`T1+T2 → T3 → T4`由同一个原mapping owner收口；T5/T6可用冻结contract fixture先做开发，最终只以T4真实输出联验；`T4+T5+T6 → T7`。T3/T4与T1共享ros_runtime/navigation_bridge/native_session路径，owner串行落地，消费者分支不同时改它们。每个Task按失败断言→最小实现→定向通过→本地commit→Orca独立审核→负责人亲阅正常merge，冲突在原owner边界处理，不cherry-pick。不是本轮派工或授权自动启动helper。
+Task 0证据分两条：身份/store/格式可在部署证据未齐时先做；可靠几何profile和Nav2 ABI/安装资格分别等待物理与版本证据。`T1契约 → (T2纯几何 ∥ T5插件/准入 ∥ T6消费者)`；`T3纯schema/事务`可与T1并行，`T1+T2 → T3几何接线 → T4`由同一个原mapping owner收口；T5/T6可用冻结contract fixture先做开发，最终只以T4真实输出联验；`T4+T5+T6 → T7`。T3/T4与T1共享ros_runtime/navigation_bridge/native_session路径，owner串行落地，消费者分支不同时改它们。每个Task按失败断言→最小实现→定向通过→本地commit→Orca独立审核→负责人亲阅正常merge，冲突在原owner边界处理，不cherry-pick。不是本轮派工或授权自动启动helper。
 
 本计划比早期“只改14个产品接点”审计范围大：真实跨进程Q、同anchor证据、全部恢复/导出、state wire/manager透传及PR42消费者均须接线，不能漏算。比“净化全部native graph”更窄：不改matcher/solver/graph历史撤销、无新SLAM/永久tracker、不改ReadGraphCommit消息，也不默认改运动算法。精确预测按下列文件manifest去重，不把各任务相加当并集；任务开始后最新main若改路径或证据要求新增补丁，先报告差异给负责人再收口，不能把预测当允许随意扩范围。
 
@@ -347,7 +370,7 @@ A=新增，M=修改，D=删除；每行一个去重路径，任务列即逐任�
 | T7 | 0/0/0 | 1/0/0 | 0/0/0 | 0/0/0 | 0/3/0 | 1/3/0 |
 | 并集 | 8/38/0 | 4/14/0 | 0/2/0 | 0/5/0 | 0/4/0 | 12/63/0 |
 
-工具文档拆分：工具A0/M1/D0（原benchmark），文档A0/M3/D0（原操作、格式及导航README）；本轮A2/M2的设计归档不计入未来产品实施并集。
+工具文档拆分：工具A0/M1/D0（原benchmark），文档A0/M3/D0（原操作、格式及导航README）；历史A2/M2设计归档不计入未来实施并集；本次仅上述spec/plan工具文档A0/M2/D0，与原75路径不重叠，两文档修订+原预测的并集为77路径（A12/M65/D0，相对本次1567d9起点分类）。75是未来全类别实施预测，非75个产品源码；本次不增加产品实施manifest，T1并发成果另按其实际报告计。
 
 上述预测包含新消息、独立最新槽、三态/多支持、跨进程安装/迁移、Nav2插件及完整state/UI接线；没有默认纳入native graph净化或独立速度改动。Task 0若发现部署版必须修mixed footprint、profile几何/速度装配冲突、static map_server模式必须新增共享写行为，或新main改变接点，单列证据与增量文件并集给负责人，不把这些未收敛改动藏入数字；除已列simulation_motion静态兼容overlay外，现launch/profile仅只读复核，不擅自全面重写。
 
@@ -363,10 +386,10 @@ A=新增，M=修改，D=删除；每行一个去重路径，任务列即逐任�
 
 - **可立即派发的清晰部分：** merge最新main后，C1身份/独立Q、C3同anchor/三态/支持模型、C4格式/原档保护及准入R/G逻辑可按冻结字段推进；mock/fixture仅限开发，不替代生产/安装验收。
 - **物理判稳依赖：** 原scan协议与sensor/odom误差证据缺失，可靠GeometryProfile和固定升级激活受阻；最小取证见Task 0，纯算法与其余owner工作可前进。不能再问用户孤立静止是否入图或偷加类别规则。
-- **Nav2依赖：** 本机无/opt/ros；部署包/补丁/参数与profile、实际offline构建安装环境尚缺，插件ABI冻结与S12–S14不得声称完成。canonical footprint .674×.540m与旧hardware默认.55×.55m、sim .674×.552m的对应仍须核实，所选footprint/padding及速度不能靠缩小足迹或放宽资格过关；若证据要求装配实改，列真实文件增量由负责人收口。mixed footprint仍为源码风险，复现失败后另审最小补丁/版本选择，未默认计入产品清单。
+- **Nav2依赖：** 本机无/opt/ros；部署包/补丁/参数与profile、实际offline构建安装环境尚缺，插件ABI冻结与S12–S14不得声称完成。T0实际源码Nav2 footprint=.674×.540m、sim safety/profile=.674×.552m，硬件safety由所选HardwareMotionProfile生成，example不是实际部署；未核实的.55×.55m不能作为事实，部署polygon/padding/profile hash仍须核实，所选footprint/padding及速度不能靠缩小足迹或放宽资格过关；若证据要求装配实改，列真实文件增量由负责人收口。mixed footprint仍为源码风险，复现失败后另审最小补丁/版本选择，未默认计入产品清单。
 - **静态fallback依赖：** 已知sim map_yaml有map_server/AMCL，T5用原临时overlay保留其旧导航输入，不宣称已增量共享；旧图可更新路径走同一mapping owner。硬件若也有独立fallback且要求全模式共享，先取得实际使用/交接证据并报告额外行为/文件范围，不能在未知装配下全局启新配置、停旧导航或冒称没有双发布风险。
 - **目标范围边界：** 当前没有目标驱动图范围扩展API；T3只按真实观测/当前Q必要覆盖扩unknown边框且≤1Mi。任意图外目标、跨上限规划域若需新增显著行为/owner，单列负责人决定，不阻止有限图内unknown交付。
 - **资源/定位依赖：** S16必须同四核profile实测。raw影响尚未证实不可用，失败才按局部证据另评；native graph写入容量亦须测，不把16384读图上限当写入保证。UI远程单程延迟无可信上界，只能如实界定显示TTL误差，Nav2同机截止必须准确。
 - **独立运动工作：** 统一速度alpha/k与来源无关反向ramp由原共同运动owner另行实施/审核；本计划不增加来源分支、不顺手修、不作为共享层必需条件。只有其既有失格/安全输出已影响S16实验可执行性时记录该真实依赖，仍不把整项运动需求并入共享层。
 
-交接执行方式已经确定为Orca分阶段开发/审核。本轮到文档本地commit及交付为止；负责人亲阅后另派产品开发，不自动启动实施或helper。
+交接执行方式已经确定为Orca分阶段开发/审核。本次worker到精确两文档本地commit及交付为止，不操作T1并发产品成果、不推送/PR、不派helper；产品实施已获批准并由负责人分阶段派发。
