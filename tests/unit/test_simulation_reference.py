@@ -363,6 +363,7 @@ async def test_adapter_cleanup_errors_cannot_look_like_normal_consumer_exit():
             await namespace["cleanup"](NS(close=incomplete), NS(close=controller_close))
         except ShutdownError:
             pass
+    assert order == ["native settled", "controller settled", "controller settled"]
 
 
 async def test_disconnected_handoff_fences_a_queued_live_launch_action():
@@ -400,3 +401,229 @@ async def test_disconnected_handoff_fences_a_queued_live_launch_action():
         await writer.wait_closed()
         owner.cleanup(h.context)
         await asyncio.gather(*h.futures)
+
+
+@pytest.mark.parametrize(
+    "shutdown_case", ["slow_sigint", "cancelled_route_wait", "unconfirmed_sigkill"]
+)
+def test_active_controller_shutdown_settles_before_launch_directory_removal(shutdown_case):
+    """Independent R4 probe input: real route, controller and adapter shutdown blocks."""
+    import __future__
+
+    import ast
+    import asyncio
+    import signal
+    from contextlib import AsyncExitStack, asynccontextmanager, suppress
+    from types import SimpleNamespace as NS
+
+    from senior_navigation.navigation_adapter import RouteService
+
+    controller_path = (
+        Path.cwd() / "ros2/src/senior_navigation/senior_navigation/dedicated_controller.py"
+    )
+    definition = next(
+        n for n in ast.parse(controller_path.read_text()).body if isinstance(n, ast.ClassDef)
+    )
+    processes = {}
+    signals = []
+
+    def killpg(pid, number):
+        signals.append((pid, number))
+        # One ordinary child exits on SIGINT; bt_navigator is still shutting down.
+        if pid == 1 or (number == signal.SIGKILL and shutdown_case != "unconfirmed_sigkill"):
+            processes[pid].returncode = 0
+            processes[pid].finished.set()
+
+    ns = dict(
+        asyncio=asyncio,
+        AsyncExitStack=AsyncExitStack,
+        asynccontextmanager=asynccontextmanager,
+        suppress=suppress,
+        Path=Path,
+        os=NS(killpg=killpg),
+        signal=signal,
+    )
+    exec(
+        compile(
+            ast.Module(body=[definition], type_ignores=[]),
+            str(controller_path),
+            "exec",
+            flags=__future__.annotations.compiler_flag,
+        ),
+        ns,
+    )
+    Controller = ns["DedicatedController"]
+    adapter_path = Path.cwd() / "ros2/src/senior_robot/senior_robot/agent_adapter.py"
+    tree = ast.parse(adapter_path.read_text())
+    serve = next(
+        n for n in ast.walk(tree) if isinstance(n, ast.AsyncFunctionDef) and n.name == "serve"
+    )
+    serve_try = next(n for n in serve.body if isinstance(n, ast.Try))
+    cancel_if = next(
+        n
+        for n in serve_try.body
+        if isinstance(n, ast.If) and ast.unparse(n.test).startswith("routes is not None")
+    )
+    close_try = next(
+        n
+        for n in serve_try.finalbody
+        if isinstance(n, ast.Try)
+        and any(isinstance(h.type, ast.Name) and h.type.id == "BaseException" for h in n.handlers)
+    )
+    function = ast.AsyncFunctionDef(
+        name="adapter_shutdown",
+        args=ast.arguments(posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[]),
+        body=[cancel_if, close_try],
+        decorator_list=[],
+    )
+    exec(
+        compile(
+            ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[])),
+            str(adapter_path),
+            "exec",
+        ),
+        ns,
+    )
+
+    class Process:
+        def __init__(self, pid):
+            self.pid = pid
+            self.returncode = None
+            self.finished = asyncio.Event()
+            self.waiting = asyncio.Event()
+            self.cancelled = False
+
+        async def wait(self):
+            self.waiting.set()
+            try:
+                await self.finished.wait()
+            except asyncio.CancelledError:
+                self.cancelled = True
+                raise
+            return self.returncode
+
+    async def shutdown():
+        controller = Controller(None, Path("/tmp/unused-review-params"))
+        stack = AsyncExitStack()
+        for pid in (1, 2):
+            processes[pid] = process = Process(pid)
+            stack.push_async_callback(controller._stop, process)
+        controller._standby = (stack, "/unused-review-topic")
+        open_entered, finish_route = asyncio.Event(), asyncio.Event()
+
+        async def run_route(*args, **kwargs):
+            open_entered.set()
+            await finish_route.wait()
+            return False
+
+        routes = RouteService(
+            NS(run_route=run_route, active_goal=None),
+            qualified=lambda *args: True,
+            prepare=controller.open,
+        )
+        plan = NS(
+            execution_id="execution",
+            task_epoch=1,
+            map_ref=None,
+            map_generation="static",
+            poses=(),
+            action_ids=(),
+        )
+        route = NS(
+            plan=plan,
+            cancel_requested=False,
+            active_waypoint_index=None,
+            started=asyncio.get_running_loop().create_future(),
+            completed=[],
+            output_exited=False,
+            progress=lambda: NS(execution_id="execution"),
+        )
+        routes._current = route
+        route_task = route.task = asyncio.create_task(routes._run(route))
+        await open_entered.wait()
+        assert controller._in_use and not route_task.done()
+        finish_route.set()  # Normal route completion starts the actual AsyncExitStack cleanup.
+        await processes[2].waiting.wait()
+        assert controller._in_use and processes[2].returncode is None
+        print("ACTIVE_ROUTE_WAIT", controller._in_use, route_task.done(), processes[2].returncode)
+        if shutdown_case == "cancelled_route_wait":
+            route_task.cancel()
+            await asyncio.gather(route_task, return_exceptions=True)
+            assert processes[2].returncode is None
+
+        async def backend_close():
+            pass
+
+        ns.update(
+            routes=routes,
+            rclpy=NS(ok=lambda: False),
+            controller=controller,
+            mapping_backend=NS(close=backend_close),
+        )
+        await ns["adapter_shutdown"]()  # Unmodified adapter 3-second cancellation + close blocks.
+        print(
+            "ACTUAL_ADAPTER_CLOSE_RETURNED",
+            "route_done=",
+            route_task.done(),
+            "controller_in_use=",
+            controller._in_use,
+            "navigator_returncode=",
+            processes[2].returncode,
+        )
+        assert processes[2].returncode is not None, (
+            "adapter returned with an unsettled active navigator"
+        )
+        assert not controller._in_use
+        await asyncio.gather(route_task, return_exceptions=True)
+        # Returning now invokes the same asyncio.run pending-task cancellation as adapter spin.
+
+    failure = None
+    try:
+        asyncio.run(shutdown())
+    except RuntimeError as exc:
+        failure = exc
+    if shutdown_case == "unconfirmed_sigkill":
+        assert failure is not None
+        assert "navigation consumer cleanup incomplete" in str(failure)
+        assert processes[2].returncode is None
+    else:
+        assert failure is None
+        assert processes[2].returncode is not None
+    print(
+        "AFTER_RUN",
+        "failure=",
+        failure,
+        "returncode=",
+        processes[2].returncode,
+        "wait_cancelled=",
+        processes[2].cancelled,
+        "signals=",
+        signals,
+    )
+    # The initial SIGINT wait times out and is cancelled by wait_for, then the
+    # original exact group receives SIGKILL and its exit is actually observed.
+    assert processes[2].cancelled
+    assert signals == [(2, signal.SIGINT), (2, signal.SIGKILL), (1, signal.SIGINT)]
+
+    async def directory_boundary():
+        h = await _startup_owner()
+        binding = h.owner.bind_consumer(object())
+        h.first[1].on_exit(NS(returncode=0), h.context)
+        h.second[1].on_exit(NS(returncode=0), h.context)
+        h.owner.cleanup(h.context)
+        await asyncio.sleep(0.06)
+        assert h.owner.directory.exists()
+        # The exit boundary is derived from actual shutdown, never a forced fake code.
+        binding[0].on_exit(NS(returncode=0 if failure is None else 1), h.context)
+        if failure is None:
+            await asyncio.gather(*h.futures)
+            assert not h.owner.directory.exists()
+        else:
+            await asyncio.sleep(0.06)
+            assert h.owner.directory.exists()
+            import shutil
+
+            shutil.rmtree(h.owner.directory)
+        print("DIRECTORY_SETTLEMENT", "failure=", failure, "returncode=", processes[2].returncode)
+
+    asyncio.run(directory_boundary())

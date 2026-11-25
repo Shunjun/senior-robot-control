@@ -27,15 +27,41 @@ class DedicatedController:
         self._lock = asyncio.Lock()
         self._standby: tuple[AsyncExitStack, str] | None = None
         self._in_use = False
+        self._closing = False
+        self._owned: dict[AsyncExitStack, asyncio.Task | None] = {}
 
     def available(self) -> bool:
         return self._standby is not None or self._in_use
 
+    async def _settle(self, stack: AsyncExitStack) -> None:
+        # One owner task per stack, shared by route exit and controller shutdown.
+        # Cancelling a waiter must not interrupt process-group settlement.
+        if stack not in self._owned:
+            return
+        task = self._owned[stack]
+        if task is None:
+            task = self._owned[stack] = asyncio.create_task(stack.aclose())
+        await asyncio.shield(task)
+        self._owned.pop(stack, None)
+
     async def close(self) -> None:
         async with self._lock:
+            self._closing = True
             standby, self._standby = self._standby, None
             if standby is not None:
-                await standby[0].aclose()
+                self._owned.setdefault(standby[0], None)
+            stacks = tuple(self._owned)
+        # Never hold the state lock while waiting for process exit. Observe every
+        # stack, including failed/interrupted route cleanup, before claiming exit.
+        results = await asyncio.gather(
+            *(self._settle(stack) for stack in stacks), return_exceptions=True
+        )
+        for result in results:
+            if isinstance(result, BaseException):
+                raise RuntimeError("dedicated controller cleanup incomplete") from result
+        # Compatible: close also retires the static stack before a live handoff;
+        # successful settlement must allow the existing warmer to run again.
+        self._closing = False
 
     async def _transition(
         self, name: str, transition: int, process: asyncio.subprocess.Process
@@ -93,7 +119,11 @@ class DedicatedController:
         except asyncio.TimeoutError:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGKILL)
-            await process.wait()
+            # Compatible: retain the original SIGINT -> exact-group SIGKILL
+            # escalation; an unconfirmed kill must fail shutdown, never hang it.
+            await asyncio.wait_for(process.wait(), 4)
+        if process.returncode is None:
+            raise RuntimeError("dedicated controller process exit unconfirmed")
 
     async def _start(
         self, stack: AsyncExitStack, package: str, name: str, *remappings: str
@@ -119,47 +149,63 @@ class DedicatedController:
         await self._transition(name, Transition.TRANSITION_ACTIVATE, process)
 
     async def warm(self) -> None:
-        async with self._lock, AsyncExitStack() as stack:
-            if self.available():
-                return
-            if not self._params.is_file():
-                raise RuntimeError("qualified Nav2 controller unavailable")
-            if any(
-                name in {"controller_server", "bt_navigator"}
-                for name, _ in self._node.get_node_names_and_namespaces()
-            ):
-                raise RuntimeError("a Nav2 controller or navigator is already present")
-            from senior_navigation.parameters import rotate_role_permit
+        stack = None
+        ready = False
+        try:
+            async with self._lock:
+                if self._closing:
+                    raise RuntimeError("dedicated controller is closing")
+                if self.available():
+                    return
+                if self._owned:
+                    raise RuntimeError("dedicated controller cleanup pending or failed")
+                if not self._params.is_file():
+                    raise RuntimeError("qualified Nav2 controller unavailable")
+                if any(
+                    name in {"controller_server", "bt_navigator"}
+                    for name, _ in self._node.get_node_names_and_namespaces()
+                ):
+                    raise RuntimeError("a Nav2 controller or navigator is already present")
+                stack = AsyncExitStack()
+                self._owned[stack] = None
+                from senior_navigation.parameters import rotate_role_permit
 
-            permit = await asyncio.to_thread(rotate_role_permit, self._params, "local")
-            if self._permit_changed is not None:
-                self._permit_changed(permit)
-                stack.callback(self._permit_changed, "")
-            run_id = secrets.token_hex(16)
-            topic = f"/control/navigation/run_{run_id}/cmd_vel"
-            await self._start(
-                stack,
-                "nav2_controller",
-                "controller_server",
-                "-r",
-                f"cmd_vel:={topic}",
-                "-r",
-                f"/cmd_vel:={topic}",
-                "-r",
-                f"odom:={self._odometry_topic}",
-            )
-            await self._start(stack, "nav2_bt_navigator", "bt_navigator")
-            self._standby = stack.pop_all(), topic
+                permit = await asyncio.to_thread(rotate_role_permit, self._params, "local")
+                if self._permit_changed is not None:
+                    self._permit_changed(permit)
+                    stack.callback(self._permit_changed, "")
+                run_id = secrets.token_hex(16)
+                topic = f"/control/navigation/run_{run_id}/cmd_vel"
+                await self._start(
+                    stack,
+                    "nav2_controller",
+                    "controller_server",
+                    "-r",
+                    f"cmd_vel:={topic}",
+                    "-r",
+                    f"/cmd_vel:={topic}",
+                    "-r",
+                    f"odom:={self._odometry_topic}",
+                )
+                await self._start(stack, "nav2_bt_navigator", "bt_navigator")
+                self._standby = stack, topic
+                ready = True
+        finally:
+            if stack is not None and not ready:
+                await self._settle(stack)
 
     @asynccontextmanager
     async def open(self, execution_id: str) -> AsyncIterator[str]:
         async with self._lock:
-            if not execution_id or self._standby is None or self._in_use:
+            if self._closing or not execution_id or self._standby is None or self._in_use:
                 raise RuntimeError("scoped Nav2 controller is not ready")
             (stack, topic), self._standby = self._standby, None
+            self._owned.setdefault(stack, None)
             self._in_use = True
         try:
-            async with stack:
-                yield topic
+            yield topic
         finally:
-            self._in_use = False
+            try:
+                await self._settle(stack)
+            finally:
+                self._in_use = False

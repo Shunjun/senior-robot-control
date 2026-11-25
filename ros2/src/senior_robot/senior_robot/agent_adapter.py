@@ -861,9 +861,11 @@ def main() -> None:
                     warmer.cancel()
                     await asyncio.gather(warmer, return_exceptions=True)
                 try:
-                    await mapping_backend.close()
-                    if controller is not None:
-                        await controller.close()
+                    try:
+                        await mapping_backend.close()
+                    finally:
+                        if controller is not None:
+                            await controller.close()
                 except BaseException as exc:
                     # A zero process exit is the launch owner's settlement proof.
                     # Do not let the ROS CLI wrapper swallow an interrupted cleanup.
