@@ -258,7 +258,59 @@ for (const viewport of [
           );
         }),
       ).toBeLessThan(0.5);
-      await page.getByRole("button", { name: "交换主次画面" }).click();
+      const viewportEvidence: Record<string, unknown> = {};
+      async function mapGeometry(stage: string) {
+        await expect.poll(async () => map.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          const box = element.querySelector("svg")!.viewBox.baseVal;
+          return Math.max(Math.abs(bounds.width - box.width), Math.abs(bounds.height - box.height));
+        })).toBeLessThan(0.01);
+        const geometry = await map.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          const zoom = Number(element.getAttribute("data-zoom"));
+          const center = { x: Number(element.getAttribute("data-center-x")), y: Number(element.getAttribute("data-center-y")) };
+          return {
+            bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }, zoom, center,
+            corners: [0, bounds.width].flatMap(x => [0, bounds.height].map(y => ({
+              x: center.x + (x - bounds.width / 2) / zoom,
+              y: center.y - (y - bounds.height / 2) / zoom,
+            }))),
+            sameOwner: (window as unknown as Record<string, unknown>).mapOwner === element,
+          };
+        });
+        expect(geometry.sameOwner).toBe(true);
+        viewportEvidence[stage] = geometry;
+        return geometry;
+      }
+      type Geometry = Awaited<ReturnType<typeof mapGeometry>>;
+      function containsRange(outer: Geometry, selected: Geometry) {
+        expect(outer.center.x).toBeCloseTo(selected.center.x, 9);
+        expect(outer.center.y).toBeCloseTo(selected.center.y, 9);
+        for (const corner of selected.corners) {
+          const x = outer.bounds.width / 2 + (corner.x - outer.center.x) * outer.zoom;
+          const y = outer.bounds.height / 2 - (corner.y - outer.center.y) * outer.zoom;
+          expect(x).toBeGreaterThanOrEqual(-0.05);
+          expect(x).toBeLessThanOrEqual(outer.bounds.width + 0.05);
+          expect(y).toBeGreaterThanOrEqual(-0.05);
+          expect(y).toBeLessThanOrEqual(outer.bounds.height + 0.05);
+        }
+      }
+      const swap = page.getByRole("button", { name: "交换主次画面" });
+      const mainRange = await mapGeometry("main-initial");
+      // The real fixture grid has arrived; the temporary empty map must not own initialization.
+      expect(mainRange.center.x).toBeCloseTo(-0.11915569905747692, 9);
+      expect(mainRange.center.y).toBeCloseTo(0.4944788464952019, 9);
+      await page.screenshot({ path: testInfo.outputPath("map-main-initial.png"), fullPage: true });
+      for (let cycle = 0; cycle < 3; cycle++) {
+        await swap.click();
+        containsRange(await mapGeometry(`mini-${cycle}`), mainRange);
+        await swap.click();
+        const returned = await mapGeometry(`main-return-${cycle}`);
+        containsRange(returned, mainRange);
+        expect(returned.zoom).toBeCloseTo(mainRange.zoom, 9);
+      }
+      await swap.click();
+      containsRange(await mapGeometry("mini-before-zoom"), mainRange);
       async function checkScale(stage: string) {
         const scale = await page.getByLabel("地图比例尺", { exact: true }).evaluate(element => {
           const line = element.querySelector("i")!;
@@ -285,12 +337,68 @@ for (const viewport of [
       }
       await checkScale("before");
       const zoomBefore = Number(await map.getAttribute("data-zoom"));
+      viewportEvidence.zoomTool = await boundsAndHit(page.getByRole("button", { name: "放大", exact: true }));
       await page.getByRole("button", { name: "放大", exact: true }).click();
       expect(Number(await map.getAttribute("data-zoom"))).toBeGreaterThan(
         zoomBefore,
       );
       await checkScale("after");
+      const miniZoomed = await mapGeometry("mini-zoomed");
+      expect(miniZoomed.zoom).toBeCloseTo(zoomBefore * 1.25, 9);
+      // The selected range is the original logical rectangle divided by the user zoom.
+      const zoomedRange = { ...mainRange, corners: mainRange.corners.map(point => ({
+        x: mainRange.center.x + (point.x - mainRange.center.x) / 1.25,
+        y: mainRange.center.y + (point.y - mainRange.center.y) / 1.25,
+      })) };
+      containsRange(miniZoomed, zoomedRange);
+      await swap.click();
+      const mainZoomed = await mapGeometry("main-after-mini-zoom");
+      containsRange(mainZoomed, zoomedRange);
+      expect(mainZoomed.zoom).toBeCloseTo(mainRange.zoom * 1.25, 9);
+      await swap.click();
+      expect((await mapGeometry("mini-zoom-return")).zoom).toBeCloseTo(miniZoomed.zoom, 9);
+      // Native wheel and pointer input in clear mini-map space use the actual px/m.
+      await map.scrollIntoViewIfNeeded();
+      const beforeWheel = await mapGeometry("mini-before-wheel");
+      // Native wheel coordinates are integral CSS pixels in mobile Chrome.
+      // Use integral client positions, retaining fractional element bounds.
+      const client = { x: Math.ceil(beforeWheel.bounds.x + 12), y: Math.ceil(beforeWheel.bounds.y + 12) };
+      const anchor = { x: client.x - beforeWheel.bounds.x, y: client.y - beforeWheel.bounds.y };
+      viewportEvidence.wheelInput = { client, anchor };
+      const anchorWorld = {
+        x: beforeWheel.center.x + (anchor.x - beforeWheel.bounds.width / 2) / beforeWheel.zoom,
+        y: beforeWheel.center.y - (anchor.y - beforeWheel.bounds.height / 2) / beforeWheel.zoom,
+      };
+      await page.mouse.move(client.x, client.y);
+      await page.mouse.wheel(0, -110);
+      await expect.poll(async () => Number(await map.getAttribute("data-zoom"))).toBeGreaterThan(beforeWheel.zoom);
+      const wheeled = await mapGeometry("mini-after-wheel");
+      expect(wheeled.center.x + (anchor.x - wheeled.bounds.width / 2) / wheeled.zoom).toBeCloseTo(anchorWorld.x, 8);
+      expect(wheeled.center.y - (anchor.y - wheeled.bounds.height / 2) / wheeled.zoom).toBeCloseTo(anchorWorld.y, 8);
+      await page.mouse.down();
+      await page.mouse.move(client.x + 20, client.y + 6, { steps: 3 });
+      await page.mouse.up();
+      const panned = await mapGeometry("mini-panned");
+      expect(panned.center.x).toBeCloseTo(wheeled.center.x - 20 / wheeled.zoom, 8);
+      expect(panned.center.y).toBeCloseTo(wheeled.center.y + 6 / wheeled.zoom, 8);
+      await swap.click();
+      const mainPanned = await mapGeometry("main-after-mini-pan");
+      expect(mainPanned.center).toEqual(panned.center);
+      expect(mainPanned.zoom).toBeCloseTo(mainZoomed.zoom * wheeled.zoom / miniZoomed.zoom, 8);
+      await swap.click();
+      const miniReturned = await mapGeometry("mini-pan-return");
+      expect(miniReturned.center).toEqual(panned.center);
+      expect(miniReturned.zoom).toBeCloseTo(panned.zoom, 9);
+      viewportEvidence.fitTool = await boundsAndHit(page.getByRole("button", { name: "适应窗口", exact: true }));
       await page.getByRole("button", { name: "适应窗口", exact: true }).click();
+      const miniFitted = await mapGeometry("mini-fit");
+      await checkScale("fit");
+      await swap.click();
+      const mainFitted = await mapGeometry("main-fit-return");
+      containsRange(miniFitted, mainFitted);
+      await swap.click();
+      expect((await mapGeometry("mini-fit-return")).zoom).toBeCloseTo(miniFitted.zoom, 9);
+      followup.mapViewport = viewportEvidence;
       await expect(
         page
           .getByRole("button", { name: "放大", exact: true })

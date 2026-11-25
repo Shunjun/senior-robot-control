@@ -208,10 +208,21 @@ export interface MapView {
   height: number;
 }
 
+// A fixed reference viewport expresses the user's logical world rectangle. Only
+// user zoom changes its px/m; resizing derives a separate effective view below.
+function viewForSurface(logical: MapView, size: { width: number; height: number }): MapView {
+  return {
+    center: logical.center,
+    zoom: logical.zoom * Math.min(size.width / logical.width, size.height / logical.height),
+    ...size,
+  };
+}
+
 type Layer = "compare" | "filtered" | "raw";
 
 // ---------------------------------------------------------------- coordinates
 
+// User limits apply in the fixed reference viewport, never to resize mapping.
 export const MIN_ZOOM = 2;
 export const MAX_ZOOM = 5_000;
 /** Belief at or above this counts as occupied in the filtered layer. */
@@ -378,10 +389,6 @@ const DEFAULT_HEIGHT = 420;
 const ZOOM_STEP = 1.25;
 const KEY_PAN_PX = 40;
 const DRAG_THRESHOLD_PX = 4;
-const SCALE_LENGTHS_M = [
-  0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50,
-  100,
-] as const;
 
 const INK = "#f2ead9";
 const AMBER = "#ff7532";
@@ -399,12 +406,15 @@ function scaleBar(
   zoom: number,
   target = 45,
 ): { meters: number; pixels: number } {
-  const meters = SCALE_LENGTHS_M.reduce<number>(
+  // Effective zoom can be below the user's reference MIN_ZOOM after contain.
+  // Keep the same 1/2/5 scale choices without the old 1 mm / 100 m cutoffs.
+  const unit = 10 ** Math.floor(Math.log10(target / zoom));
+  const meters = [1, 2, 5, 10].map((multiple) => multiple * unit).reduce(
     (best, length) =>
       Math.abs(length * zoom - target) < Math.abs(best * zoom - target)
         ? length
         : best,
-    1,
+    unit,
   );
   return { meters, pixels: meters * zoom };
 }
@@ -444,22 +454,15 @@ export function MapCanvas({
     width: initialView?.width ?? DEFAULT_WIDTH,
     height: initialView?.height ?? DEFAULT_HEIGHT,
   });
-  const [placement, setPlacement] = useState<{ center: Point; zoom: number }>(
-    () => {
-      const first = initialView ?? fitView(map, size.width, size.height);
-      return { center: first.center, zoom: first.zoom };
-    },
+  const [placement, setPlacement] = useState<MapView>(
+    () => initialView ?? fitView(map, size.width, size.height),
   );
+  const fittedToSurface = useRef(initialView !== undefined);
   const [layer, setLayer] = useState<Layer>("compare");
   const [pending, setPending] = useState<Pose | null>(null);
 
   const view: MapView = useMemo(
-    () => ({
-      center: placement.center,
-      zoom: placement.zoom,
-      width: size.width,
-      height: size.height,
-    }),
+    () => viewForSurface(placement, size),
     [placement, size],
   );
   const picking = pickEnabled && !stale && onPick !== undefined;
@@ -476,28 +479,23 @@ export function MapCanvas({
       return;
     fitted.current = { mapId, mapRevision };
     const next = fitView(map, size.width, size.height);
-    setPlacement({ center: next.center, zoom: next.zoom });
+    setPlacement(next);
   }, [map, mapId, mapRevision, size.width, size.height]);
 
   // Follow the surface's real size where the browser can tell us.
   useEffect(() => {
     const element = surfaceRef.current;
     if (element === null || typeof ResizeObserver === "undefined") return;
-    let fittedToSurface = false;
     const observer = new ResizeObserver(() => {
       const rect = element.getBoundingClientRect();
       if (rect.width > 0 && rect.height > 0) {
-        const width = Math.round(rect.width);
-        const height = Math.round(rect.height);
-        setSize({ width, height });
-        if (
-          !fittedToSurface &&
-          initialView === undefined &&
-          map.grid !== undefined
-        ) {
+        const { width, height } = rect;
+        setSize((current) => current.width === width && current.height === height ? current : { width, height });
+        // ControlSurface first supplies an empty placeholder while tiles load.
+        if (!fittedToSurface.current && (map.grid !== undefined || map.cells.length > 0)) {
           const next = fitView(map, width, height);
-          setPlacement({ center: next.center, zoom: next.zoom });
-          fittedToSurface = true;
+          setPlacement(next);
+          fittedToSurface.current = true;
         }
       }
     });
@@ -599,14 +597,15 @@ export function MapCanvas({
         x: event.clientX - rect.left,
         y: event.clientY - rect.top,
       };
+      fittedToSurface.current = true;
       const factor = Math.exp(-event.deltaY * 0.0015);
       setPlacement((current) => {
-        const frame = { ...current, width: size.width, height: size.height };
+        const frame = viewForSurface(current, size);
         const before = screenToWorld(frame, anchor);
         const zoom = clampZoom(current.zoom * factor);
-        const after = { ...frame, zoom };
-        const moved = screenToWorld(after, anchor);
+        const moved = screenToWorld(viewForSurface({ ...current, zoom }, size), anchor);
         return {
+          ...current,
           zoom,
           center: {
             x: current.center.x + (before.x - moved.x),
@@ -655,13 +654,14 @@ export function MapCanvas({
     if (gesture === null || gesture.pointerId !== event.pointerId) return;
     const point = localPoint(event);
     if (gesture.mode === "pan") {
+      fittedToSurface.current = true;
       const dx = point.x - gesture.startScreen.x;
       const dy = point.y - gesture.startScreen.y;
       setPlacement((current) => ({
-        zoom: current.zoom,
+        ...current,
         center: {
-          x: gesture.startCenter.x - dx / current.zoom,
-          y: gesture.startCenter.y + dy / current.zoom,
+          x: gesture.startCenter.x - dx / view.zoom,
+          y: gesture.startCenter.y + dy / view.zoom,
         },
       }));
       return;
@@ -699,6 +699,7 @@ export function MapCanvas({
   }
 
   function zoomBy(factor: number): void {
+    fittedToSurface.current = true;
     setPlacement((current) => ({
       ...current,
       zoom: clampZoom(current.zoom * factor),
@@ -706,12 +707,13 @@ export function MapCanvas({
   }
 
   function fit(): void {
-    const next = initialView ?? fitView(map, size.width, size.height);
-    setPlacement({ center: next.center, zoom: next.zoom });
+    fittedToSurface.current = true;
+    // Fit the map in the same reference frame; mini's extra area is not selected.
+    setPlacement((current) => fitView(map, current.width, current.height));
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    const step = KEY_PAN_PX / placement.zoom;
+    const step = KEY_PAN_PX / view.zoom;
     const moves: Record<string, Point> = {
       ArrowLeft: { x: -step, y: 0 },
       ArrowRight: { x: step, y: 0 },
@@ -728,8 +730,9 @@ export function MapCanvas({
       }
     } else if (move !== undefined) {
       event.preventDefault();
+      fittedToSurface.current = true;
       setPlacement((current) => ({
-        zoom: current.zoom,
+        ...current,
         center: { x: current.center.x + move.x, y: current.center.y + move.y },
       }));
     } else if (event.key === "+" || event.key === "=") {
@@ -825,11 +828,13 @@ export function MapCanvas({
           aria-label="居中车辆"
           disabled={stale || robot === null}
           onClick={() => {
-            if (robot)
+            if (robot) {
+              fittedToSurface.current = true;
               setPlacement((current) => ({
                 ...current,
                 center: { x: robot.x, y: robot.y },
               }));
+            }
           }}
         >
           <LocateFixed size={18} />
