@@ -1,5 +1,7 @@
 # 前沿导航设计（2026-11-25）
 
+> **Superseded（2026-11-25）**：本文仅保留历史记录，已由[2026-11-25-shared-obstacle-layers-design.md](2026-11-25-shared-obstacle-layers-design.md)取代；旧要求与旧实施授权状态不再作为开发依据。共享障碍层行为已获用户批准，后续按新设计及新计划由负责人亲阅后分阶段派发。
+
 状态：**设计已由负责人亲阅，本次修订及计划仍待亲阅、收敛；不是实施授权**。本稿按用户最新“嗯 可以”及后续职责纠正同步反向规则，覆盖d5e5050中直接反向目标的误读；其余接口推荐仍待审核，不把负责人推荐写成用户原话。工作树 `feat/frontier-navigation`，代码依据 `11a26906c9831b000b09e2279ad7ef4ea514d903`。
 
 输入：`/tmp/frontier-navigation-audit-2026-11-25.md`、`/tmp/frontier-navigation-design-proposal-2026-11-25.md`、`/tmp/frontier-navigation-design-builder-review-2026-11-25.md`；仓库依据为 [架构确认稿](../../architecture/ROS2与车端架构重构确认稿.md)、[活动建图获批设计](2026-11-23-active-mapping-production-design.md)、[运动设计及后续覆盖](2026-11-12-vehicle-motion-redesign.md)、[控制工作区设计](2026-11-24-control-workspace-design.md)。旧15秒等图、移动60秒信息超时、free无路不探索、True接纳pending建议全部废止。

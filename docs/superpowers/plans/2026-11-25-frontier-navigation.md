@@ -1,5 +1,7 @@
 # Frontier Navigation Implementation Plan
 
+> **Superseded（2026-11-25）**：本文仅保留历史记录，已由[2026-11-25-shared-obstacle-layers.md](2026-11-25-shared-obstacle-layers.md)取代；旧要求与旧实施授权状态不再作为开发依据。共享障碍层行为已获用户批准，后续按新设计及新计划由负责人亲阅后分阶段派发。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** 保留原任务目标，只探索仍可能连接当前位置与目标的相关前沿，经同一Nav2和共用运动层执行。
