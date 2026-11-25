@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { RobotSnapshot } from "../../api/protocol";
 import type { VehiclePort } from "../../api/vehicleState";
 import { useSpeedUnit, displaySpeed } from "../../display/speedUnits";
+import { IconButton } from "../../components/ui/IconButton";
+import { X } from "lucide-react";
 import { FloatingCard } from "../../components/ui/FloatingCard";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
 import { PerformancePanel } from "./PerformancePanel";
@@ -9,6 +11,7 @@ import { useMeasuredSpeed, useVehicleView } from "./useVehicleView";
 import { init, chartTheme } from "./charts";
 import styles from "./StatusOverlay.module.css";
 interface StatusOverlayProps {
+  onClose?: (() => void) | undefined;
   snapshot: RobotSnapshot;
   port: VehiclePort | undefined;
   tab: "motion" | "performance";
@@ -22,6 +25,7 @@ interface Sample {
 }
 export function StatusOverlay({
   snapshot,
+  onClose,
   port,
   tab,
   onTabChange,
@@ -104,6 +108,12 @@ export function StatusOverlay({
       : undefined;
   return (
     <FloatingCard className={styles.panel} aria-label="车辆状态浮层">
+      <header className={styles.head}>
+        <h2>车辆状态</h2>
+        <IconButton label="关闭状态" onClick={onClose}>
+          <X />
+        </IconButton>
+      </header>
       <SegmentedControl
         label="状态分类"
         value={tab}
@@ -113,14 +123,16 @@ export function StatusOverlay({
           { value: "performance", label: "性能" },
         ]}
       />
-      {tab === "performance" ? (
+      <div hidden={tab !== "performance"}>
         <PerformancePanel
+          visible={visible && tab === "performance"}
           reading={snapshot.performance}
           live={snapshot.connected && !snapshot.stale}
           sampleExpired={performanceExpired}
         />
-      ) : (
-        <>
+      </div>
+      {tab === "motion" && (
+        <div>
           <div className={styles.speed}>
             {measured === null
               ? "不可用"
@@ -149,7 +161,7 @@ export function StatusOverlay({
             <dt>整机 CPU</dt>
             <dd>{cpu === null ? "不可用" : `${cpu.toFixed(1)}%`}</dd>
           </dl>
-        </>
+        </div>
       )}
     </FloatingCard>
   );

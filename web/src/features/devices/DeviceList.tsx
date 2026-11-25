@@ -13,6 +13,7 @@ export interface RobotListState {
 }
 
 export interface DeviceListProps {
+  onSelect?: () => void;
   list: RobotListState;
   selectedId: string | null;
   onRefresh: () => void;
@@ -20,12 +21,26 @@ export interface DeviceListProps {
   onRevoke: ((robotId: string) => Promise<void>) | null;
 }
 
-function Presence({ robot, unknown }: { robot: RobotSummary; unknown: boolean }): ReactElement {
+function Presence({
+  robot,
+  unknown,
+}: {
+  robot: RobotSummary;
+  unknown: boolean;
+}): ReactElement {
   if (unknown) {
-    return <span className={`${styles.presence} ${styles.presenceUnknown}`}>状态未知</span>;
+    return (
+      <span className={`${styles.presence} ${styles.presenceUnknown}`}>
+        状态未知
+      </span>
+    );
   }
   if (robot.reconnecting) {
-    return <span className={`${styles.presence} ${styles.presenceUnknown}`}>重连中</span>;
+    return (
+      <span className={`${styles.presence} ${styles.presenceUnknown}`}>
+        重连中
+      </span>
+    );
   }
   return robot.online ? (
     <span className={`${styles.presence} ${styles.presenceOnline}`}>在线</span>
@@ -34,7 +49,14 @@ function Presence({ robot, unknown }: { robot: RobotSummary; unknown: boolean })
   );
 }
 
-export function DeviceList({ list, selectedId, onRefresh, pairing, onRevoke }: DeviceListProps): ReactElement {
+export function DeviceList({
+  list,
+  selectedId,
+  onRefresh,
+  pairing,
+  onRevoke,
+  onSelect,
+}: DeviceListProps): ReactElement {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [failure, setFailure] = useState(false);
@@ -55,12 +77,16 @@ export function DeviceList({ list, selectedId, onRefresh, pairing, onRevoke }: D
       setBusy(false);
     }
   }
-  const empty = list.status === "ready" && !list.failed && list.robots.length === 0;
+  const empty =
+    list.status === "ready" && !list.failed && list.robots.length === 0;
   return (
     <nav className={styles.deviceList} aria-label="设备列表">
       <div className={styles.listHead}>
         <h2 className={styles.listTitle}>
-          设备 <span className={styles.count}>{String(list.robots.length).padStart(2, "0")}</span>
+          设备{" "}
+          <span className={styles.count}>
+            {String(list.robots.length).padStart(2, "0")}
+          </span>
         </h2>
         <button type="button" className={styles.ghost} onClick={onRefresh}>
           刷新设备
@@ -80,16 +106,21 @@ export function DeviceList({ list, selectedId, onRefresh, pairing, onRevoke }: D
       {empty && (
         <div className={styles.empty}>
           <p className={styles.emptyTitle}>尚未配对任何设备</p>
-          <p className={styles.quiet}>在车端使用配对码完成配对后，设备会出现在这里。</p>
+          <p className={styles.quiet}>
+            在车端使用配对码完成配对后，设备会出现在这里。
+          </p>
         </div>
       )}
       <ul className={styles.items}>
         {list.robots.map((robot, index) => (
           <li key={robot.id} style={{ "--i": index } as CSSProperties}>
             <NavLink
+              onClick={onSelect}
               to={`/robots/${encodeURIComponent(robot.id)}`}
               className={({ isActive }) =>
-                isActive || robot.id === selectedId ? `${styles.item} ${styles.itemActive}` : styles.item
+                isActive || robot.id === selectedId
+                  ? `${styles.item} ${styles.itemActive}`
+                  : styles.item
               }
             >
               <span className={styles.itemName}>{robot.name}</span>
@@ -100,19 +131,46 @@ export function DeviceList({ list, selectedId, onRefresh, pairing, onRevoke }: D
               <div className={styles.unpair}>
                 {confirmId === robot.id ? (
                   <div className={styles.unpairConfirm}>
-                    <p>确定删除「{robot.name}」的配对？车端凭据将失效，现有连接将断开，需重新配对后才能连接。</p>
-                    {failure && <p role="alert" className={styles.failure}>删除配对失败，请检查网络或会话后重试。</p>}
+                    <p>
+                      确定删除「{robot.name}
+                      」的配对？车端凭据将失效，现有连接将断开，需重新配对后才能连接。
+                    </p>
+                    {failure && (
+                      <p role="alert" className={styles.failure}>
+                        删除配对失败，请检查网络或会话后重试。
+                      </p>
+                    )}
                     <div className={styles.unpairActions}>
-                      <button type="button" className={styles.removePairing} disabled={busy}
-                        aria-label="确认删除配对" onClick={() => void revoke(robot.id)}>
+                      <button
+                        type="button"
+                        className={styles.removePairing}
+                        disabled={busy}
+                        aria-label="确认删除配对"
+                        onClick={() => void revoke(robot.id)}
+                      >
                         {busy ? "正在删除…" : "确认删除配对"}
                       </button>
-                      <button type="button" className={styles.ghost} disabled={busy} onClick={() => setConfirmId(null)}>取消</button>
+                      <button
+                        type="button"
+                        className={styles.ghost}
+                        disabled={busy}
+                        onClick={() => setConfirmId(null)}
+                      >
+                        取消
+                      </button>
                     </div>
                   </div>
                 ) : (
-                  <button type="button" className={styles.removePairing} disabled={busy}
-                    aria-label={`删除 ${robot.name} 的配对`} onClick={() => { setFailure(false); setConfirmId(robot.id); }}>
+                  <button
+                    type="button"
+                    className={styles.removePairing}
+                    disabled={busy}
+                    aria-label={`删除 ${robot.name} 的配对`}
+                    onClick={() => {
+                      setFailure(false);
+                      setConfirmId(robot.id);
+                    }}
+                  >
                     删除配对
                   </button>
                 )}

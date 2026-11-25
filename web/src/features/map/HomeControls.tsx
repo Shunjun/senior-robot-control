@@ -1,7 +1,15 @@
 import { useState, type ReactElement } from "react";
 
-import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
-import type { MapRef, ResponsePayload, RobotSnapshot } from "../../api/protocol";
+import {
+  CommandError,
+  describeCommandError,
+  type RobotLink,
+} from "../../api/client";
+import type {
+  MapRef,
+  ResponsePayload,
+  RobotSnapshot,
+} from "../../api/protocol";
 import { useVehicleView } from "../devices/useVehicleView";
 import type { TaskAction } from "../../api/vehicleState";
 import styles from "./Map.module.css";
@@ -48,11 +56,15 @@ function isLive(snapshot: RobotSnapshot | null): snapshot is RobotSnapshot {
 /** Every reason navigation may not start. Empty means it may. */
 function navigationBlocks(snapshot: RobotSnapshot | null): string[] {
   if (snapshot === null) return ["等待车端快照，收到之前不能下达导航指令。"];
-  if (!isLive(snapshot)) return ["缓存快照，不是车辆当前状态，不能下达导航指令。"];
+  if (!isLive(snapshot))
+    return ["缓存快照，不是车辆当前状态，不能下达导航指令。"];
   const reasons: string[] = [];
   if (snapshot.home === null) {
     reasons.push("Home 未设置，不能开始导航。");
-  } else if (snapshot.map_ref === null || !sameRef(snapshot.home.map_ref, snapshot.map_ref)) {
+  } else if (
+    snapshot.map_ref === null ||
+    !sameRef(snapshot.home.map_ref, snapshot.map_ref)
+  ) {
     reasons.push("Home 不属于当前地图，不能开始导航。");
   } else if (snapshot.home.status === "pending_confirmation") {
     reasons.push("跨车 Home 尚未确认，不能开始导航。");
@@ -61,7 +73,13 @@ function navigationBlocks(snapshot: RobotSnapshot | null): string[] {
   return reasons;
 }
 
-export function HomeControls({ snapshot, link, homeMapAvailable = true, navigationUnavailable, directNavigation }: HomeControlsProps): ReactElement {
+export function HomeControls({
+  snapshot,
+  link,
+  homeMapAvailable = true,
+  navigationUnavailable,
+  directNavigation,
+}: HomeControlsProps): ReactElement {
   const [pending, setPending] = useState<ActionName | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
   const [confirmReplace, setConfirmReplace] = useState(false);
@@ -69,21 +87,28 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
   const live = isLive(snapshot);
   const vehicle = useVehicleView(link.vehicle);
   const task = vehicle.frame?.task;
-  const canTask = (action: TaskAction): boolean => live && vehicle.connected && vehicle.available
-    && vehicle.frame?.capabilities.includes("task.execution.v1") === true
-    && task?.allowed_actions.includes(action) === true;
+  const canTask = (action: TaskAction): boolean =>
+    live &&
+    vehicle.connected &&
+    vehicle.available &&
+    vehicle.frame?.capabilities.includes("task.execution.v1") === true &&
+    task?.allowed_actions.includes(action) === true;
 
   async function runTask(action: "resume" | "cancel"): Promise<void> {
     if (!link.vehicle || !task || !canTask(action) || pending !== null) return;
     const current = link.vehicle.getSnapshot().frame?.task;
-    if (current?.task_id !== task.task_id || current.version !== task.version) return;
+    if (current?.task_id !== task.task_id || current.version !== task.version)
+      return;
     setPending(action);
     setOutcome(null);
     try {
       await link.vehicle.taskCommand(action);
       setOutcome({ kind: "ok", text: `车端已应答：${ACTION_LABEL[action]}` });
     } catch (error) {
-      setOutcome({ kind: "error", text: `${ACTION_LABEL[action]}未完成：${String(error)}` });
+      setOutcome({
+        kind: "error",
+        text: `${ACTION_LABEL[action]}未完成：${String(error)}`,
+      });
     } finally {
       setPending(null);
     }
@@ -92,19 +117,38 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
   if (navigationUnavailable !== undefined) blocks.push(navigationUnavailable);
   const canNavigate = blocks.length === 0;
   const homeWaiting = snapshot?.home?.status === "pending_confirmation";
-  const canSetHome = homeMapAvailable && live && snapshot.localized && snapshot.map_ref !== null && !homeWaiting;
+  const canSetHome =
+    homeMapAvailable &&
+    live &&
+    snapshot.localized &&
+    snapshot.map_ref !== null &&
+    !homeWaiting;
 
-  async function run(action: ActionName, type: string, payload: unknown): Promise<void> {
+  async function run(
+    action: ActionName,
+    type: string,
+    payload: unknown,
+  ): Promise<void> {
     setPending(action);
     setOutcome(null);
     try {
       const response = await link.request<ResponsePayload>(type, payload);
       const status = response.status ?? null;
-      const detail = status === null ? "" : `（${STATUS_TEXT[status] ?? status}）`;
-      setOutcome({ kind: "ok", text: `车端已应答：${ACTION_LABEL[action]}${detail}` });
+      const detail =
+        status === null ? "" : `（${STATUS_TEXT[status] ?? status}）`;
+      setOutcome({
+        kind: "ok",
+        text: `车端已应答：${ACTION_LABEL[action]}${detail}`,
+      });
     } catch (error) {
-      const reason = error instanceof CommandError ? describeCommandError(error.code) : "无法发送指令";
-      setOutcome({ kind: "error", text: `${ACTION_LABEL[action]}未完成：${reason}` });
+      const reason =
+        error instanceof CommandError
+          ? describeCommandError(error.code)
+          : "无法发送指令";
+      setOutcome({
+        kind: "error",
+        text: `${ACTION_LABEL[action]}未完成：${reason}`,
+      });
     } finally {
       setPending((current) => (current === action ? null : current));
     }
@@ -126,10 +170,15 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
 
   const home = snapshot?.home ?? null;
   const localization =
-    snapshot === null ? "未知" : snapshot.localized ? "已定位" : "重新定位未完成：车辆还没有匹配到地图";
+    snapshot === null
+      ? "未知"
+      : snapshot.localized
+        ? "已定位"
+        : "重新定位未完成：车辆还没有匹配到地图";
 
   return (
     <section className={styles.home} aria-label="Home 与导航">
+      <h3>导航与定位</h3>
       <dl className={styles.facts}>
         <div>
           <dt>Home</dt>
@@ -144,7 +193,11 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
         <div>
           <dt>定位</dt>
           <dd>
-            <span role="status" aria-label="定位状态" data-localized={snapshot?.localized === true}>
+            <span
+              role="status"
+              aria-label="定位状态"
+              data-localized={snapshot?.localized === true}
+            >
               {localization}
             </span>
           </dd>
@@ -162,12 +215,26 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
       )}
 
       <div className={styles.actions}>
-        <button type="button" className={styles.primary}
-          disabled={!canNavigate || directNavigation === undefined || directNavigation.pending}
-          onClick={directNavigation?.onReturnHome}>返航</button>
-        <button type="button" className={styles.tool}
+        <button
+          type="button"
+          className={styles.primary}
+          disabled={
+            !canNavigate ||
+            directNavigation === undefined ||
+            directNavigation.pending
+          }
+          onClick={directNavigation?.onReturnHome}
+        >
+          返航
+        </button>
+        <button
+          type="button"
+          className={styles.tool}
           disabled={!canTask("resume") || pending !== null}
-          onClick={() => void runTask("resume")}>继续导航</button>
+          onClick={() => void runTask("resume")}
+        >
+          继续导航
+        </button>
         <button
           type="button"
           className={styles.tool}
@@ -181,10 +248,19 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
       <div className={styles.actions}>
         {confirmReplace ? (
           <>
-            <button type="button" className={styles.primary} disabled={!canSetHome} onClick={setHome}>
+            <button
+              type="button"
+              className={styles.primary}
+              disabled={!canSetHome}
+              onClick={setHome}
+            >
               确认替换 Home
             </button>
-            <button type="button" className={styles.tool} onClick={() => setConfirmReplace(false)}>
+            <button
+              type="button"
+              className={styles.tool}
+              onClick={() => setConfirmReplace(false)}
+            >
               保留原 Home
             </button>
           </>
@@ -199,10 +275,18 @@ export function HomeControls({ snapshot, link, homeMapAvailable = true, navigati
           </button>
         )}
       </div>
-      {homeWaiting && <p className={styles.quiet}>该 Home 正在等待确认，控制台不会发送替换指令。</p>}
-      {live && !canSetHome && <p className={styles.quiet}>
-        {homeMapAvailable ? "设置 Home 需要车辆已定位并具有实时地图。" : "车端未开放当前地图的 Home 写入。"}
-      </p>}
+      {homeWaiting && (
+        <p className={styles.quiet}>
+          该 Home 正在等待确认，控制台不会发送替换指令。
+        </p>
+      )}
+      {live && !canSetHome && (
+        <p className={styles.quiet}>
+          {homeMapAvailable
+            ? "设置 Home 需要车辆已定位并具有实时地图。"
+            : "车端未开放当前地图的 Home 写入。"}
+        </p>
+      )}
 
       {outcome?.kind === "error" && (
         <p className={styles.failure} role="alert">

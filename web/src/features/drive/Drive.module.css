@@ -1,6 +1,302 @@
-.drive { display:grid;gap:10px;padding:16px;background:transparent;border-radius:16px }.driveHead { display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px }.driveHead h3 { font-size:16px;font-weight:500;margin:0 }.leaseTag { color:var(--ink-dim);font-size:11px }.leaseGroup { display:flex;flex-wrap:wrap;gap:8px }.primary,.ghost { min-height:44px;padding:8px 12px;border-radius:9px;cursor:pointer;font:inherit }.primary { background:var(--amber);border:1px solid var(--amber);color:white }.ghost { color:var(--amber);border:1px solid var(--amber);background:transparent }.primary:disabled,.ghost:disabled { opacity:.4;cursor:not-allowed }.quiet { color:var(--ink-dim);margin:0;line-height:1.6;font-size:12px }.failure { color:#ffc3a9;background:var(--red-wash);padding:8px;border-radius:8px }.measurement { font-size:34px;font-weight:300;margin:0 }.measurement small { font-size:12px;color:var(--ink-dim) }.intent { font-size:12px;color:var(--ink-soft) }
-.estopDock { position:relative;margin-left:auto;max-width:min(340px,calc(100vw - 24px)) }.estop { display:grid;place-items:center;min-height:44px;min-width:64px;border:1px solid #bd655166;border-radius:9px;color:#ffd0c5;background:#5b3026d9;cursor:pointer }.estopCap { font-size:14px }.estopTag { font-size:10px }.estopDock[data-compact=true] .estopTag { display:none }.estopConfirmed { position:absolute;right:0;top:100%;width:max-content;max-width:70vw;background:var(--graphite-900);padding:8px;border:1px solid var(--red);color:#ffc3a9;z-index:35 }.estopDock>p[role=status],.estopDock>p[role=alert] { position:absolute;right:0;top:100%;width:max-content;max-width:70vw;background:var(--graphite-900);padding:8px;z-index:35 }
+.drive {
+  display: grid;
+  gap: 0;
+  background: transparent;
+}
+.driveHead h3 {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0 0 5px;
+}
+.subtitle {
+  font-size: 11px;
+  color: var(--ink-dim);
+  margin: 0 0 2px;
+}
+.leaseTag {
+  color: #c3bbb2;
+  font-size: 10px;
+  margin: 15px 0 10px;
+}
+.measurement {
+  line-height: 1.14;
+  font-family: "Helvetica Neue", sans-serif;
+  font-size: 42px;
+  font-weight: 300;
+  letter-spacing: -1.4px;
+  margin: 15px 0 3px;
+}
+.measurement small {
+  font: 11px sans-serif;
+  letter-spacing: 0;
+  color: var(--ink-dim);
+}
+.gears {
+  margin-top: 6px;
+  justify-self: start;
+}
+.gears button {
+  min-height: 36px;
+  font-size: 11px;
+  padding: 6px 11px;
+}
+.authority button {
+  width: 100%;
+}
+.quiet {
+  color: var(--ink-dim);
+  margin: 8px 0 0;
+  line-height: 1.5;
+  font-size: 9px;
+}
+.failure {
+  color: #ffc3a9;
+  background: var(--red-wash);
+  padding: 8px;
+  border-radius: 8px;
+  font-size: 11px;
+}
+.estopDock {
+  position: relative;
+  margin-left: auto;
+  max-width: min(340px, calc(100vw - 24px));
+}
+.estop {
+  display: grid;
+  place-items: center;
+  min-height: 44px;
+  min-width: 64px;
+  border: 1px solid #bd655166;
+  border-radius: 9px;
+  color: #ffd0c5;
+  background: #5b3026d9;
+  cursor: pointer;
+}
+.estopCap {
+  font-size: 14px;
+}
+.estopTag {
+  font-size: 10px;
+}
+.estopDock[data-compact="true"] .estopTag {
+  display: none;
+}
+.estopConfirmed {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  width: max-content;
+  max-width: 70vw;
+  background: var(--graphite-900);
+  padding: 8px;
+  border: 1px solid var(--red);
+  color: #ffc3a9;
+  z-index: 35;
+}
+.estopDock > p[role="status"],
+.estopDock > p[role="alert"] {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  width: max-content;
+  max-width: 70vw;
+  background: var(--graphite-900);
+  padding: 8px;
+  z-index: 35;
+}
 /*Compatible: old one-axis component remains available to existing callers. */
-.stickBox { display:grid;gap:6px }.stick { position:relative;touch-action:none;user-select:none;background:#232326;border:1px solid var(--line);border-radius:14px }.stickVertical { width:110px;height:190px }.stickHorizontal { width:190px;height:110px }.thumb { position:absolute;width:48px;height:48px;background:var(--amber);border-radius:50%;transform:translate(-50%,-50%);left:50%;top:50% }.stickHint { font-size:12px;color:var(--ink-dim) }.track { position:absolute;inset:12px;border:1px solid var(--line);border-radius:8px }
-.singleStickBox { text-align:center }.singleStick { width:190px;height:190px;margin:16px auto;border-radius:50%;position:relative;display:grid;place-items:center;touch-action:none;user-select:none;cursor:grab;border:1px solid #ffffff22;background:linear-gradient(transparent calc(50% - .5px),#ff914444 50%,transparent calc(50% + .5px)),linear-gradient(90deg,transparent calc(50% - .5px),#ff914444 50%,transparent calc(50% + .5px)),radial-gradient(circle,#ff874a1c 0 36%,#ff753209 37% 60%,#232326 61%) }
-.singleStick[aria-disabled=true] { opacity:.45;cursor:not-allowed }.singleKnob { width:54px;height:54px;border-radius:50%;background:var(--amber);color:white;display:grid;place-items:center;box-shadow:0 4px 14px #0005;pointer-events:none }
+.stickBox {
+  display: grid;
+  gap: 6px;
+}
+.stick {
+  position: relative;
+  touch-action: none;
+  user-select: none;
+  background: #232326;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+.stickVertical {
+  width: 110px;
+  height: 190px;
+}
+.stickHorizontal {
+  width: 190px;
+  height: 110px;
+}
+.thumb {
+  position: absolute;
+  width: 48px;
+  height: 48px;
+  background: var(--amber);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  left: 50%;
+  top: 50%;
+}
+.stickHint {
+  font-size: 12px;
+  color: var(--ink-dim);
+}
+.track {
+  position: absolute;
+  inset: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.singleStickBox {
+  text-align: center;
+}
+.singleStick {
+  width: 184px;
+  height: 184px;
+  margin: 17px auto 12px;
+  border-radius: 50%;
+  position: relative;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  user-select: none;
+  cursor: grab;
+  border: 1px solid #ffffff1a;
+  background:
+    linear-gradient(
+      transparent calc(50% - 0.5px),
+      #ff914444 50%,
+      transparent calc(50% + 0.5px)
+    ),
+    linear-gradient(
+      90deg,
+      transparent calc(50% - 0.5px),
+      #ff914444 50%,
+      transparent calc(50% + 0.5px)
+    ),
+    radial-gradient(circle, #ff874a1c 0 36%, #ff753209 37% 60%, #232326 61%);
+}
+.singleStick[aria-disabled="true"] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.singleKnob {
+  width: 53px;
+  height: 53px;
+  border-radius: 50%;
+  background: var(--amber);
+  color: white;
+  display: grid;
+  place-items: center;
+  box-shadow:
+    0 4px 14px #0005,
+    inset 0 1px #ffc590;
+  pointer-events: none;
+}
+.intent {
+  margin: 0;
+  color: #c1bbb4;
+  font-size: 9px;
+  white-space: nowrap;
+}
+.singleStickBox > .quiet {
+  font-size: 9px;
+}
+.axisUp,
+.axisDown,
+.axisLeft,
+.axisRight {
+  position: absolute;
+  font: 11px monospace;
+  color: #9b9690;
+  pointer-events: none;
+}
+.axisUp {
+  top: 8px;
+}
+.axisDown {
+  bottom: 8px;
+}
+.axisLeft {
+  left: 10px;
+}
+.axisRight {
+  right: 10px;
+}
+@media (max-width: 460px) {
+  .drive {
+    grid-template-columns: minmax(0, 1fr) 142px;
+    gap: 5px 12px;
+  }
+  .driveHead,
+  .subtitle,
+  .measurement,
+  .gears,
+  .leaseTag,
+  .authority {
+    grid-column: 1;
+  }
+  .driveHead h3 {
+    font-size: 14px;
+  }
+  .subtitle {
+    font-size: 9px;
+  }
+  .measurement {
+    font-size: 29px;
+    margin: 0;
+  }
+  .measurement small {
+    font-size: 9px;
+  }
+  .singleStickBox {
+    grid-column: 2;
+    grid-row: 1/7;
+    align-self: center;
+  }
+  .singleStick {
+    width: 142px;
+    height: 142px;
+    margin: 0 0 7px;
+  }
+  .singleKnob {
+    width: 43px;
+    height: 43px;
+  }
+  .singleStickBox > .quiet {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+  }
+  .leaseTag {
+    grid-row: 5;
+    margin: 4px 0;
+    font-size: 9px;
+  }
+  .authority {
+    grid-row: 6;
+  }
+  .authority button {
+    font-size: 11px;
+    padding: 8px;
+  }
+  .drive > .quiet,
+  .failure {
+    grid-column: 1/-1;
+  }
+  .intent {
+    font-size: 8px;
+    white-space: normal;
+  }
+  .gears button {
+    min-height: 44px;
+    padding: 4px 8px;
+  }
+  .estopDock {
+    margin-left: 0;
+  }
+  .estopCap {
+    font-size: 12px;
+  }
+}

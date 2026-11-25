@@ -419,3 +419,24 @@ browser-final有**13张本版截图**：每尺寸drive/mini-map/estop-scrolled/t
 合并后再次确认两子树干净、两HEAD相对父HEAD独有提交均0，检查Orca全部子树会话均在空闲shell/已完成worker提示，没有另行运行的开发/返修任务或明确keep-open要求。使用Orca `worktree rm --delete-branch --json` 正常移除两子worktree（无force）；机制保留了本地分支，随后基于当前父HEAD已包含全部提交以普通 `git branch -d` 删除。前后worktree/sessions清单及两个cleanup收据保存在证据目录；父工作区、原main工作区和main分支均保留。
 
 **未验证**：真实HTTP/WS服务集成、实车、ROS、真实视频/WebRTC/TURN、真实配对兑换。原control.integration.spec.ts保留且默认不连接服务器，此轮只类型检查。缺实际轮廓仍箭头fallback并提示尺寸不可用；FIFO/run-now缺失仍提示暂未实现。需要contracts/cloud与车端协同部署，不能宣传任意版本双向兼容或新数据库可直接降级。集成交付时PR40保持Draft；负责人已完成同版验收，本次授权在前置检查满足后转Ready，最终发布结果见本次交付报告，不能以本地验证代替已推送声明。
+
+## 2026-11-25 批准 DEMO 返修（待负责人亲阅）
+
+本轮从已合并 PR40 的同一 tree 继续，在 `feat/control-workspace` 正常 merge `origin/main=11a26906` 更新祖先。移除 RobotPanel 旧 article、同步/诊断外层；共享 viewport、锚定设备菜单与独立配对 modal；驾驶唯一底部权限动作与大速度；浮动预览、任务 list/pick/editor、地图目录/包操作、状态 CPU 真样本；完整日志及四类设置。已批准追加登录按独立圆角页面接入，单密码与原认证链不变。
+
+新增实质场景（六条连续流程，非样式镜像）：
+
+- V1/V2 空页无默认菜单、外点/Escape焦点、选离线车/取消选择。
+- V4/V6 connecting → waiting → snapshot 保持同一 viewport，无旧 article / 同步行。
+- V7 preparing → prepared → release 始终只有一个权限动作，不自动发送 intent。
+- V15 list → 三点 → 撤销 → editor，同一草稿和橙色顺序。
+- V24 校准开始结果未知 → 换分类/日志/设置 → 查询原 start_request_id，仅一次 start。
+- 登录显示/隐藏不改密码、不提交；busy防重复；成功清密码并初始化设备。
+
+V1/V2、V4/V6、V7 在 `/dev/shm` 只读 baseline 副本的当前回归入口上分别失败（3 failed），当前实现对应场景通过。原视觉复现、具体断言、失败日志与同版截图索引归档在 `/tmp/control-workspace-visual-repair-delivery-2026-11-25.md`；不能将旧历史验收当成本轮批准。
+
+复用原有效回归：手动控制迟到/新按压/松手/切页/背压/急停；名称 N7/N9/N10 与 Unicode；任务 F1 七恢复输入与 R1/R2；v2/legacy 地图身份/迟到 tile；原生栅格/比例尺；性能同 sequence 时效；日志原文/分页/download；设置 SI、版本冲突/未知同 ID 重试；固定回波校准状态。未修改后端、API、Transport 或 ManualController。
+
+验证：受影响 13 个 Vitest 入口 187 passed；最终地图/任务补验 38 passed；`npm run typecheck` 与 `npm run build` 通过，保留原 Vite chunk-size 提示。三尺寸生产客户端安全 fixture `control.spec.ts` 分别以1440×1000、390×844、844×390执行；最终命令与结果以交付报告为准，浏览器截图不是实车证明。登录/控制/配对/地图/视频均仅安全静态 fixture，非 API fetch 一律拒绝、WebSocket全替换、路由仅静态资源放行。
+
+真实能力差异：摄像头默认关闭且与设置共用 owner；无真实视频帧、无实车认证/配对验证；无校准几何仍箭头/尺寸不可用；roll/pitch/缺样本明确不可用；立即执行/FIFO/缺图层/画质采样写入仍暂未实现且零请求。390为44px热区使用184px dock、图例入口和更高底部避让，小图仍浮于驾驶卡上方；844允许冻结稿 min-height 产生滚动。负责人仍须亲阅实际 diff 和全部视图，本文不替代最终视觉验收。

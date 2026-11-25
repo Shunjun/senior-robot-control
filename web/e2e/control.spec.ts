@@ -25,15 +25,51 @@ for (const viewport of [
       page,
     }, testInfo) => {
       await page.setViewportSize(viewport);
+      await page.route("**/*", (route) => {
+        const url = new URL(route.request().url());
+        const root = new URL(baseURL!);
+        return url.origin === root.origin &&
+          (url.pathname === "/" ||
+            url.pathname.startsWith("/assets/") ||
+            url.pathname === "/control-fixture.js")
+          ? route.continue()
+          : route.abort();
+      });
       await page.addInitScript({ path: fixture });
       await page.goto(baseURL!);
       await expect(
-        page.getByRole("heading", { name: "选择一台设备" }),
+        page.getByRole("heading", { name: "选择车辆，开始工作" }),
       ).toBeVisible();
       await expect(
         page.getByRole("button", { name: "急停", exact: true }),
       ).toHaveCount(0);
+      await expect(
+        page.getByRole("navigation", { name: "设备列表" }),
+      ).toHaveCount(0);
+      await page
+        .getByRole("button", { name: "选择车辆", exact: true })
+        .first()
+        .click();
+      await page.mouse.click(2, 2);
+      await expect(
+        page.getByRole("navigation", { name: "设备列表" }),
+      ).toHaveCount(0);
+      await page
+        .getByRole("button", { name: "选择车辆", exact: true })
+        .first()
+        .click();
+      await page.keyboard.press("Escape");
+      await expect(
+        page.getByRole("navigation", { name: "设备列表" }),
+      ).toHaveCount(0);
+      await page
+        .getByRole("button", { name: "选择车辆", exact: true })
+        .first()
+        .click();
       await page.getByRole("link", { name: /安全测试车辆 A/ }).click();
+      await expect(
+        page.getByRole("navigation", { name: "设备列表" }),
+      ).toHaveCount(0);
       const map = page.getByRole("application", { name: "地图" });
       const stick = page.getByRole("group", { name: "驾驶摇杆" });
       await expect(map).toBeVisible();
@@ -42,6 +78,13 @@ for (const viewport of [
         w.mapOwner = document.querySelector("[role=application]");
         w.stickOwner = document.querySelector("[aria-label=驾驶摇杆]");
       });
+      const measurement = page.locator("[class*=measurement]");
+      expect(
+        await measurement.evaluate((el) => getComputedStyle(el).fontSize),
+      ).toBe(viewport.width === 390 ? "29px" : "42px");
+      await expect(
+        page.getByRole("button", { name: "释放控制权", exact: true }),
+      ).toHaveCount(0);
       const camera = page.getByRole("switch", { name: "摄像头" });
       if (viewport.width === 390) await camera.tap();
       else {
@@ -141,8 +184,8 @@ for (const viewport of [
       expect(geometry.contained).toBe(true);
       expect(geometry.toolsClear).toBe(true);
       if (viewport.width === 390) expect(geometry.touchTargets).toBe(true);
-      expect(geometry.edge).toBeCloseTo(viewport.width === 390 ? 13 : 17, 0);
-      if (viewport.width < 1200) {
+      expect(geometry.edge).toBeCloseTo(viewport.width === 390 ? 10 : 12, 0);
+      if (viewport.width === 390) {
         await page.getByText("地图图例", { exact: true }).click();
         await expect(page.getByText("稳定结构", { exact: true })).toBeVisible();
         await page.getByText("地图图例", { exact: true }).click();
@@ -165,6 +208,12 @@ for (const viewport of [
         .getByRole("button", { name: "获取控制权", exact: true })
         .click();
       await expect(stick).toHaveAttribute("aria-disabled", "false");
+      await expect(
+        page.getByRole("button", { name: "获取控制权", exact: true }),
+      ).toHaveCount(0);
+      await expect(
+        page.getByRole("button", { name: "释放控制权", exact: true }),
+      ).toHaveCount(1);
       await stick.scrollIntoViewIfNeeded();
       await expect(
         page.getByRole("button", { name: "急停", exact: true }),
@@ -184,54 +233,127 @@ for (const viewport of [
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await expect(page.getByLabel("低档线速度上限")).toHaveValue("1.8");
       await page.getByLabel("低档线速度上限").fill("2.16");
+      await page
+        .getByRole("button", { name: "摄像头预览", exact: true })
+        .click();
+      await page
+        .getByRole("switch", { name: "显示摄像头预览", exact: true })
+        .click();
+      await page
+        .getByRole("button", { name: "状态与性能", exact: true })
+        .click();
+      await expect(
+        page.getByText("车辆诊断与固定回波校准", { exact: true }),
+      ).toBeVisible();
+      await page.getByRole("button", { name: "日志配置", exact: true }).click();
+      await expect(page.getByLabel(/^保留时间（小时）/)).toBeVisible();
+      await page.getByRole("button", { name: "驾驶操控", exact: true }).click();
+      await expect(page.getByLabel("低档线速度上限")).toHaveValue("2.16");
       await page.getByRole("button", { name: "切换速度单位" }).click();
       await expect(page.getByLabel("低档线速度上限")).toHaveValue("0.6");
       await page.getByRole("button", { name: "保存驾驶设置" }).click();
       await expect(page.getByText(/车端已确认配置生效/)).toBeVisible();
-      await page.getByRole("button", { name: "返回控制", exact: true }).click();
+      await page.getByRole("button", { name: "控制", exact: true }).click();
       await expect(map).toBeVisible();
+      await expect(camera).toHaveAttribute("aria-checked", "true");
       await page.getByRole("button", { name: "任务管理", exact: true }).click();
       await page
         .getByRole("button", { name: "编辑 fixture-route", exact: true })
         .click();
-      await expect(page.getByLabel("任务名称")).toHaveValue(
-        "定时巡检",
-      );
+      await expect(page.getByLabel("任务名称")).toHaveValue("定时巡检");
       const route = page.getByRole("list", { name: "任务航点顺序" });
       await route.getByRole("button", { name: "上移 C", exact: true }).click();
       await route.getByRole("button", { name: "上移 C", exact: true }).click();
       await page.getByRole("button", { name: "提交任务", exact: true }).click();
       await expect(page.getByText("车端已确认保存任务。")).toBeVisible();
       if (viewport.width === 1440) {
-        await page.getByRole('button', {name:'新建任务',exact:true}).click();
-        await page.getByLabel('任务名称',{exact:true}).fill('东区巡检');
-        const taskId = await page.getByLabel('内部编号',{exact:true}).inputValue();
+        await page
+          .getByRole("button", { name: "新建任务", exact: true })
+          .click();
+        await page
+          .getByRole("button", { name: "完成选点", exact: true })
+          .click();
+        await page.getByLabel("任务名称", { exact: true }).fill("东区巡检");
+        const taskId = await page
+          .getByLabel("内部编号", { exact: true })
+          .inputValue();
         expect(taskId).toMatch(/^[0-9a-f-]{36}$/);
-        await page.getByRole('combobox',{name:'可用航点',exact:true}).selectOption('A');
-        await page.getByRole('button',{name:'加入路线',exact:true}).click();
-        await page.getByRole('button',{name:'提交任务',exact:true}).click();
-        await expect(page.getByText('车端已确认保存任务。')).toBeVisible();
-        await page.getByRole('button',{name:`编辑 ${taskId}`,exact:true}).click();
-        await expect(page.getByLabel('任务名称',{exact:true})).toHaveValue('东区巡检');
-        await expect(page.getByLabel('内部编号',{exact:true})).toHaveAttribute('readonly','');
-        await page.getByLabel('任务名称',{exact:true}).fill('夜班巡检');
-        await page.getByRole('button',{name:'提交任务',exact:true}).click();
-        await expect(page.getByText('车端已确认保存任务。')).toBeVisible();
-        await expect(page.getByText('夜班巡检',{exact:true})).toBeVisible();
-        await page.getByRole('button',{name:`查看路线 ${taskId}`,exact:true}).click();
-        await expect(page.getByRole('heading',{name:'任务路线 · 夜班巡检'})).toBeVisible();
-        await page.screenshot({path:testInfo.outputPath('names-preview.png'),fullPage:true});
-        await page.getByRole('button',{name:'返回当前草稿',exact:true}).click();
-        const mutations = await page.evaluate(() => (window as unknown as {__wheelFixture:{calls:Array<{type:string;payload:{body:Record<string,unknown>}}>}}).__wheelFixture.calls.filter(call=>call.type==='task.create'||call.type==='task.update'));
-        const created = mutations.find(call=>call.type==='task.create')!;
-        const renamed = mutations.find(call=>call.type==='task.update'&&call.payload.body.task_id===taskId)!;
-        expect(created.payload.body).toMatchObject({task_id:taskId,name:'东区巡检',waypoint_ids:['A']});
-        expect(renamed.payload.body).toEqual({...created.payload.body,name:'夜班巡检'});
+        await page.getByText("高级航点编辑", { exact: true }).click();
+        await page
+          .getByRole("combobox", { name: "可用航点", exact: true })
+          .selectOption("A");
+        await page
+          .getByRole("button", { name: "加入路线", exact: true })
+          .click();
+        await page
+          .getByRole("button", { name: "提交任务", exact: true })
+          .click();
+        await expect(page.getByText("车端已确认保存任务。")).toBeVisible();
+        await page
+          .getByRole("button", { name: `编辑 ${taskId}`, exact: true })
+          .click();
+        await expect(page.getByLabel("任务名称", { exact: true })).toHaveValue(
+          "东区巡检",
+        );
+        await expect(
+          page.getByLabel("内部编号", { exact: true }),
+        ).toHaveAttribute("readonly", "");
+        await page.getByLabel("任务名称", { exact: true }).fill("夜班巡检");
+        await page
+          .getByRole("button", { name: "提交任务", exact: true })
+          .click();
+        await expect(page.getByText("车端已确认保存任务。")).toBeVisible();
+        await expect(page.getByText("夜班巡检", { exact: true })).toBeVisible();
+        await page
+          .getByRole("button", { name: `查看路线 ${taskId}`, exact: true })
+          .click();
+        await expect(
+          page.getByRole("heading", { name: "任务路线 · 夜班巡检" }),
+        ).toBeVisible();
+        await page.screenshot({
+          path: testInfo.outputPath("names-preview.png"),
+          fullPage: true,
+        });
+        await page
+          .getByRole("button", { name: "返回当前草稿", exact: true })
+          .click();
+        const mutations = await page.evaluate(() =>
+          (
+            window as unknown as {
+              __wheelFixture: {
+                calls: Array<{
+                  type: string;
+                  payload: { body: Record<string, unknown> };
+                }>;
+              };
+            }
+          ).__wheelFixture.calls.filter(
+            (call) =>
+              call.type === "task.create" || call.type === "task.update",
+          ),
+        );
+        const created = mutations.find((call) => call.type === "task.create")!;
+        const renamed = mutations.find(
+          (call) =>
+            call.type === "task.update" && call.payload.body.task_id === taskId,
+        )!;
+        expect(created.payload.body).toMatchObject({
+          task_id: taskId,
+          name: "东区巡检",
+          waypoint_ids: ["A"],
+        });
+        expect(renamed.payload.body).toEqual({
+          ...created.payload.body,
+          name: "夜班巡检",
+        });
       }
       const before = await page.evaluate(
         () =>
-          (window as unknown as { __wheelFixture: { calls: unknown[] } })
-            .__wheelFixture.calls.length,
+          (
+            window as unknown as { __wheelFixture: { calls: unknown[] } }
+          ).__wheelFixture.calls.filter(
+            (call) => !Object.hasOwn(call as object, "http"),
+          ).length,
       );
       await page
         .getByRole("button", { name: "立即执行", exact: true })
@@ -243,8 +365,11 @@ for (const viewport of [
       expect(
         await page.evaluate(
           () =>
-            (window as unknown as { __wheelFixture: { calls: unknown[] } })
-              .__wheelFixture.calls.length,
+            (
+              window as unknown as { __wheelFixture: { calls: unknown[] } }
+            ).__wheelFixture.calls.filter(
+              (call) => !Object.hasOwn(call as object, "http"),
+            ).length,
         ),
       ).toBe(before);
       expect(

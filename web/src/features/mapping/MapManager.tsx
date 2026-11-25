@@ -1,22 +1,44 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 
-import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
-import type { ResponsePayload, ResponseStatus, RobotSnapshot } from "../../api/protocol";
+import {
+  CommandError,
+  describeCommandError,
+  type RobotLink,
+} from "../../api/client";
+import type {
+  ResponsePayload,
+  ResponseStatus,
+  RobotSnapshot,
+} from "../../api/protocol";
 import { MapCatalogController } from "./MapCatalogController";
 import { ImportDialog } from "./ImportDialog";
 import styles from "./Mapping.module.css";
 
 const NAME = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$/;
-const FINISHED = new Set<ResponseStatus>(["succeeded", "failed", "needs_review"]);
+const FINISHED = new Set<ResponseStatus>([
+  "succeeded",
+  "failed",
+  "needs_review",
+]);
 
-export function MapManager({ robotId, snapshot, link }: {
+interface MapManagerProps {
   robotId: string;
   snapshot: RobotSnapshot;
   link: RobotLink;
-}): ReactElement {
+  compact?: boolean;
+}
+export function MapManager({
+  robotId,
+  snapshot,
+  link,
+  compact = false,
+}: MapManagerProps): ReactElement {
   const [name, setName] = useState("");
   const [confirmation, setConfirmation] = useState("");
-  const [operation, setOperation] = useState<{ id: string; status: ResponseStatus | null } | null>(null);
+  const [operation, setOperation] = useState<{
+    id: string;
+    status: ResponseStatus | null;
+  } | null>(null);
   const operationRef = useRef(operation);
   operationRef.current = operation;
   const live = snapshot.connected && !snapshot.stale;
@@ -51,13 +73,21 @@ export function MapManager({ robotId, snapshot, link }: {
   );
 
   useEffect(() => {
-    if (operation === null || operation.status === null || FINISHED.has(operation.status) || !live) return;
+    if (
+      operation === null ||
+      operation.status === null ||
+      FINISHED.has(operation.status) ||
+      !live
+    )
+      return;
     const timer = setTimeout(() => void query(operation.id), 1_000);
     return () => clearTimeout(timer);
   }, [operation, live]);
 
-  async function mutate(type: "map.export" | "map.import" | "map.clear"): Promise<void> {
-    if (!live || snapshot.map_ref === null && type !== "map.import") return;
+  async function mutate(
+    type: "map.export" | "map.import" | "map.clear",
+  ): Promise<void> {
+    if (!live || (snapshot.map_ref === null && type !== "map.import")) return;
     const operationId = crypto.randomUUID();
     const body =
       type === "map.import"
@@ -74,53 +104,101 @@ export function MapManager({ robotId, snapshot, link }: {
       const id = response.operation_id ?? operationId;
       setOperation({ id, status: response.status ?? null });
     } catch (error) {
-      const message = error instanceof CommandError ? describeCommandError(error.code) : "操作未确认";
-      setOperation({ id: `${operationId} · ${message}`, status: "needs_review" });
+      const message =
+        error instanceof CommandError
+          ? describeCommandError(error.code)
+          : "操作未确认";
+      setOperation({
+        id: `${operationId} · ${message}`,
+        status: "needs_review",
+      });
     }
   }
 
   return (
     <>
-    {(snapshot.mapping_protocol_version ?? 0) >= 1
-      ? <MapCatalogController robotId={robotId} live={live} link={link} />
-      : <p className={styles.note}>当前车端尚未提供新版地图管理接口。</p>}
-    <section className={styles.panel} aria-label="地图生命周期管理">
-      <header><p className={styles.kicker}>MAP LIFECYCLE</p><h3>地图包与清理</h3></header>
-      <p>当前地图：{snapshot.map_ref === null ? "无" : `${snapshot.map_ref.map_id} · r${snapshot.map_ref.reference_revision}`}</p>
-      <label>
-        地图包名称
-        <input aria-label="地图包名称" value={name} onChange={(event) => setName(event.target.value)} />
-      </label>
-      <p className={styles.note}>此控制通道只发送地图包名称，不携带文件字节。传输由车端受控目录完成。</p>
-      <div className={styles.actions}>
-        <button type="button" disabled={!live || !validName || snapshot.map_ref === null} onClick={() => void mutate("map.export")}>
-          导出地图包
-        </button>
-        <ImportDialog disabled={!live || !snapshot.localized || !validName} onImport={() => void mutate("map.import")} />
-      </div>
-      {!snapshot.localized && <p className={styles.warning}>完成定位后才可导入地图包。</p>}
-      <label>
-        输入机器人编号确认
-        <input
-          aria-label="输入机器人编号确认"
-          value={confirmation}
-          onChange={(event) => setConfirmation(event.target.value)}
-        />
-      </label>
-      <button
-        type="button"
-        className={styles.danger}
-        disabled={!live || snapshot.map_ref === null || confirmation !== robotId}
-        onClick={() => void mutate("map.clear")}
-      >
-        清除地图
-      </button>
-      {!live && <p className={styles.warning}>快照已过期或车辆断开，地图变更已锁定。</p>}
-      {snapshot.home?.status === "pending_confirmation" && (
-        <p className={styles.warning}>跨车 Home 正在等待确认，当前不会采用，也不会发送替换指令。</p>
+      {(snapshot.mapping_protocol_version ?? 0) < 1 && (
+        <h3 className={styles.title}>地图管理</h3>
       )}
-      {operation !== null && <p role="status">操作 {operation.id}：{operation.status ?? "等待车端确认"}</p>}
-    </section>
+      {(snapshot.mapping_protocol_version ?? 0) >= 1 ? (
+        <MapCatalogController robotId={robotId} live={live} link={link} />
+      ) : (
+        <p className={styles.note}>当前车端尚未提供新版地图管理接口。</p>
+      )}
+      <section className={styles.panel} aria-label="地图生命周期管理">
+        <details open={!compact}>
+          <summary>地图包导入 / 导出</summary>
+          <p>
+            当前地图：
+            {snapshot.map_ref === null
+              ? "无"
+              : `${snapshot.map_ref.map_id} · r${snapshot.map_ref.reference_revision}`}
+          </p>
+          <label>
+            地图包名称
+            <input
+              aria-label="地图包名称"
+              value={name}
+              onChange={(event) => setName(event.target.value)}
+            />
+          </label>
+          <p className={styles.note}>
+            此控制通道只发送地图包名称，不携带文件字节。传输由车端受控目录完成。
+          </p>
+          <div className={styles.actions}>
+            <button
+              type="button"
+              disabled={!live || !validName || snapshot.map_ref === null}
+              onClick={() => void mutate("map.export")}
+            >
+              导出地图包
+            </button>
+            <ImportDialog
+              disabled={!live || !snapshot.localized || !validName}
+              onImport={() => void mutate("map.import")}
+            />
+          </div>
+          {!snapshot.localized && (
+            <p className={styles.warning}>完成定位后才可导入地图包。</p>
+          )}
+        </details>
+        <details open={!compact}>
+          <summary>危险操作 · 清除地图</summary>
+          <label>
+            输入机器人编号确认
+            <input
+              aria-label="输入机器人编号确认"
+              value={confirmation}
+              onChange={(event) => setConfirmation(event.target.value)}
+            />
+          </label>
+          <button
+            type="button"
+            className={styles.danger}
+            disabled={
+              !live || snapshot.map_ref === null || confirmation !== robotId
+            }
+            onClick={() => void mutate("map.clear")}
+          >
+            清除地图
+          </button>
+        </details>
+        {!live && (
+          <p className={styles.warning}>
+            快照已过期或车辆断开，地图变更已锁定。
+          </p>
+        )}
+        {snapshot.home?.status === "pending_confirmation" && (
+          <p className={styles.warning}>
+            跨车 Home 正在等待确认，当前不会采用，也不会发送替换指令。
+          </p>
+        )}
+        {operation !== null && (
+          <p role="status">
+            操作 {operation.id}：{operation.status ?? "等待车端确认"}
+          </p>
+        )}
+      </section>
     </>
   );
 }

@@ -3,13 +3,38 @@
    Only tokens and resets live here; component styles stay in CSS Modules. */
 
 :root {
-  --graphite-950:#202023;--graphite-900:#252528;--graphite-850:#2b2b2e;--graphite-800:#303033;--graphite-700:#414144;--graphite-600:#646268;
-  --line:#ffffff24;--line-soft:#ffffff12;--ink:#eeeae3;--ink-soft:#c7c0b9;--ink-dim:#aaa49f;
-  --amber:#ff7532;--amber-deep:#d35a25;--amber-wash:#ff75321a;
-  --teal:#c9c0b1;--teal-wash:#ffffff0a;--red:#ec4f3c;--red-deep:#a8342b;--red-wash:#ec4f3c22;
-  --font-display:"PingFang SC","Microsoft YaHei",sans-serif;--font-data:"IBM Plex Mono",ui-monospace,monospace;
-  --chamfer:12px;--space-1:4px;--space-2:8px;--space-3:12px;--space-4:16px;--space-5:24px;--space-6:40px;--touch:44px;
-  color-scheme:dark;
+  --graphite-950: #202023;
+  --graphite-900: #252528;
+  --graphite-850: #2b2b2e;
+  --graphite-800: #303033;
+  --graphite-700: #414144;
+  --graphite-600: #646268;
+  --line: #ffffff20;
+  --line-soft: #ffffff12;
+  --ink: #eeeae3;
+  --ink-soft: #c7c0b9;
+  --ink-dim: #aaa49f;
+  --amber: #ff7532;
+  --amber-deep: #d35a25;
+  --amber-wash: #ff75321a;
+  --teal: #c9c0b1;
+  --teal-wash: #ffffff0a;
+  --red: #ec4f3c;
+  --red-deep: #a8342b;
+  --red-wash: #ec4f3c22;
+  --font-display: "PingFang SC", "Microsoft YaHei", sans-serif;
+  --font-data: "IBM Plex Mono", ui-monospace, monospace;
+  --chamfer: 12px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 40px;
+  --touch: 44px;
+  --viewport-height: calc(100svh - 116px);
+  --viewport-min: 640px;
+  color-scheme: dark;
 }
 
 *,
@@ -28,9 +53,11 @@ body {
   margin: 0;
   color: var(--ink);
   font-family: var(--font-display);
-  font-size: 15px;
+  font-size: 13px;
   line-height: 1.5;
-  background:linear-gradient(#11141665,#12151580),url('./assets/concrete.jpg') center/cover fixed;
+  background:
+    linear-gradient(#11141645, #12151560),
+    url("./assets/concrete.jpg") center/cover fixed;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -61,5 +88,18 @@ a {
     animation-duration: 0.001ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.001ms !important;
+  }
+}
+
+@media (max-width: 760px) {
+  :root {
+    --viewport-height: calc(100svh - 118px);
+    --viewport-min: 680px;
+  }
+}
+@media (max-width: 460px) {
+  :root {
+    --viewport-height: calc(100svh - 143px);
+    --viewport-min: 660px;
   }
 }

@@ -22,6 +22,7 @@ import { PosePicker, type MapGoal, type PoseHint } from "../map/PosePicker";
 import { TaskExecutionControls } from "./VehicleStateView";
 import { StatusOverlay } from "./StatusOverlay";
 import { Switch } from "../../components/ui/Switch";
+import { Button } from "../../components/ui/Button";
 import { IconButton } from "../../components/ui/IconButton";
 import {
   ArrowLeftRight,
@@ -41,6 +42,9 @@ export interface ControlSurfaceProps {
   snapshot: RobotSnapshot;
   active?: boolean;
   statusOpen?: boolean;
+  onStatusClose?: (() => void) | undefined;
+  cameraOn?: boolean;
+  onCameraChange?: (enabled: boolean) => void;
 }
 
 export type WorkspaceMode = "manual" | "navigation" | "tasks" | "mapping";
@@ -91,7 +95,25 @@ export function ControlSurface({
   snapshot,
   active = true,
   statusOpen = false,
+  onStatusClose,
+  cameraOn: controlledCamera,
+  onCameraChange,
 }: ControlSurfaceProps): ReactElement {
+  const workspaceElement = useRef<HTMLDivElement>(null);
+  const operationsElement = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const element = operationsElement.current;
+    if (!element || !active || element.clientWidth === 0) return;
+    const update = () =>
+      workspaceElement.current?.style.setProperty(
+        "--drive-card-height",
+        `${element.getBoundingClientRect().height}px`,
+      );
+    const observer = new ResizeObserver(update);
+    observer.observe(element);
+    update();
+    return () => observer.disconnect();
+  }, [active]);
   const [mapLoad, setMapLoad] = useState(0);
   const [mode, setMode] = useState<WorkspaceMode>("manual");
   const [view, setView] = useState<PrimaryView>("map");
@@ -104,7 +126,9 @@ export function ControlSurface({
   const [statusTab, setStatusTab] = useState<"motion" | "performance">(
     "motion",
   );
-  const [cameraOn, setCameraOn] = useState(false);
+  const [localCamera, setLocalCamera] = useState(false);
+  const cameraOn = controlledCamera ?? localCamera;
+  const setCameraOn = onCameraChange ?? setLocalCamera;
   const {
     map: occupancy,
     gridId,
@@ -385,14 +409,15 @@ export function ControlSurface({
               onAddWaypoint: () => {},
             }
       }
-      renderWorkspace={(mapView, taskPanel) => (
+      renderWorkspace={(mapView, taskPanel, pickingBanner) => (
         <div
+          ref={workspaceElement}
           className={styles.workspace}
+          data-task-picking={mode === "tasks" && pickingBanner != null}
           data-mode={mode}
           data-primary={cameraOn ? view : "map"}
         >
           <div className={styles.previewHead}>
-            <span>{cameraOn && view === "video" ? "摄像头" : "实时地图"}</span>
             {occupancy === undefined && message && (
               <p className={styles.mapMessage} role="status">
                 {message}
@@ -438,6 +463,7 @@ export function ControlSurface({
           )}
           <div className={styles.status} hidden={!statusOpen}>
             <StatusOverlay
+              onClose={onStatusClose}
               snapshot={snapshot}
               port={link.vehicle}
               tab={statusTab}
@@ -446,7 +472,12 @@ export function ControlSurface({
               visible={active && statusOpen}
             />
           </div>
-          <div className={styles.operations} data-manual={mode === "manual"}>
+          {mode === "tasks" && pickingBanner}
+          <div
+            ref={operationsElement}
+            className={styles.operations}
+            data-manual={mode === "manual"}
+          >
             <div hidden={mode !== "manual"}>
               <DriveView
                 robotId={robotId}
@@ -480,9 +511,9 @@ export function ControlSurface({
                         ),
                       })}
                 />
-                <button type="button" onClick={() => setMapLoad((n) => n + 1)}>
+                <Button onClick={() => setMapLoad((n) => n + 1)}>
                   刷新地图
-                </button>
+                </Button>
                 <PosePicker
                   key={`pose:${refKey}`}
                   snapshot={snapshot}
@@ -507,7 +538,12 @@ export function ControlSurface({
               </>
             )}
             {mode === "mapping" && (
-              <MapManager robotId={robotId} snapshot={snapshot} link={link} />
+              <MapManager
+                compact
+                robotId={robotId}
+                snapshot={snapshot}
+                link={link}
+              />
             )}
           </div>
           <section className={styles.bottomBar} aria-label="视图底部工具">
@@ -524,7 +560,7 @@ export function ControlSurface({
                     onClick={() => setMode(value)}
                   >
                     <Icon size={18} />
-                    <span>{label}</span>
+                    <span>{value === "navigation" ? "导航定位" : label}</span>
                   </button>
                 );
               })}

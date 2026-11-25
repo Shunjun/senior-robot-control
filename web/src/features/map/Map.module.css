@@ -4,18 +4,21 @@
 .home {
   position: relative;
   display: grid;
-  gap: var(--space-3);
-  padding: var(--space-4);
-  background: linear-gradient(165deg, var(--graphite-800), var(--graphite-900));
-  border: 1px solid var(--line);
-  clip-path: polygon(
-    0 0,
-    calc(100% - var(--chamfer)) 0,
-    100% var(--chamfer),
-    100% 100%,
-    var(--chamfer) 100%,
-    0 calc(100% - var(--chamfer))
-  );
+  gap: 12px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+.home {
+  margin-bottom: 16px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.home h3,
+.picker h3 {
+  font-size: 15px;
+  font-weight: 500;
+  margin: 0;
 }
 
 /* ------------------------------------------------------------ shared atoms */
@@ -32,14 +35,14 @@
 .quiet {
   margin: 0;
   color: var(--ink-dim);
-  font-size: 14px;
+  font-size: 11px;
 }
 
 .blocked,
 .staleBanner {
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  font-size: 14px;
+  font-size: 11px;
   font-weight: 600;
   background: var(--graphite-950);
   border: 1px solid var(--amber-deep);
@@ -57,7 +60,7 @@
 .failure {
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  font-size: 14px;
+  font-size: 11px;
   background: var(--red-wash);
   border-left: 3px solid var(--red);
 }
@@ -65,53 +68,30 @@
 .confirmed {
   margin: 0;
   padding: var(--space-2) var(--space-3);
-  font-size: 14px;
+  font-size: 11px;
   background: var(--teal-wash);
   border-left: 3px solid var(--teal);
 }
 
 .primary,
 .tool {
-  min-height: var(--touch);
-  padding: 0 var(--space-4);
-  font-weight: 600;
-  letter-spacing: 0.06em;
+  min-height: 44px;
+  padding: 8px 10px;
+  font-size: 11px;
   cursor: pointer;
-  transition: background 120ms;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  color: var(--ink);
+  background: #ffffff07;
 }
-
 .primary {
-  color: var(--graphite-950);
+  color: white;
   background: var(--amber);
-  border: 0;
-  clip-path: polygon(
-    0 0,
-    calc(100% - var(--chamfer)) 0,
-    100% var(--chamfer),
-    100% 100%,
-    0 100%
-  );
+  border-color: var(--amber);
 }
-
-.primary:hover:not(:disabled) {
-  background: #ffc548;
-}
-
-.tool {
-  color: var(--amber);
-  background: transparent;
-  border: 1px solid var(--amber-deep);
-}
-
-.tool:hover:not(:disabled) {
-  background: var(--amber-wash);
-}
-
 .primary:disabled,
 .tool:disabled {
-  color: var(--ink-dim);
-  background: var(--graphite-850);
-  border: 1px solid var(--line);
+  opacity: 0.4;
   cursor: not-allowed;
 }
 
@@ -292,7 +272,7 @@
   gap: var(--space-2) var(--space-4);
   margin: 0;
   font-family: var(--font-data);
-  font-size: 13px;
+  font-size: 11px;
   color: var(--ink-soft);
 }
 
@@ -308,7 +288,7 @@
   display: grid;
   gap: var(--space-1);
   color: var(--ink-soft);
-  font-size: 13px;
+  font-size: 11px;
 }
 
 .field input {
@@ -316,7 +296,7 @@
   padding: 0 var(--space-3);
   color: var(--ink);
   font-family: var(--font-data);
-  font-size: 16px;
+  font-size: 12px;
   background: var(--graphite-950);
   border: 1px solid var(--line);
 }
@@ -351,7 +331,7 @@
 .facts dd {
   margin: 2px 0 0;
   font-family: var(--font-data);
-  font-size: 15px;
+  font-size: 12px;
   overflow-wrap: anywhere;
 }
 
@@ -362,27 +342,6 @@
 }
 
 /* ------------------------------------------------------------ landscape phones */
-
-@media (orientation: landscape) and (max-height: 520px) {
-  .picker,
-  .home {
-    padding: var(--space-3);
-    gap: var(--space-2);
-  }
-
-  .surface {
-  }
-
-  .fields {
-    gap: var(--space-2);
-  }
-}
-
-@media (max-width: 520px) {
-  .fields {
-    grid-template-columns: 1fr;
-  }
-}
 .waypointMarker circle {
   fill: var(--graphite-900);
   stroke: var(--teal);
@@ -398,16 +357,19 @@
   stroke: var(--ink);
 }
 .taskRoute {
-  stroke: var(--teal);
+  stroke: var(--amber);
   stroke-width: 2;
   stroke-dasharray: 4 3;
   fill: none;
 }
 .routeNumber {
-  fill: var(--ink);
-  paint-order: stroke;
-  stroke: var(--graphite-950);
-  stroke-width: 3;
+  fill: white;
+  font: 10px var(--font-data);
+}
+.routeDot {
+  fill: var(--amber);
+  stroke: #ffe4cb;
+  stroke-width: 1;
 }
 
 .scanHits {
@@ -436,33 +398,14 @@
   border-radius: 0;
   background: #424449;
   overflow: hidden;
-  min-height: 200px;
+  min-height: 0;
 }
 .mapPanel .surface {
   width: 100%;
   height: 100%;
-  min-height: 200px;
+  min-height: 0;
   aspect-ratio: auto;
   background: #424449;
-}
-.toolbar {
-  position: absolute;
-  z-index: 6;
-  bottom: 12px;
-  left: 16px;
-  display: flex;
-  align-items: end;
-  padding: 0;
-  gap: 4px;
-  max-width: calc(50% - 270px);
-}
-.zoomGroup {
-  display: flex;
-  align-items: center;
-  gap: 3px;
-  background: #29292cf5;
-  border-radius: 9px;
-  padding: 4px;
 }
 .tool {
   min-height: 44px;
@@ -492,21 +435,6 @@
   overflow: hidden;
   clip-path: inset(50%);
 }
-.staleBanner {
-  position: absolute;
-  top: 70px;
-  left: 16px;
-  right: 16px;
-  z-index: 2;
-}
-.scaleHtml {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font: 11px var(--font-data);
-  white-space: nowrap;
-  padding: 4px;
-}
 .scaleHtml i {
   display: block;
   min-width: 10px;
@@ -529,33 +457,6 @@
   .tool {
     min-width: 36px;
   }
-}
-@media (max-width: 760px) {
-  .toolbar {
-    left: 12px;
-    bottom: 12px;
-    max-width: none;
-  }
-  .layers {
-    bottom: 58px;
-    min-width: 200px;
-  }
-  .tool {
-    min-width: 44px;
-  }
-}
-
-.geometryNote {
-  pointer-events: none;
-  position: absolute;
-  top: 70px;
-  right: 16px;
-  z-index: 2;
-  background: #29292ce8;
-  padding: 5px 8px;
-  border-radius: 6px;
-  font-size: 11px;
-  color: var(--ink-dim);
 }
 .marker_robot .robotArrow {
   fill: #ff7532;
@@ -588,12 +489,171 @@
   max-width: none;
 }
 
+.toolbar .tool {
+  min-width: 28px;
+  min-height: 32px;
+  padding: 5px;
+}
+.zoomGroup {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  border-radius: 9px;
+  padding: 0;
+  background: transparent;
+}
+.scaleHtml {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 11px var(--font-data);
+  white-space: nowrap;
+  padding: 7px 9px;
+  background: #2d2d30e8;
+  border-radius: 6px;
+  font-size: 10px;
+}
+.toolbar {
+  position: absolute;
+  z-index: 6;
+  bottom: 12px;
+  left: 16px;
+  display: flex;
+  padding: 0;
+  gap: 4px;
+  max-width: calc(50% - 270px);
+  align-items: center;
+}
+.geometryNote {
+  pointer-events: none;
+  position: absolute;
+  right: 16px;
+  z-index: 2;
+  background: #29292ce8;
+  padding: 5px 8px;
+  border-radius: 6px;
+  color: var(--ink-dim);
+  top: 65px;
+  font-size: 9px;
+}
+.staleBanner {
+  position: absolute;
+  left: 16px;
+  right: 16px;
+  z-index: 2;
+  top: 110px;
+  font-size: 11px;
+}
+@media (orientation: landscape) and (max-height: 520px) {
+  .picker,
+  .home {
+    padding: var(--space-3);
+    gap: var(--space-2);
+  }
+
+  .surface {
+  }
+
+  .fields {
+    gap: var(--space-2);
+  }
+}
+@media (max-width: 520px) {
+  .fields {
+    grid-template-columns: 1fr;
+  }
+}
 @media (max-width: 760px) {
+  .toolbar {
+    left: 12px;
+    bottom: 12px;
+    max-width: none;
+  }
+  .layers {
+    bottom: 58px;
+    min-width: 200px;
+  }
+  .tool {
+    min-width: 44px;
+  }
   .toolbar[data-docked="true"] .zoomGroup {
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
   }
 
   .toolbar[data-docked="true"] .scaleHtml {
-    flex-basis: 100%;
+    flex-basis: auto;
   }
+}
+@media (max-width: 460px) {
+  .scaleHtml i {
+    max-width: 20px;
+  }
+  .fields {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .field input {
+    padding: 6px;
+  }
+  .choice {
+    font-size: 10px;
+  }
+  .geometryNote {
+    max-width: 140px;
+    text-align: right;
+  }
+  .toolbar[data-docked="true"] .zoomGroup {
+    display: grid;
+    gap: 2px;
+    grid-template-columns: repeat(2, 44px);
+  }
+  .toolbar[data-docked="true"] .scaleHtml {
+    gap: 3px;
+    grid-column: 1/-1;
+    font-size: 8px;
+    padding: 5px;
+  }
+  .toolbar .tool {
+    padding: 3px;
+    min-width: 44px;
+    width: 44px;
+    min-height: 44px;
+  }
+  .toolbar .tool svg {
+    width: 18px;
+  }
+}
+
+.home .facts {
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.home .facts dt {
+  font-size: 10px;
+}
+.home .facts dd {
+  font-size: 11px;
+}
+.home .blocked,
+.picker .blocked {
+  border: 0;
+  border-radius: 8px;
+  background: #ffffff05;
+  font-size: 11px;
+  font-weight: 400;
+  padding: 10px;
+}
+.picker .modes {
+  gap: 5px;
+}
+.picker .choice {
+  gap: 5px;
+  font-size: 10px;
+}
+.picker .mapRef {
+  font-size: 9px;
+}
+.picker .modes .legend {
+  font-size: 9px;
+  color: var(--ink-dim);
 }

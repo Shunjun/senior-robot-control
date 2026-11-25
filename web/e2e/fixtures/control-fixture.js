@@ -9,14 +9,13 @@
   const settings={snapshot:{driving,logging,driving_version:2,logging_version:7,debug_original_level:null,debug_deadline_utc:null},can_apply_driving:true,capabilities:{driving_defaults:{...driving},driving_minimum:Object.fromEntries(Object.keys(driving).map(k=>[k,0])),driving_maximum:Object.fromEntries(Object.keys(driving).map(k=>[k,2])),logging_defaults:{...logging},retention_min_seconds:3600,retention_max_seconds:2592000,debug_restore_min_seconds:60,debug_restore_max_seconds:3600}};
   const tasks=[{task_id:'fixture-route',name:'定时巡检',revision:3,enabled:true}];
   const definitions=new Map([['fixture-route',{task_id:'fixture-route',name:'定时巡检',waypoint_ids:['A','B','C'],schedule:{kind:'cron',expression:'15 9 * * 1,3'},timezone:'Asia/Shanghai',enabled:true,revision:3,created_at:'2026-11-24T00:00:00Z'}]]);
-  const fetchReal=window.fetch;
   sessionStorage.setItem('senior-control.csrf','fixture-csrf');
   window.fetch=async(input,init)=>{
     const url=String(input);calls.push({http:url,method:init?.method??'GET'});
     if(url==='/api/robots')return new Response(JSON.stringify({robots:[{id:'fixture-A',name:'安全测试车辆 A',online:true},{id:'fixture-B',name:'安全测试车辆 B',online:false}]}));
     if(url==='/api/pairing-codes')return new Response(JSON.stringify({code:'ABCD234567',expires_in:37}),{status:201});
     if(url.startsWith('/api/'))return new Response('{}',{status:404});
-    return fetchReal(input,init);
+    throw new Error('Safety fixture blocked fetch: '+url);
   };
   class FixtureSocket {
     static OPEN=1;readyState=0;onopen=null;onclose=null;onmessage=null;onerror=null;timer=null;sequence=0;

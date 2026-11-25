@@ -81,13 +81,20 @@ export const MAX_ZOOM = 5_000;
 export const OCCUPIED_BELIEF = 0.5;
 
 /** Grid coordinates (cells, fractional allowed) to the map frame. */
-export function gridToWorld(map: OccupancySnapshot, gx: number, gy: number): Point {
+export function gridToWorld(
+  map: OccupancySnapshot,
+  gx: number,
+  gy: number,
+): Point {
   const { origin, resolution } = map;
   const cos = Math.cos(origin.yaw);
   const sin = Math.sin(origin.yaw);
   const lx = gx * resolution;
   const ly = gy * resolution;
-  return { x: origin.x + cos * lx - sin * ly, y: origin.y + sin * lx + cos * ly };
+  return {
+    x: origin.x + cos * lx - sin * ly,
+    y: origin.y + sin * lx + cos * ly,
+  };
 }
 
 /** The inverse of `gridToWorld`. */
@@ -97,7 +104,10 @@ export function worldToGrid(map: OccupancySnapshot, point: Point): Point {
   const sin = Math.sin(origin.yaw);
   const dx = point.x - origin.x;
   const dy = point.y - origin.y;
-  return { x: (cos * dx + sin * dy) / resolution, y: (-sin * dx + cos * dy) / resolution };
+  return {
+    x: (cos * dx + sin * dy) / resolution,
+    y: (-sin * dx + cos * dy) / resolution,
+  };
 }
 
 export function worldToScreen(view: MapView, point: Point): Point {
@@ -114,7 +124,12 @@ export function screenToWorld(view: MapView, point: Point): Point {
   };
 }
 
-export function gridToScreen(view: MapView, map: OccupancySnapshot, gx: number, gy: number): Point {
+export function gridToScreen(
+  view: MapView,
+  map: OccupancySnapshot,
+  gx: number,
+  gy: number,
+): Point {
   return worldToScreen(view, gridToWorld(map, gx, gy));
 }
 
@@ -123,16 +138,35 @@ function clampZoom(zoom: number): number {
 }
 
 /** A view that shows every cell with a margin. An empty map is centred on its origin. */
-export function fitView(map: OccupancySnapshot, width: number, height: number): MapView {
+export function fitView(
+  map: OccupancySnapshot,
+  width: number,
+  height: number,
+): MapView {
   if (map.cells.length === 0 && map.grid === undefined) {
-    return { center: { x: map.origin.x, y: map.origin.y }, zoom: 50, width, height };
+    return {
+      center: { x: map.origin.x, y: map.origin.y },
+      zoom: 50,
+      width,
+      height,
+    };
   }
   let minX = Infinity;
   let minY = Infinity;
   let maxX = -Infinity;
   let maxY = -Infinity;
-  function includeBounds(x: number, y: number, width: number, height: number): void {
-    for (const [gx, gy] of [[x, y], [x + width, y], [x, y + height], [x + width, y + height]] as const) {
+  function includeBounds(
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+  ): void {
+    for (const [gx, gy] of [
+      [x, y],
+      [x + width, y],
+      [x, y + height],
+      [x + width, y + height],
+    ] as const) {
       const corner = gridToWorld(map, gx, gy);
       minX = Math.min(minX, corner.x);
       minY = Math.min(minY, corner.y);
@@ -143,7 +177,10 @@ export function fitView(map: OccupancySnapshot, width: number, height: number): 
   if (map.grid !== undefined) {
     includeBounds(0, 0, map.grid.width, map.grid.height);
   } else {
-    for (const { cell: [x, y] } of map.cells) includeBounds(x, y, 1, 1);
+    for (const {
+      cell: [x, y],
+    } of map.cells)
+      includeBounds(x, y, 1, 1);
   }
   const floor = map.resolution * 10;
   const spanX = Math.max(maxX - minX, floor);
@@ -202,7 +239,10 @@ const DEFAULT_HEIGHT = 420;
 const ZOOM_STEP = 1.25;
 const KEY_PAN_PX = 40;
 const DRAG_THRESHOLD_PX = 4;
-const SCALE_LENGTHS_M = [0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100] as const;
+const SCALE_LENGTHS_M = [
+  0.001, 0.002, 0.005, 0.01, 0.02, 0.05, 0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50,
+  100,
+] as const;
 
 const INK = "#f2ead9";
 const AMBER = "#ff7532";
@@ -217,7 +257,11 @@ interface Gesture {
 }
 
 function scaleBar(zoom: number): { meters: number; pixels: number } {
-  const meters = SCALE_LENGTHS_M.reduce<number>((best, length) => Math.abs(length * zoom - 45) < Math.abs(best * zoom - 45) ? length : best, 1);
+  const meters = SCALE_LENGTHS_M.reduce<number>(
+    (best, length) =>
+      Math.abs(length * zoom - 45) < Math.abs(best * zoom - 45) ? length : best,
+    1,
+  );
   return { meters, pixels: meters * zoom };
 }
 
@@ -255,15 +299,22 @@ export function MapCanvas({
     width: initialView?.width ?? DEFAULT_WIDTH,
     height: initialView?.height ?? DEFAULT_HEIGHT,
   });
-  const [placement, setPlacement] = useState<{ center: Point; zoom: number }>(() => {
-    const first = initialView ?? fitView(map, size.width, size.height);
-    return { center: first.center, zoom: first.zoom };
-  });
+  const [placement, setPlacement] = useState<{ center: Point; zoom: number }>(
+    () => {
+      const first = initialView ?? fitView(map, size.width, size.height);
+      return { center: first.center, zoom: first.zoom };
+    },
+  );
   const [layer, setLayer] = useState<Layer>("compare");
   const [pending, setPending] = useState<Pose | null>(null);
 
   const view: MapView = useMemo(
-    () => ({ center: placement.center, zoom: placement.zoom, width: size.width, height: size.height }),
+    () => ({
+      center: placement.center,
+      zoom: placement.zoom,
+      width: size.width,
+      height: size.height,
+    }),
     [placement, size],
   );
   const picking = pickEnabled && !stale && onPick !== undefined;
@@ -273,7 +324,11 @@ export function MapCanvas({
   const fitted = useRef({ mapId, mapRevision });
   useEffect(() => {
     // A different map or revision starts from a fitted view, not the old one's framing.
-    if (fitted.current.mapId === mapId && fitted.current.mapRevision === mapRevision) return;
+    if (
+      fitted.current.mapId === mapId &&
+      fitted.current.mapRevision === mapRevision
+    )
+      return;
     fitted.current = { mapId, mapRevision };
     const next = fitView(map, size.width, size.height);
     setPlacement({ center: next.center, zoom: next.zoom });
@@ -290,7 +345,11 @@ export function MapCanvas({
         const width = Math.round(rect.width);
         const height = Math.round(rect.height);
         setSize({ width, height });
-        if (!fittedToSurface && initialView === undefined && map.grid !== undefined) {
+        if (
+          !fittedToSurface &&
+          initialView === undefined &&
+          map.grid !== undefined
+        ) {
           const next = fitView(map, width, height);
           setPlacement({ center: next.center, zoom: next.zoom });
           fittedToSurface = true;
@@ -311,7 +370,14 @@ export function MapCanvas({
     if (context === null) return null;
     const pixels = context.createImageData(grid.width, grid.height);
     grid.values.forEach((cell, index) => {
-      const color = cell === -1 ? [66,68,73] : cell === 0 ? [216,211,203] : cell >= 50 ? [85,87,91] : [174,170,166];
+      const color =
+        cell === -1
+          ? [66, 68, 73]
+          : cell === 0
+            ? [216, 211, 203]
+            : cell >= 50
+              ? [85, 87, 91]
+              : [174, 170, 166];
       const offset = index * 4;
       pixels.data[offset] = color[0]!;
       pixels.data[offset + 1] = color[1]!;
@@ -384,7 +450,10 @@ export function MapCanvas({
     const onWheel = (event: WheelEvent) => {
       event.preventDefault();
       const rect = element.getBoundingClientRect();
-      const anchor = { x: event.clientX - rect.left, y: event.clientY - rect.top };
+      const anchor = {
+        x: event.clientX - rect.left,
+        y: event.clientY - rect.top,
+      };
       const factor = Math.exp(-event.deltaY * 0.0015);
       setPlacement((current) => {
         const frame = { ...current, width: size.width, height: size.height };
@@ -409,7 +478,10 @@ export function MapCanvas({
     const rect = event.currentTarget.getBoundingClientRect();
     const scaleX = rect.width > 0 ? size.width / rect.width : 1;
     const scaleY = rect.height > 0 ? size.height / rect.height : 1;
-    return { x: (event.clientX - rect.left) * scaleX, y: (event.clientY - rect.top) * scaleY };
+    return {
+      x: (event.clientX - rect.left) * scaleX,
+      y: (event.clientY - rect.top) * scaleY,
+    };
   }
 
   function onPointerDown(event: PointerEvent<HTMLDivElement>): void {
@@ -428,7 +500,8 @@ export function MapCanvas({
     } catch {
       // A synthetic or already-ended pointer cannot be captured; the gesture still works.
     }
-    if (picking) setPending({ ...gestureRef.current.startWorld, yaw: draft?.yaw ?? 0 });
+    if (picking)
+      setPending({ ...gestureRef.current.startWorld, yaw: draft?.yaw ?? 0 });
   }
 
   function onPointerMove(event: PointerEvent<HTMLDivElement>): void {
@@ -447,7 +520,12 @@ export function MapCanvas({
       }));
       return;
     }
-    if (Math.hypot(point.x - gesture.startScreen.x, point.y - gesture.startScreen.y) >= DRAG_THRESHOLD_PX) {
+    if (
+      Math.hypot(
+        point.x - gesture.startScreen.x,
+        point.y - gesture.startScreen.y,
+      ) >= DRAG_THRESHOLD_PX
+    ) {
       gesture.yaw = polar(gesture.startScreen, point);
     }
     setPending({ ...gesture.startWorld, yaw: gesture.yaw ?? draft?.yaw ?? 0 });
@@ -461,7 +539,10 @@ export function MapCanvas({
     if (gesture.mode !== "pick" || onPick === undefined) return;
     const point = localPoint(event);
     const yaw =
-      Math.hypot(point.x - gesture.startScreen.x, point.y - gesture.startScreen.y) >= DRAG_THRESHOLD_PX
+      Math.hypot(
+        point.x - gesture.startScreen.x,
+        point.y - gesture.startScreen.y,
+      ) >= DRAG_THRESHOLD_PX
         ? polar(gesture.startScreen, point)
         : (gesture.yaw ?? draft?.yaw ?? 0);
     onPick({ x: gesture.startWorld.x, y: gesture.startWorld.y, yaw });
@@ -474,7 +555,10 @@ export function MapCanvas({
   }
 
   function zoomBy(factor: number): void {
-    setPlacement((current) => ({ ...current, zoom: clampZoom(current.zoom * factor) }));
+    setPlacement((current) => ({
+      ...current,
+      zoom: clampZoom(current.zoom * factor),
+    }));
   }
 
   function fit(): void {
@@ -492,7 +576,8 @@ export function MapCanvas({
     };
     const move = moves[event.key];
     if (event.key === "Enter" && picking && onPick) {
-      event.preventDefault();onPick({ ...view.center, yaw: draft?.yaw ?? 0 });
+      event.preventDefault();
+      onPick({ ...view.center, yaw: draft?.yaw ?? 0 });
     } else if (move !== undefined) {
       event.preventDefault();
       setPlacement((current) => ({
@@ -515,8 +600,9 @@ export function MapCanvas({
   const preview = pending ?? draft;
 
   const toolbar = (
-    <div className={styles.toolbar} data-docked={toolbarTarget !== null && !mini}>
-        {map.grid === undefined && <fieldset className={styles.layers}>
+    <div className={styles.toolbar} data-docked={toolbarTarget !== null}>
+      {map.grid === undefined && (
+        <fieldset className={styles.layers}>
           <legend className={styles.legend}>显示层</legend>
           {(
             [
@@ -535,30 +621,72 @@ export function MapCanvas({
               <span>{label}</span>
             </label>
           ))}
-        </fieldset>}
-        <div className={styles.zoomGroup}>
-          <button type="button" aria-label="放大" className={styles.tool} onClick={() => zoomBy(ZOOM_STEP)}>
-            <ZoomIn size={18} />
-          </button>
-          <button type="button" aria-label="缩小" className={styles.tool} onClick={() => zoomBy(1 / ZOOM_STEP)}>
-            <ZoomOut size={18} />
-          </button>
-          <button type="button" aria-label="适应窗口" className={styles.tool} onClick={fit}>
-            <Maximize size={18} />
-          </button>
-          <button type="button" className={styles.tool} aria-label="居中车辆" disabled={stale || robot === null} onClick={() => { if(robot) setPlacement(current => ({ ...current, center: {x:robot.x,y:robot.y} })); }}><LocateFixed size={18} /></button>
-          <span className={styles.scaleHtml} aria-label="地图比例尺"><i style={{width:bar.pixels}} />{bar.meters} m</span>
-        </div>
+        </fieldset>
+      )}
+      <div className={styles.zoomGroup}>
+        <button
+          type="button"
+          aria-label="放大"
+          className={styles.tool}
+          onClick={() => zoomBy(ZOOM_STEP)}
+        >
+          <ZoomIn size={18} />
+        </button>
+        <button
+          type="button"
+          aria-label="缩小"
+          className={styles.tool}
+          onClick={() => zoomBy(1 / ZOOM_STEP)}
+        >
+          <ZoomOut size={18} />
+        </button>
+        <button
+          type="button"
+          aria-label="适应窗口"
+          className={styles.tool}
+          onClick={fit}
+        >
+          <Maximize size={18} />
+        </button>
+        <button
+          type="button"
+          className={styles.tool}
+          aria-label="居中车辆"
+          disabled={stale || robot === null}
+          onClick={() => {
+            if (robot)
+              setPlacement((current) => ({
+                ...current,
+                center: { x: robot.x, y: robot.y },
+              }));
+          }}
+        >
+          <LocateFixed size={18} />
+        </button>
+        <span className={styles.scaleHtml} aria-label="地图比例尺">
+          <i style={{ width: bar.pixels }} />
+          {bar.meters} m
+        </span>
       </div>
+    </div>
   );
 
   return (
-    <section className={styles.mapPanel} data-stale={stale} data-compact={compact} data-mini={mini}>
-      {toolbarTarget && !mini ? createPortal(toolbar, toolbarTarget) : toolbar}
+    <section
+      className={styles.mapPanel}
+      data-stale={stale}
+      data-compact={compact}
+      data-mini={mini}
+    >
+      {toolbarTarget ? createPortal(toolbar, toolbarTarget) : toolbar}
 
-      {!stale && robot !== null && <span className={styles.geometryNote}>实际轮廓尺寸不可用</span>}
+      {!stale && robot !== null && (
+        <span className={styles.geometryNote}>实际轮廓尺寸不可用</span>
+      )}
       {stale && (
-        <p className={styles.staleBanner}>缓存地图 · 非实时。不能在这张图上下达目标。</p>
+        <p className={styles.staleBanner}>
+          缓存地图 · 非实时。不能在这张图上下达目标。
+        </p>
       )}
 
       <div
@@ -574,14 +702,23 @@ export function MapCanvas({
         data-zoom={String(view.zoom)}
         data-center-x={String(view.center.x)}
         data-center-y={String(view.center.y)}
-        style={compact ? undefined : { aspectRatio: `${size.width} / ${size.height}` }}
+        style={
+          compact
+            ? undefined
+            : { aspectRatio: `${size.width} / ${size.height}` }
+        }
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
         onPointerCancel={onPointerCancel}
         onKeyDown={onKeyDown}
       >
-        <canvas ref={canvasRef} className={styles.canvas} width={size.width} height={size.height} />
+        <canvas
+          ref={canvasRef}
+          className={styles.canvas}
+          width={size.width}
+          height={size.height}
+        />
         <svg
           role="img"
           aria-label="地图叠加层"
@@ -589,9 +726,14 @@ export function MapCanvas({
           viewBox={`0 0 ${size.width} ${size.height}`}
         >
           {zones.map((zone) => {
-            const points = zone.points.map((point) => worldToScreen(view, point));
+            const points = zone.points.map((point) =>
+              worldToScreen(view, point),
+            );
             const label = points.reduce(
-              (sum, point) => ({ x: sum.x + point.x / points.length, y: sum.y + point.y / points.length }),
+              (sum, point) => ({
+                x: sum.x + point.x / points.length,
+                y: sum.y + point.y / points.length,
+              }),
               { x: 0, y: 0 },
             );
             return (
@@ -600,9 +742,16 @@ export function MapCanvas({
                   data-zone={zone.id}
                   data-kind={zone.kind}
                   className={`${styles.zone} ${styles[`zone_${zone.kind}`]}`}
-                  points={points.map((point) => `${point.x},${point.y}`).join(" ")}
+                  points={points
+                    .map((point) => `${point.x},${point.y}`)
+                    .join(" ")}
                 />
-                <text x={label.x} y={label.y} className={styles.zoneLabel} textAnchor="middle">
+                <text
+                  x={label.x}
+                  y={label.y}
+                  className={styles.zoneLabel}
+                  textAnchor="middle"
+                >
                   {zone.label}
                 </text>
               </g>
@@ -619,14 +768,22 @@ export function MapCanvas({
             />
           )}
           {taskRoute.length > 1 && (
-            <polyline aria-label="任务航点预览" className={styles.taskRoute}
-              points={taskRoute.map((point) => worldToScreen(view, point)).map(({ x, y }) => `${x},${y}`).join(" ")} />
+            <polyline
+              aria-label="任务航点预览"
+              className={styles.taskRoute}
+              points={taskRoute
+                .map((point) => worldToScreen(view, point))
+                .map(({ x, y }) => `${x},${y}`)
+                .join(" ")}
+            />
           )}
           {waypointMarkers.map((waypoint) => {
             const at = worldToScreen(view, waypoint);
             const selectable = onAddWaypoint !== undefined && !stale;
             return (
-              <g key={waypoint.waypoint_id} className={styles.waypointMarker}
+              <g
+                key={waypoint.waypoint_id}
+                className={styles.waypointMarker}
                 data-highlighted={waypoint.waypoint_id === highlightedWaypoint}
                 data-selectable={selectable}
                 transform={`translate(${at.x} ${at.y})`}
@@ -634,25 +791,59 @@ export function MapCanvas({
                 tabIndex={selectable ? 0 : undefined}
                 aria-label={`添加地图航点 ${waypoint.waypoint_id}`}
                 onPointerDown={(event) => event.stopPropagation()}
-                onClick={selectable ? () => onAddWaypoint(waypoint.waypoint_id) : undefined}
+                onClick={
+                  selectable
+                    ? () => onAddWaypoint(waypoint.waypoint_id)
+                    : undefined
+                }
                 onKeyDown={(event) => {
-                  if (selectable && (event.key === "Enter" || event.key === " ")) {
+                  if (
+                    selectable &&
+                    (event.key === "Enter" || event.key === " ")
+                  ) {
                     event.preventDefault();
                     onAddWaypoint(waypoint.waypoint_id);
                   }
-                }}>
+                }}
+              >
                 <title>{waypoint.waypoint_id}</title>
-                <circle r={12} /><text textAnchor="middle" dominantBaseline="central" className={styles.waypointName}>{waypoint.waypoint_id.slice(0,3)}</text>
+                <circle r={12} />
+                <text
+                  textAnchor="middle"
+                  dominantBaseline="central"
+                  className={styles.waypointName}
+                >
+                  {waypoint.waypoint_id.slice(0, 3)}
+                </text>
               </g>
             );
           })}
           {taskRoute.map((point, index) => {
             const at = worldToScreen(view, point);
-            return <text key={index} data-route-index={index + 1} x={at.x + 13} y={at.y - 6} className={styles.routeNumber}>{index + 1}</text>;
+            return (
+              <g key={index} data-route-index={index + 1}>
+                <circle
+                  cx={at.x}
+                  cy={at.y}
+                  r={11}
+                  className={styles.routeDot}
+                />
+                <text
+                  x={at.x}
+                  y={at.y + 4}
+                  textAnchor="middle"
+                  className={styles.routeNumber}
+                >
+                  {index + 1}
+                </text>
+              </g>
+            );
           })}
           {home !== null && <Marker kind="home" pose={home} view={view} />}
           {goal !== null && <Marker kind="goal" pose={goal} view={view} />}
-          {preview !== null && <Marker kind="draft" pose={preview} view={view} />}
+          {preview !== null && (
+            <Marker kind="draft" pose={preview} view={view} />
+          )}
           {!stale && scanPoints.length > 0 && (
             <g aria-label="实时激光命中点" className={styles.scanHits}>
               <title>实时激光命中点 · 独立于静态地图</title>
@@ -662,7 +853,9 @@ export function MapCanvas({
               })}
             </g>
           )}
-          {!stale && robot !== null && <Marker kind="robot" pose={robot} view={view} />}
+          {!stale && robot !== null && (
+            <Marker kind="robot" pose={robot} view={view} />
+          )}
         </svg>
       </div>
       <p id={hintId} className={styles.hint}>
@@ -670,13 +863,19 @@ export function MapCanvas({
         {picking ? "；在地图上按下选点，拖动设定朝向" : "；拖动平移"}
       </p>
 
-      {!stale && scanPoints.length > 0 && <p className={styles.scanLegend}>实时激光命中点 · 独立于静态地图</p>}
-      {taskRoute.length > 0 && <p className={styles.hint}>任务航点顺序连线 · 不代表车辆实际避障路径</p>}
-      {map.grid === undefined && <p role="status" aria-label="覆盖诊断" className={styles.diagnostics}>
-        <span>原始 {counts.raw}</span>
-        <span>过滤 {counts.filtered}</span>
-        <span>被过滤掉 {counts.removed}</span>
-      </p>}
+      {!stale && scanPoints.length > 0 && (
+        <p className={styles.scanLegend}>实时激光命中点 · 独立于静态地图</p>
+      )}
+      {taskRoute.length > 0 && (
+        <p className={styles.hint}>任务航点顺序连线 · 不代表车辆实际避障路径</p>
+      )}
+      {map.grid === undefined && (
+        <p role="status" aria-label="覆盖诊断" className={styles.diagnostics}>
+          <span>原始 {counts.raw}</span>
+          <span>过滤 {counts.filtered}</span>
+          <span>被过滤掉 {counts.removed}</span>
+        </p>
+      )}
     </section>
   );
 }
@@ -709,7 +908,17 @@ function Marker({
       transform={`translate(${at.x} ${at.y}) rotate(${degrees})`}
     >
       <title>{MARKER_LABEL[kind]}</title>
-      {kind === "robot" ? <path d="M 13 0 L -11 -9 L -6 0 L -11 9 Z" className={styles.robotArrow} /> : <><circle r={9} /><path d="M 0 0 L 22 0 M 14 -6 L 22 0 L 14 6" /></>}
+      {kind === "robot" ? (
+        <path
+          d="M 13 0 L -11 -9 L -6 0 L -11 9 Z"
+          className={styles.robotArrow}
+        />
+      ) : (
+        <>
+          <circle r={9} />
+          <path d="M 0 0 L 22 0 M 14 -6 L 22 0 L 14 6" />
+        </>
+      )}
     </g>
   );
 }

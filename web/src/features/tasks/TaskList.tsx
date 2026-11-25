@@ -37,6 +37,7 @@ import {
   scheduleSummary,
   type TaskDraft,
 } from "./schedule";
+import { Button } from "../../components/ui/Button";
 import { Switch } from "../../components/ui/Switch";
 import styles from "./Tasks.module.css";
 
@@ -55,7 +56,11 @@ interface TaskListProps {
   map?: OccupancySnapshot | undefined;
   mapCanvasProps?: Partial<MapCanvasProps> | undefined;
   renderWorkspace?:
-    | ((mapView: ReactElement, panel: ReactElement) => ReactElement)
+    | ((
+        mapView: ReactElement,
+        panel: ReactElement,
+        picking?: ReactElement | null,
+      ) => ReactElement)
     | undefined;
 }
 
@@ -109,7 +114,12 @@ function TaskEditor({
   mapCanvasProps,
   renderWorkspace,
 }: TaskListProps): ReactElement {
+  //Compatible: standalone task editor callers retain their combined list/editor layout.
+  const [stage, setStage] = useState<"list" | "editor">(
+    renderWorkspace ? "list" : "editor",
+  );
   const [draft, setDraft] = useState<TaskDraft>(newTaskDraft);
+  const [planEnabled, setPlanEnabled] = useState(true);
   const [editing, setEditing] = useState<TaskDetails | null>(null);
   const [preview, setPreview] = useState<TaskDetails | null>(null);
   const [routeBlocked, setRouteBlocked] = useState(false);
@@ -131,7 +141,6 @@ function TaskEditor({
   const [pending, setPending] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [conflict, setConflict] = useState(false);
-  const [drawerOpen, setDrawerOpen] = useState(true);
   const [creatingWaypoint, setCreatingWaypoint] = useState(false);
   const [waypointDraft, setWaypointDraft] = useState<Pose | null>(null);
   const [waypointName, setWaypointName] = useState("");
@@ -143,18 +152,23 @@ function TaskEditor({
   } | null>(null);
   useEffect(() => () => saveWaypointOperation.current?.abort(), [link]);
 
-  const namesSupported = snapshot.vehicle_ui?.capabilities.includes('task.names.v1') === true;
+  const namesSupported =
+    snapshot.vehicle_ui?.capabilities.includes("task.names.v1") === true;
   function taskLabel(task: { task_id: string; name?: string }): string {
     //Compatible: an old vehicle always displays its stable ID.
-    return namesSupported ? task.name ?? task.task_id : task.task_id;
+    return namesSupported ? (task.name ?? task.task_id) : task.task_id;
   }
   const live = snapshot.connected && !snapshot.stale;
   const progress =
     live && snapshot.route_progress?.map_generation === snapshot.map_generation
       ? snapshot.route_progress
       : undefined;
-  const progressTask = (snapshot.tasks ?? []).find(task => task.task_id === progress?.task_id);
-  const progressLabel = taskLabel(progressTask ?? { task_id: progress?.task_id ?? "导航" });
+  const progressTask = (snapshot.tasks ?? []).find(
+    (task) => task.task_id === progress?.task_id,
+  );
+  const progressLabel = taskLabel(
+    progressTask ?? { task_id: progress?.task_id ?? "导航" },
+  );
   const persisted = catalog ?? workspace?.waypoints ?? [];
   const available = [...persisted, ...draftPoints];
   const waypoints = new Map(
@@ -279,11 +293,13 @@ function TaskEditor({
   }
 
   function newTask(): void {
+    setStage(renderWorkspace ? "list" : "editor");
     clearWaypointDraft();
     setPickingRoute(false);
     setDraftPoints([]);
     confirmedCount.current = 0;
     setEditing(null);
+    setPlanEnabled(true);
     setPreview(null);
     setRouteBlocked(false);
     setDraft(newTaskDraft());
@@ -328,7 +344,9 @@ function TaskEditor({
         setPreview(task);
         return;
       }
+      setStage("editor");
       setEditing(task);
+      setPlanEnabled(task.enabled);
       setDraft({
         ...NEW_TASK,
         task_id: task.task_id,
@@ -408,7 +426,7 @@ function TaskEditor({
       timezone: draft.timezone.trim() || NEW_TASK.timezone,
       schedule,
       waypoint_ids: waypointIds,
-      enabled: editing?.enabled ?? true,
+      enabled: planEnabled,
     };
     let waypointRecovery: "failed" | "unknown" | null = null;
     try {
@@ -614,23 +632,54 @@ function TaskEditor({
       )}
     </div>
   );
+  const pickingBanner = pickingRoute ? (
+    <div className={styles.picking} role="status">
+      <p>在地图上依次选择任务点 · 已选 {waypointIds.length} 点</p>
+      <div>
+        <Button
+          type="button"
+          disabled={!waypointIds.length || pending}
+          onClick={() => setWaypointIds((ids) => ids.slice(0, -1))}
+        >
+          撤销上一点
+        </Button>
+        <Button
+          type="button"
+          onClick={() => {
+            setPickingRoute(false);
+            setStage("editor");
+          }}
+        >
+          完成选点
+        </Button>
+        <Button
+          type="button"
+          onClick={() => {
+            setPickingRoute(false);
+            setStage("list");
+          }}
+        >
+          取消选点
+        </Button>
+      </div>
+    </div>
+  ) : null;
   const panel = (
     <section
       className={styles.panel}
       aria-label="任务管理"
-      data-open={drawerOpen}
+      data-task-stage={stage}
     >
       <header className={styles.header}>
-        <h3>任务与计划</h3>
-        <button
-          type="button"
-          className={styles.drawerToggle}
-          aria-expanded={drawerOpen}
-          onClick={() => setDrawerOpen(!drawerOpen)}
-        >
-          {drawerOpen ? "收起任务编辑" : "展开任务编辑"}
-        </button>
+        <h3>
+          {pickingRoute
+            ? "选择任务点"
+            : stage === "editor"
+              ? "编辑任务"
+              : "任务管理"}
+        </h3>
       </header>
+
       <div className={styles.body}>
         <p className={styles.note}>
           车端状态 {snapshot.execution_status} · 任务目录 r
@@ -643,7 +692,11 @@ function TaskEditor({
               ` · 第 ${progress.active_waypoint_index + 1} 个航点`}
           </p>
         )}
-        <div>
+        <div
+          hidden={
+            (renderWorkspace !== undefined && stage !== "list") || pickingRoute
+          }
+        >
           <button
             type="button"
             onClick={() => setMessage("暂未实现：FIFO 等待队列")}
@@ -662,6 +715,14 @@ function TaskEditor({
               <div className={styles.taskIdentity}>
                 <strong>{taskLabel(task)}</strong>
                 <code>{task.task_id}</code>
+                <Switch
+                  label={task.enabled ? "停用计划" : "启用计划"}
+                  checked={task.enabled}
+                  disabled={!live || pending}
+                  onChange={(enabled) =>
+                    void changeTask(task, enabled ? "enable" : "disable")
+                  }
+                />
               </div>
               <button
                 type="button"
@@ -680,14 +741,7 @@ function TaskEditor({
               >
                 编辑
               </button>
-              <Switch
-                label={task.enabled ? "停用计划" : "启用计划"}
-                checked={task.enabled}
-                disabled={!live || pending}
-                onChange={(enabled) =>
-                  void changeTask(task, enabled ? "enable" : "disable")
-                }
-              />
+
               <button
                 type="button"
                 onClick={() => setMessage("暂未实现：立即执行已保存任务")}
@@ -704,7 +758,11 @@ function TaskEditor({
             </div>
           ))}
         </div>
-        {!namesSupported && <p className={styles.warning}>车端需升级以支持独立任务名称；当前仅显示编号，可编辑已有任务的其他设置。</p>}
+        {!namesSupported && (
+          <p className={styles.warning}>
+            车端需升级以支持独立任务名称；当前仅显示编号，可编辑已有任务的其他设置。
+          </p>
+        )}
         {workspace === undefined && (
           <p className={styles.warning}>
             {!live
@@ -740,6 +798,7 @@ function TaskEditor({
           </section>
         )}
         <fieldset
+          hidden={stage !== "editor" || pickingRoute}
           className={styles.fields}
           disabled={!workspace || pending || preview !== null}
         >
@@ -761,70 +820,18 @@ function TaskEditor({
             </p>
           )}
           <ScheduleEditor
+            compact={renderWorkspace !== undefined}
             value={draft}
             onChange={setDraft}
             namesSupported={namesSupported}
             editing={editing !== null}
           />
-          <div className={styles.taskRow}>
-            <label>
-              可用航点
-              <select
-                value={selected}
-                onChange={(event) => {
-                  setSelected(event.target.value);
-                  setHighlight(event.target.value);
-                }}
-              >
-                <option value="">请选择</option>
-                {available.map((point) => (
-                  <option key={point.waypoint_id}>{point.waypoint_id}</option>
-                ))}
-              </select>
-            </label>
-            <button
-              type="button"
-              disabled={!waypoints.has(selected)}
-              onClick={() => addWaypoint(selected)}
-            >
-              加入路线
-            </button>
-          </div>
-          {workspace?.waypointWrites === true &&
-            (creatingWaypoint ? (
-              <div className={styles.taskRow}>
-                <p className={styles.note}>
-                  {waypointDraft === null
-                    ? "在地图空闲区域选点，可拖动设置朝向。"
-                    : `已选位置 X ${waypointDraft.x.toFixed(2)} m · Y ${waypointDraft.y.toFixed(2)} m`}
-                </p>
-                <label>
-                  新航点编号
-                  <input
-                    value={waypointName}
-                    onChange={(event) => setWaypointName(event.target.value)}
-                  />
-                </label>
-                <button
-                  type="button"
-                  disabled={
-                    waypointDraft === null ||
-                    waypointName.trim() === "" ||
-                    waypoints.has(waypointName.trim())
-                  }
-                  onClick={() => void saveWaypoint()}
-                >
-                  保存航点
-                </button>
-                <button type="button" onClick={clearWaypointDraft}>
-                  取消新航点
-                </button>
-              </div>
-            ) : (
-              <button type="button" onClick={() => setCreatingWaypoint(true)}>
-                在地图上新建航点
-              </button>
-            ))}
+          <Switch
+            label="启用此计划"
+            checked={planEnabled}
+            disabled={pending}
+            onChange={setPlanEnabled}
+          />
           <ol aria-label="任务航点顺序" className={styles.route}>
             {waypointIds.map((id, index) => (
               <li
@@ -842,7 +849,8 @@ function TaskEditor({
                   className={styles.taskRow}
                   onFocus={() => setHighlight(id)}
                 >
-                  <code>{id}</code>
+                  <span className={styles.pointNumber}>{index + 1}</span>
+                  <code title={id}>{id}</code>
                   <button
                     type="button"
                     aria-label={`上移 ${id}`}
@@ -874,6 +882,68 @@ function TaskEditor({
               </li>
             ))}
           </ol>
+          <details open={renderWorkspace === undefined || creatingWaypoint}>
+            <summary>高级航点编辑</summary>
+            <div className={styles.taskRow}>
+              <label>
+                可用航点
+                <select
+                  value={selected}
+                  onChange={(event) => {
+                    setSelected(event.target.value);
+                    setHighlight(event.target.value);
+                  }}
+                >
+                  <option value="">请选择</option>
+                  {available.map((point) => (
+                    <option key={point.waypoint_id}>{point.waypoint_id}</option>
+                  ))}
+                </select>
+              </label>
+              <button
+                type="button"
+                disabled={!waypoints.has(selected)}
+                onClick={() => addWaypoint(selected)}
+              >
+                加入路线
+              </button>
+            </div>
+            {workspace?.waypointWrites === true &&
+              (creatingWaypoint ? (
+                <div className={styles.taskRow}>
+                  <p className={styles.note}>
+                    {waypointDraft === null
+                      ? "在地图空闲区域选点，可拖动设置朝向。"
+                      : `已选位置 X ${waypointDraft.x.toFixed(2)} m · Y ${waypointDraft.y.toFixed(2)} m`}
+                  </p>
+                  <label>
+                    新航点编号
+                    <input
+                      value={waypointName}
+                      onChange={(event) => setWaypointName(event.target.value)}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    disabled={
+                      waypointDraft === null ||
+                      waypointName.trim() === "" ||
+                      waypoints.has(waypointName.trim())
+                    }
+                    onClick={() => void saveWaypoint()}
+                  >
+                    保存航点
+                  </button>
+                  <button type="button" onClick={clearWaypointDraft}>
+                    取消新航点
+                  </button>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setCreatingWaypoint(true)}>
+                  在地图上新建航点
+                </button>
+              ))}
+          </details>
           {missingWaypoint && (
             <p className={styles.warning}>
               路线含当前目录中不存在的航点，提交已锁定。
@@ -882,6 +952,15 @@ function TaskEditor({
         </fieldset>
       </div>
       <footer className={styles.footer}>
+        {stage === "editor" && !pickingRoute && renderWorkspace && (
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => setStage("list")}
+          >
+            返回任务列表
+          </button>
+        )}
         {message !== null && <p role="status">{message}</p>}
         {conflict && editing !== null && (
           <button
@@ -895,12 +974,19 @@ function TaskEditor({
         <button
           type="button"
           disabled={pending || !workspace || !namesSupported}
-          onClick={newTask}
+          hidden={pickingRoute}
+          onClick={() => {
+            newTask();
+            setStage("editor");
+            if (renderWorkspace && workspace?.waypointWrites)
+              setPickingRoute(true);
+          }}
         >
           新建任务
         </button>
         <button
           type="button"
+          hidden={stage !== "editor" || pickingRoute}
           className={styles.primary}
           disabled={!canSubmit}
           onClick={() => void submit()}
@@ -911,10 +997,11 @@ function TaskEditor({
     </section>
   );
   return renderWorkspace ? (
-    renderWorkspace(mapView, panel)
+    renderWorkspace(mapView, panel, pickingBanner)
   ) : (
     <div className={styles.workspace}>
       {mapView}
+      {pickingBanner}
       {panel}
     </div>
   );

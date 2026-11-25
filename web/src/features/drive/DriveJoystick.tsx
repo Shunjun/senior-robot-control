@@ -163,10 +163,14 @@ export function DriveJoystick({
         onKeyDown={handleKeyDown}
         onKeyUp={handleKeyUp}
       >
+        <span className={styles.axisUp}>↑</span>
+        <span className={styles.axisDown}>↓</span>
+        <span className={styles.axisLeft}>←</span>
+        <span className={styles.axisRight}>→</span>
         <span
           className={styles.singleKnob}
           style={{
-            transform: `translate(${-value.turn * 65}px,${-value.linear * 65}px)`,
+            transform: `translate(${-value.turn * 110}%,${-value.linear * 110}%)`,
           }}
         >
           <Move size={24} />
