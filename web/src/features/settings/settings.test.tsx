@@ -31,9 +31,10 @@ const render = (element: ReactElement) => {
 afterEach(cleanup);
 it("converts only displayed km/h to SI, submits one group and reads effective values", async () => {
   let current = structuredClone(settingsFixture);
+  let reads = 0;
   const submitted: SettingsRequest[] = [];
   const port = testPort(async (type, payload) => {
-    if (type === "settings.get") return current;
+    if (type === "settings.get") { reads++; return current; }
     const request = payload as SettingsRequest;
     submitted.push(request);
     current = {
@@ -64,6 +65,11 @@ it("converts only displayed km/h to SI, submits one group and reads effective va
     screen.getByText(/退化模式线速度上限 · 已保存 1.08/),
   ).toBeTruthy();
   fireEvent.change(field, { target: { value: "4" } });
+  const readsBeforeRefresh = reads;
+  fireEvent.click(screen.getByRole("button", { name: "刷新配置" }));
+  await waitFor(() => expect(reads).toBe(readsBeforeRefresh + 1));
+  expect(submitted).toEqual([]);
+  expect(field).toHaveProperty("value", "4");
   fireEvent.click(screen.getByRole("button", { name: "保存驾驶设置" }));
   await screen.findByText(/车端已确认配置生效/);
   expect(submitted[0]).toMatchObject({
@@ -75,7 +81,7 @@ it("converts only displayed km/h to SI, submits one group and reads effective va
       degraded_linear_mps: 0.72 / 3.6,
     },
   });
-  await screen.findByText("驾驶设置 · 生效版本 3");
+  await screen.findByText("驾驶设置 · 配置修订号 3");
   expect(screen.getByLabelText("退化模式线速度上限")).toHaveProperty("value", "0.72");
   expect(
     screen.getByText(/退化模式线速度上限 · 已保存 0.72/),

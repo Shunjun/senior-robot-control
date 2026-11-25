@@ -1,3 +1,4 @@
+import { RefreshCw } from "lucide-react";
 import { newId } from "../../ids";
 import { memo, useEffect, useRef, useState, type ReactElement } from "react";
 import { validateSettingsRequest } from "../../api/vehicleState";
@@ -170,7 +171,7 @@ function DrivingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
   return (
     <fieldset disabled={!enabled || busy}>
       <legend className={ui.srOnly}>
-        驾驶设置 · 生效版本 {data.snapshot.driving_version}
+        驾驶设置 · 配置修订号 {data.snapshot.driving_version}
       </legend>
       <div className={ui.fields}>
         {fields.map((f) => (
@@ -237,7 +238,7 @@ function LoggingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
   return (
     <fieldset disabled={!enabled || busy}>
       <legend className={ui.srOnly}>
-        日志设置 · 生效版本 {data.snapshot.logging_version}
+        日志设置 · 配置修订号 {data.snapshot.logging_version}
       </legend>
       <div className={ui.fields}>
         <label>
@@ -445,6 +446,22 @@ export const VehicleSettings = memo(function VehicleSettings({
     }
     void send(request);
   }
+  const refreshControls = (
+    <footer className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-4">
+      <Button
+        disabled={!available || busy !== null}
+        onClick={() => void refresh()}
+      >
+        <RefreshCw aria-hidden="true" />
+        刷新配置
+      </Button>
+      {data && (
+        <span className="text-[10px] text-ink-dim">
+          配置修订号：驾驶 {data.snapshot.driving_version} · 日志 {data.snapshot.logging_version}
+        </span>
+      )}
+    </footer>
+  );
   return (
     <section className={ui.card} aria-label="车辆设置">
       <header>
@@ -497,11 +514,11 @@ export const VehicleSettings = memo(function VehicleSettings({
           {available && !data && !message && (
             <p role="status">正在读取车辆设置…</p>
           )}
-          {data && (
-            <div className={ui.groups}>
-              <div hidden={category !== "driving"}>
-                <h2>驾驶与操控</h2>
-                <p>保存后由车端确认生效；速度显示单位与控制页一致。</p>
+          <div className={ui.groups}>
+            <div hidden={category !== "driving"}>
+              <h2>驾驶与操控</h2>
+              <p>保存后由车端确认生效；速度显示单位与控制页一致。</p>
+              {data && (
                 <DrivingForm
                   key={`driving-${saved.driving}`}
                   data={data}
@@ -509,9 +526,12 @@ export const VehicleSettings = memo(function VehicleSettings({
                   enabled={available}
                   submit={submit}
                 />
-              </div>
-              <div hidden={category !== "logging"}>
-                <h2>日志配置</h2>
+              )}
+              {refreshControls}
+            </div>
+            <div hidden={category !== "logging"}>
+              <h2>日志配置</h2>
+              {data && (
                 <LoggingForm
                   key={`logging-${saved.logging}`}
                   data={data}
@@ -519,9 +539,10 @@ export const VehicleSettings = memo(function VehicleSettings({
                   enabled={available}
                   submit={submit}
                 />
-              </div>
+              )}
+              {refreshControls}
             </div>
-          )}
+          </div>
           <section hidden={category !== "camera"} className={ui.section}>
             <h2>摄像头与预览</h2>
             <p>与控制页共用摄像头开关。</p>
@@ -539,6 +560,7 @@ export const VehicleSettings = memo(function VehicleSettings({
               </label>
             </div>
             <p>暂未实现：画质参数写入。</p>
+            {refreshControls}
           </section>
           <section
             hidden={category !== "performance"}
@@ -561,22 +583,8 @@ export const VehicleSettings = memo(function VehicleSettings({
                 {...(port ? { port } : {})}
               />
             </details>
+            {refreshControls}
           </section>
-          <details className={ui.configDetails}>
-            <summary>生效配置与版本</summary>
-            <Button
-              disabled={!available || busy !== null}
-              onClick={() => void refresh()}
-            >
-              回读生效配置
-            </Button>
-            {data && (
-              <p>
-                驾驶版本 {data.snapshot.driving_version} · 日志版本{" "}
-                {data.snapshot.logging_version}
-              </p>
-            )}
-          </details>
         </div>
       </div>
     </section>
