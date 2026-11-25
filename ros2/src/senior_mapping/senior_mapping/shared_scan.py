@@ -523,3 +523,298 @@ def read_latest_scan(
     elif row.scan is not None or row.key is not None or row.valid_until_steady_ns != 0:
         raise ValueError("invalid scan envelope retained a payload")
     return SlotRead(row.revision > revision, row if row.revision > revision else None)
+
+
+# Small startup-owned navigation contract, independent from the full scan mailbox.
+MAX_CONTRACT_BYTES = 8192
+
+
+@dataclass(frozen=True)
+class CostmapGeometry:
+    width: int
+    height: int
+    resolution: float
+    origin_x: float
+    origin_y: float
+
+    def __post_init__(self):
+        for v in (self.width, self.height):
+            _u64(v)
+            if not v:
+                raise ValueError("empty costmap geometry")
+        if (
+            self.width * self.height > 1048576
+            or not all(
+                type(v) in (int, float) and math.isfinite(v)
+                for v in (self.resolution, self.origin_x, self.origin_y)
+            )
+            or self.resolution <= 0
+        ):
+            raise ValueError("invalid costmap geometry")
+
+    @classmethod
+    def of(cls, grid):
+        return cls(grid.width, grid.height, grid.resolution, grid.origin.x, grid.origin.y)
+
+
+@dataclass(frozen=True)
+class ReferenceAuthorization:
+    schema: int = 1
+    run_nonce: str = ""
+    host_boot_id: str = ""
+    owner_instance: str = ""
+    revision: int = 0
+    authority_epoch: int = 0
+    status: str = "bootstrap"
+    reason: str = ""
+    map_id: str = ""
+    reference_revision: int = 0
+    reference_generation: str = ""
+    backend_boot: str = ""
+    source: dict | None = None
+    selection_token: str = ""
+    selection_generation: int = 0
+    acceptance_floor: ScanKey | None = None
+    acceptance_floor_steady_ns: int = 0
+    navigation_floor_steady_ns: int = 0
+    fixed_revision: int = 0
+    graph_sequence: int = 0
+    anchor_digest: str = ""
+    expected_grid_id: str = ""
+    geometry: CostmapGeometry | None = None
+    coverage_domain_epoch: int = 0
+    global_instance_permit: str = ""
+    local_instance_permit: str = ""
+    lease_until_steady_ns: int = 0
+
+
+@dataclass(frozen=True)
+class CurrentLayerCoverage:
+    schema: int = 1
+    run_nonce: str = ""
+    host_boot_id: str = ""
+    owner_instance: str = ""
+    authority_epoch: int = 0
+    role: str = "global"
+    role_instance_permit: str = ""
+    plugin_instance: str = ""
+    cycle: int = 0
+    status: str = "invalid"
+    reason: str = ""
+    map_id: str = ""
+    reference_revision: int = 0
+    reference_generation: str = ""
+    backend_boot: str = ""
+    key: ScanKey | None = None
+    sample_steady_ns: int = 0
+    scan_deadline_steady_ns: int = 0
+    coverage_domain_epoch: int = 0
+    geometry: CostmapGeometry | None = None
+    expected_fixed_revision: int = 0
+    expected_grid_id: str = ""
+    cycle_started_steady_ns: int = 0
+    cycle_completed_steady_ns: int = 0
+    valid_until_steady_ns: int = 0
+    master_frame: str = ""
+    master_geometry: CostmapGeometry | None = None
+    updated_bounds: tuple[float, float, float, float] | None = None
+    global_all_hits_covered: bool = False
+    local_in_window_hits_covered: bool = False
+    transform_valid: bool = False
+    cleanup_complete: bool = False
+
+
+def _contract_decode(row, record_type):
+    from dataclasses import fields
+
+    if not isinstance(row, dict) or set(row) != {f.name for f in fields(record_type)}:
+        raise ValueError("contract fields changed")
+    data = dict(row)
+    for name in ("key", "acceptance_floor"):
+        if name in data and data[name] is not None:
+            data[name] = _contract_decode(data[name], ScanKey)
+    for name in ("geometry", "master_geometry"):
+        if name in data and data[name] is not None:
+            data[name] = _contract_decode(data[name], CostmapGeometry)
+    if data.get("source") is not None:
+        source = data["source"]
+        if not isinstance(source, dict) or "sequence" in source:
+            raise ValueError("invalid source")
+        _contract_decode({**source, "sequence": 0}, ScanKey)
+    if data.get("updated_bounds") is not None:
+        bounds = data["updated_bounds"]
+        if (
+            not isinstance(bounds, (list, tuple))
+            or len(bounds) != 4
+            or not all(type(v) in (int, float) and math.isfinite(v) for v in bounds)
+            or bounds[0] > bounds[2]
+            or bounds[1] > bounds[3]
+        ):
+            raise ValueError("invalid update bounds")
+        data["updated_bounds"] = tuple(bounds)
+    record = record_type(**data)
+    if record_type in (ScanKey, CostmapGeometry):
+        return record
+    for f in fields(record_type):
+        value = data[f.name]
+        if f.type is int:
+            _u64(value)
+        elif f.type is bool and type(value) is not bool:
+            raise ValueError("contract boolean required")
+        elif f.type is str and (not isinstance(value, str) or len(value.encode()) > 128):
+            raise ValueError("contract text exceeds bound")
+    if type(record.schema) is not int or record.schema != 1:
+        raise ValueError("unsupported navigation contract")
+    if not all((record.run_nonce, record.host_boot_id, record.owner_instance)):
+        raise ValueError("missing contract identity")
+    if record_type is ReferenceAuthorization:
+        if record.status not in ("bootstrap", "selected", "revoked"):
+            raise ValueError("invalid authorization status")
+        if record.status != "selected" and record.lease_until_steady_ns:
+            raise ValueError("unselected authorization has lease")
+    else:
+        if record.role not in ("global", "local") or record.status not in (
+            "ready",
+            "pending",
+            "invalid",
+            "disabled",
+            "retired",
+        ):
+            raise ValueError("invalid coverage status")
+        if record.status == "ready" and (
+            record.key is None
+            or record.geometry is None
+            or record.master_geometry is None
+            or record.updated_bounds is None
+            or not record.plugin_instance
+            or not 0 < record.cycle_started_steady_ns <= record.cycle_completed_steady_ns
+            or not record.cycle_completed_steady_ns < record.valid_until_steady_ns
+            or record.valid_until_steady_ns
+            > min(
+                record.scan_deadline_steady_ns,
+                record.sample_steady_ns + 500000000,
+                record.cycle_started_steady_ns + 500000000,
+            )
+        ):
+            raise ValueError("invalid completed coverage deadline")
+    return record
+
+
+def _unique_contract_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate contract field")
+        result[key] = value
+    return result
+
+
+def _contract_directory(path):
+    fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    info = os.fstat(fd)
+    if info.st_uid != os.getuid() or info.st_mode & 0o077:
+        os.close(fd)
+        raise ValueError("untrusted navigation directory")
+    return fd
+
+
+def read_contract_record(path: Path, record_type):
+    directory = _contract_directory(path.parent)
+    try:
+        try:
+            fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory)
+        except FileNotFoundError:
+            return None
+    finally:
+        os.close(directory)
+    with os.fdopen(fd, "rb") as stream:
+        info = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or info.st_uid != os.getuid()
+            or (info.st_mode & 0o077 or info.st_size > MAX_CONTRACT_BYTES)
+        ):
+            raise ValueError("untrusted navigation record")
+        payload = stream.read(MAX_CONTRACT_BYTES + 1)
+    if len(payload) > MAX_CONTRACT_BYTES:
+        raise ValueError("navigation record exceeds 8KiB")
+    return _contract_decode(
+        json.loads(payload, object_pairs_hook=_unique_contract_pairs), record_type
+    )
+
+
+class ContractSlot:
+    """One writer plus one replaceable pending immutable record; no callback file I/O."""
+
+    def __init__(self, path: Path, record_type):
+        self.path, self.record_type = path, record_type
+        self._directory = _contract_directory(path.parent)
+        self._condition = threading.Condition()
+        self._pending = None
+        self._offered_revision = -1
+        self._closed = self._busy = False
+        self.error = None
+        self._thread = threading.Thread(target=self._run, name="navigation-authorization")
+        self._thread.start()
+
+    def offer(self, record):
+        # Snapshot nested source too, so a caller cannot mutate an in-flight record.
+        row = _contract_decode(asdict(record), self.record_type)
+        with self._condition:
+            if not self._closed:
+                if self.record_type is ReferenceAuthorization:
+                    if row.revision <= self._offered_revision:
+                        return
+                    self._offered_revision = row.revision
+                self._pending = row
+                self._condition.notify()
+
+    def _run(self):
+        while True:
+            with self._condition:
+                self._condition.wait_for(lambda: self._pending is not None or self._closed)
+                if self._pending is None:
+                    return
+                record, self._pending, self._busy = self._pending, None, True
+            temporary = self.path.name + ".tmp"
+            try:
+                payload = json.dumps(
+                    asdict(record), allow_nan=False, separators=(",", ":")
+                ).encode()
+                if len(payload) > MAX_CONTRACT_BYTES:
+                    raise ValueError("navigation encoding exceeds 8KiB")
+                fd = os.open(
+                    temporary,
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600,
+                    dir_fd=self._directory,
+                )
+                with os.fdopen(fd, "wb") as stream:
+                    os.fchmod(stream.fileno(), 0o600)
+                    stream.write(payload)
+                os.replace(
+                    temporary,
+                    self.path.name,
+                    src_dir_fd=self._directory,
+                    dst_dir_fd=self._directory,
+                )
+                self.error = None
+            except (ValueError, OSError) as exc:
+                self.error = str(exc)
+            finally:
+                with self._condition:
+                    self._busy = False
+                    self._condition.notify_all()
+
+    def flush(self):
+        with self._condition:
+            self._condition.wait_for(lambda: self._pending is None and not self._busy)
+        if self.error:
+            raise OSError(self.error)
+
+    def close(self):
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+        self._thread.join()
+        os.close(self._directory)

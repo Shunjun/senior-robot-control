@@ -377,6 +377,23 @@ class NativeSession:
             return
         self._activated = True
         await self._publish_reference()
+        selection = await self.backend.catalog.selection()
+        if (
+            selection.state == "ready"
+            and selection.map_ref == self.entry.map_ref
+            and selection.token
+        ):
+            await self.graph.request(
+                "reference",
+                boot_id=self.graph.boot,
+                active=True,
+                navigation_selected=True,
+                map_id=self.entry.map_ref.map_id,
+                reference_revision=self.entry.map_ref.reference_revision,
+                generation=self.active.map_generation,
+                selection_token=selection.token,
+                selection_generation=selection.generation,
+            )
         self._task = asyncio.create_task(self._worker.run())
         if self.active.change_sequence > self._durable_sequence:
             self._worker.changed(self.active.change_sequence)

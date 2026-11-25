@@ -27,8 +27,11 @@ from vehicle_core.lifecycle_events import ResourceProcesses
 
 
 class RosMappingBackend:
-    def __init__(self, node: Any, *, stopped: Any, reference: Any = None) -> None:
+    def __init__(
+        self, node: Any, *, stopped: Any, reference: Any = None, contract=None, prepare_live=None
+    ) -> None:
         self.node, self._stopped = node, stopped
+        self._prepare_live = prepare_live
         self._services: dict[str, tuple[Any, Any]] = {}
         self._child: asyncio.subprocess.Process | None = None
         self._relay: asyncio.subprocess.Process | None = None
@@ -46,6 +49,8 @@ class RosMappingBackend:
         self._scan_slot = None
         self._host_boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
         self._navigation.host_boot_id = self._host_boot_id
+        if contract is not None:
+            self._navigation.configure_contract(contract)
         self._register_qualified_receipt()
 
     def _prepare_services(self) -> None:
@@ -126,6 +131,16 @@ class RosMappingBackend:
                 if method == "status":
                     return {"ok": True, "stopped": bool(self._stopped())}
                 if method == "start":
+                    if self._child is not None or not self._stopped():
+                        raise DomainError(
+                            ErrorCode.CONFLICT, "vehicle must stop before live handoff"
+                        )
+                    if self._prepare_live is not None:
+                        try:
+                            await self._prepare_live()
+                        except (RuntimeError, OSError) as exc:
+                            self.node.get_logger().error(str(exc))
+                            raise DomainError(ErrorCode.UNAVAILABLE, str(exc)) from exc
                     return await self._start(fields)
                 if method == "stop":
                     await self._stop()
@@ -406,6 +421,7 @@ class RosMappingBackend:
         if self._qualified_gid is not None and owner is None:
             self._navigation.invalidate_current("qualified_owner_changed", retired=True)
         self._navigation.check_current()
+        self._navigation.poll_contract()
         if self._scan_slot is not None and self._scan_slot.error is not None:
             if self._navigation.reference is not None:
                 self._navigation.reference.set_current_coverage(False, "scan_slot_unavailable")

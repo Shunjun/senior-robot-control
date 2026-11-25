@@ -17,7 +17,10 @@ from vehicle_core.launch_recovery import owner_command
 
 
 class DedicatedController:
-    def __init__(self, node: Node, params: Path, *, odometry_topic: str = "/wheel/odom") -> None:
+    def __init__(
+        self, node: Node, params: Path, *, odometry_topic: str = "/wheel/odom", permit_changed=None
+    ) -> None:
+        self._permit_changed = permit_changed
         self._node = node
         self._params = params
         self._odometry_topic = odometry_topic
@@ -126,6 +129,12 @@ class DedicatedController:
                 for name, _ in self._node.get_node_names_and_namespaces()
             ):
                 raise RuntimeError("a Nav2 controller or navigator is already present")
+            from senior_navigation.parameters import rotate_role_permit
+
+            permit = await asyncio.to_thread(rotate_role_permit, self._params, "local")
+            if self._permit_changed is not None:
+                self._permit_changed(permit)
+                stack.callback(self._permit_changed, "")
             run_id = secrets.token_hex(16)
             topic = f"/control/navigation/run_{run_id}/cmd_vel"
             await self._start(

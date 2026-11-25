@@ -646,6 +646,13 @@ def main() -> None:
         previous_route_failure = None
         node.declare_parameter("navigation_controller_params", "")
         nav_params = str(node.get_parameter("navigation_controller_params").value)
+        from senior_navigation.parameters import read_navigation_contract, request_live_handoff
+
+        contract = (
+            read_navigation_contract(Path(nav_params))
+            if nav_params and Path(nav_params).is_file()
+            else None
+        )
         node.declare_parameter("navigation_odometry_topic", "/wheel/odom")
         if reference is not None and nav_params and Path(nav_params).is_file():
             from senior_navigation.dedicated_controller import DedicatedController
@@ -660,6 +667,9 @@ def main() -> None:
                 node,
                 Path(nav_params),
                 odometry_topic=str(node.get_parameter("navigation_odometry_topic").value),
+                permit_changed=lambda permit: mapping_backend._navigation.rotate_local_permit(
+                    permit
+                ),
             )
 
             def qualified(ref, generation, *, continuing=True):
@@ -733,7 +743,35 @@ def main() -> None:
                 and (route is None or route.status in {"succeeded", "failed", "canceled"})
             )
 
-        mapping_backend = RosMappingBackend(node, stopped=mapping_stopped, reference=reference)
+        preparing_live = False
+
+        async def prepare_live():
+            nonlocal preparing_live
+            if contract is None:
+                raise RuntimeError("live navigation handoff incomplete: no startup contract")
+            if contract["mode"] == "live":
+                return
+            if not contract.get("handoff_socket"):
+                raise RuntimeError(
+                    "live navigation handoff incomplete: "
+                    "external static localization owner has no control handle"
+                )
+            preparing_live = True
+            try:
+                if controller is not None:
+                    await controller.close()
+                await request_live_handoff(contract)
+                mapping_backend._navigation.contract.update(contract)
+            finally:
+                preparing_live = False
+
+        mapping_backend = RosMappingBackend(
+            node,
+            stopped=mapping_stopped,
+            reference=reference,
+            contract=contract,
+            prepare_live=prepare_live,
+        )
         core = AdapterCore(
             robot_id=robot_id,
             mapping=mapping_backend,
@@ -763,7 +801,11 @@ def main() -> None:
                 assert controller is not None
                 while not exiting:
                     try:
-                        if reference is not None and reference.pose() is not None:
+                        if (
+                            not preparing_live
+                            and reference is not None
+                            and reference.pose() is not None
+                        ):
                             await controller.warm()
                     except (RuntimeError, OSError) as exc:
                         node.get_logger().warning(f"Scoped Nav2 warm-up failed: {exc}")

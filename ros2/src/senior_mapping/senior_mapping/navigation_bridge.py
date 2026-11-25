@@ -8,12 +8,23 @@ import base64
 import hashlib
 import json
 import time
-from dataclasses import replace
+import uuid
+from dataclasses import asdict, replace
+from pathlib import Path
 from typing import Any
 
 from senior_mapping.evidence import SourceIdentity, anchor_digest
 from senior_mapping.references import _watermark_payload, validate_fixed_snapshot
-from senior_mapping.shared_scan import QualifiedScan, ReferenceBasis, project_hits
+from senior_mapping.shared_scan import (
+    ContractSlot,
+    CostmapGeometry,
+    CurrentLayerCoverage,
+    QualifiedScan,
+    ReferenceAuthorization,
+    ReferenceBasis,
+    project_hits,
+    read_contract_record,
+)
 from senior_mapping.workspace import WorkspaceGrid
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef, Pose2D
@@ -40,17 +51,131 @@ class NativeNavigationBridge:
         self._authorized = None
         self._fixed_watermark = None
         self._owner_coverage_reason = None
+        self.contract = None
+        self.authorization_slot = None
+        self._owner_instance = uuid.uuid4().hex
+        self._authority_epoch = self._domain_epoch = self._authorization_revision = 0
+        self._selection = None
+        self._navigation_floor_ns = 0
+        self._geometry = None
+
+    def configure_contract(self, contract):
+        self.contract = contract
+        self.authorization_slot = ContractSlot(
+            Path(contract["contract_directory"]) / "reference.json", ReferenceAuthorization
+        )
+
+    def export_authorization(self):
+        self._authorization_revision += 1
+        w, scan = self._fixed_watermark, self._scan
+        selected = self._selection is not None and not self._retired
+        lease = 0
+        if (
+            selected
+            and scan is not None
+            and scan.capture.time.sample_steady_ns > self._navigation_floor_ns
+            and w is not None
+            and w.source is not None
+            and tuple(asdict(w.source).values()) == scan.key.source
+        ):
+            lease = scan.valid_until_steady_ns
+        contract = self.contract or {}
+        return ReferenceAuthorization(
+            run_nonce=contract.get("run_nonce", "unconfigured"),
+            host_boot_id=self.host_boot_id or "unknown",
+            owner_instance=self._owner_instance,
+            revision=self._authorization_revision,
+            authority_epoch=self._authority_epoch,
+            status="revoked" if self._retired else "selected" if selected else "bootstrap",
+            reason="reference_unavailable" if self._retired else "",
+            map_id="" if w is None else w.map_ref.map_id,
+            reference_revision=0 if w is None else w.map_ref.reference_revision,
+            reference_generation="" if w is None else w.reference_generation,
+            backend_boot=self.boot,
+            source=None if w is None or w.source is None else asdict(w.source),
+            selection_token="" if self._selection is None else self._selection[0],
+            selection_generation=0 if self._selection is None else self._selection[1],
+            acceptance_floor=self._reference_floor,
+            acceptance_floor_steady_ns=self._reference_floor_steady_ns,
+            navigation_floor_steady_ns=self._navigation_floor_ns,
+            fixed_revision=0 if w is None else w.fixed_revision,
+            graph_sequence=0 if w is None else w.graph_sequence,
+            anchor_digest="" if w is None else w.anchor_digest,
+            expected_grid_id=""
+            if self.reference is None or self.reference.grid() is None
+            else self.reference.grid().grid_id,
+            geometry=self._geometry,
+            coverage_domain_epoch=self._domain_epoch,
+            global_instance_permit=contract.get("global_instance_permit", ""),
+            local_instance_permit=contract.get("local_instance_permit", ""),
+            lease_until_steady_ns=lease,
+        )
+
+    def _offer_authorization(self):
+        row = self.export_authorization()
+        if self.reference is not None:
+            self.reference.set_navigation_authorization(row, accepted_key=self._last_key)
+        if self.authorization_slot is not None:
+            self.authorization_slot.offer(row)
+            if self.authorization_slot.error is not None and self.reference is not None:
+                self.reference.set_current_coverage(False, "authorization_slot_unavailable")
+
+    def authorize_navigation(self, fields):
+        if (
+            self._retired
+            or self._authorized
+            != (fields.get("map_id"), fields.get("reference_revision"), fields.get("generation"))
+            or self._fixed_watermark is None
+            or not fields.get("selection_token")
+            or type(fields.get("selection_generation")) is not int
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "navigation selection lacks installed reference")
+        selection = (fields["selection_token"], fields["selection_generation"])
+        if self._selection != selection:
+            if self._selection is not None:
+                raise DomainError(ErrorCode.CONFLICT, "navigation selection changed session")
+            self._selection = selection
+            self._navigation_floor_ns = time.monotonic_ns()
+            self._authority_epoch += 1
+        self._offer_authorization()
+
+    def poll_contract(self):
+        if self.contract is None or self.reference is None:
+            return
+        for role in ("global", "local"):
+            try:
+                row = read_contract_record(
+                    Path(self.contract["contract_directory"]) / (role + "-coverage.json"),
+                    CurrentLayerCoverage,
+                )
+                if row is None:
+                    self.reference.invalidate_costmap_coverage(role)
+                else:
+                    self.reference.observe_costmap_coverage(role, row)
+            except (ValueError, OSError, TypeError):
+                self.reference.invalidate_costmap_coverage(role)
+        if self.authorization_slot.error is not None:
+            self.reference.set_current_coverage(False, "authorization_slot_unavailable")
+
+    def rotate_local_permit(self, permit):
+        if self.contract is not None:
+            self.contract["local_instance_permit"] = permit
+            self._offer_authorization()
 
     def begin(self, boot: str, odom_frame: str = "odom") -> None:
         self._scan = self._last_key = self._reference_floor = self._capture = None
         self._retired = False
         self._reference_floor_steady_ns = time.monotonic_ns()
+        self._selection = None
+        self._authority_epoch += 1
+        self._geometry = None
         self.odom_frame = odom_frame
         self.boot, self._cut, self._grid = boot, None, None
         self._authorized = self._fixed_watermark = None
         self._owner_coverage_reason = None
         if self.reference is not None:
             self.reference.begin(boot)
+        self._offer_authorization()
 
     def withdraw(self) -> None:
         self._retired = True
@@ -60,6 +185,7 @@ class NativeNavigationBridge:
             self.slot.retire()
         if self.reference is not None:
             self.reference.withdraw()
+        self._offer_authorization()
 
     def observe_cut(self, cut: dict[str, Any]) -> None:
         self._cut = cut
@@ -137,6 +263,9 @@ class NativeNavigationBridge:
 
     def authorize_reference(self, fields):
         """Authenticated owner RPC selection, independent of the transferred JSON."""
+        if fields.get("navigation_selected") is True:
+            self.authorize_navigation(fields)
+            return
         cut = self._cut
         if (
             self._retired
@@ -147,6 +276,7 @@ class NativeNavigationBridge:
             raise DomainError(ErrorCode.CONFLICT, "reference selection changed graph")
         token = (fields["map_id"], fields["reference_revision"], fields["generation"])
         if self._authorized != token:
+            self._authority_epoch += 1
             self._authorized = token
             self._owner_floor_ns = fields["acceptance_floor_steady_ns"]
             self._reference_floor = self._last_key
@@ -249,8 +379,17 @@ class NativeNavigationBridge:
         )
         if self.slot is not None:
             self.slot.install_reference(basis, floor_steady_ns=self._reference_floor_steady_ns)
+        geometry = CostmapGeometry.of(grid)
+        if self._geometry != geometry:
+            self._domain_epoch += 1
+            self._geometry = geometry
+        if previous is not None and previous.source != w.source:
+            self._authority_epoch += 1
+            self._reference_floor_steady_ns = time.monotonic_ns()
+            self.invalidate_current("source_changed")
         self._fixed_watermark = w
         self._owner_coverage_reason = None
+        self._offer_authorization()
         # This receipt proves bridge publication/reference installation only.
         return dict(ok=True, watermark=_watermark_payload(w), grid_id=grid.grid_id)
 
@@ -312,6 +451,7 @@ class NativeNavigationBridge:
         if self.slot is not None and self.slot.error is not None:
             covered, reason = False, "scan_slot_unavailable"
         self.reference.set_current_coverage(covered, reason or None)
+        self._offer_authorization()
         self._publish_transform(capture.stamp)
         self._publish_current(True, reason, points, scan.valid_until_steady_ns)
         if self.slot is not None:
@@ -329,6 +469,7 @@ class NativeNavigationBridge:
             else:
                 self.slot.invalidate(reason)
         self._publish_current(False, reason, (), 0)
+        self._offer_authorization()
 
     def check_current(self) -> None:
         if self._scan is not None and time.monotonic_ns() >= self._scan.valid_until_steady_ns:
@@ -383,6 +524,9 @@ class NativeNavigationBridge:
 
     def close(self) -> None:
         self.withdraw()
+        if self.authorization_slot is not None:
+            self.authorization_slot.close()
+            self.authorization_slot = None
         if self._current_publisher is not None:
             self.node.destroy_publisher(self._current_publisher)
             self._current_publisher = None

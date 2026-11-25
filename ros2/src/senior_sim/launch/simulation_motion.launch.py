@@ -1,8 +1,12 @@
 """Standard 1x environment inputs composed with the common vehicle control path."""
 
+import asyncio
 import importlib.util
+import json
+import os
 import secrets
 import shutil
+import signal
 import tempfile
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
@@ -18,20 +22,23 @@ from launch.actions import (
     SetLaunchConfiguration,
 )
 from launch.conditions import IfCondition
-from launch.event_handlers import OnProcessExit, OnShutdown
+from launch.event_handlers import OnProcessExit, OnProcessStart, OnShutdown
+from launch.events import matches_action
+from launch.events.process import SignalProcess
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from nav2_common.launch import RewrittenYaml
+from senior_navigation.parameters import prepare_navigation_parameters
 
 from vehicle_core.launch_recovery import (
     lifecycle_group_command,
     lifecycle_owner_prefix,
     restart_prefix,
 )
-from vehicle_core.lifecycle_events import report_ros_exit
+from vehicle_core.lifecycle_events import report_ros_exit, resource_handlers
 from vehicle_core.sensor_parameters import ros_sensor_parameters
 
 
@@ -63,6 +70,157 @@ def environment_assets(context):
     ]
 
 
+class _NavigationStartup:
+    """The existing launch owner retains exact lifecycle group handles for handoff."""
+
+    def __init__(self, context, base):
+        self.directory = Path(tempfile.mkdtemp(prefix="senior-navigation-"))
+        self.base = base
+        self.parameters = self.directory / "nav2.yaml"
+        self.binding = dict(
+            contract_directory=self.directory,
+            run_nonce=secrets.token_hex(16),
+            host_boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            global_instance=secrets.token_hex(16),
+            local_instance=secrets.token_hex(16),
+        )
+        self.endpoint = self.directory / "startup.sock"
+        self.server = None
+        self.groups = set()
+        self.started_groups = set()
+        self.pending = None
+        self.live = False
+        self.cleanup_failed = False
+        self.closing = False
+        self.context = context
+        self._prepare("static")
+
+    def _prepare(self, mode):
+        import yaml
+
+        prepare_navigation_parameters(self.base, output=self.parameters, mode=mode, **self.binding)
+        data = yaml.safe_load(self.parameters.read_text())
+        contract = data["/**"]["ros__parameters"]["navigation_contract"]
+        contract["handoff_socket"] = str(self.endpoint)
+        # This file is private and only this startup owner changes modes.
+        temporary = self.parameters.with_suffix(".handoff.tmp")
+        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "w") as stream:
+            yaml.safe_dump(data, stream, sort_keys=False)
+        os.replace(temporary, self.parameters)
+        self.contract = contract
+
+    def _planner(self):
+        nav = FindPackageShare("senior_navigation").perform(self.context)
+        return ExecuteProcess(
+            cmd=lifecycle_group_command(
+                str(Path(nav) / "launch/navigation.launch.py"),
+                dict(
+                    external_controller="true",
+                    parameters=str(self.parameters),
+                    use_sim_time=LaunchConfiguration("use_sim_time").perform(self.context),
+                ),
+            ),
+            output="screen",
+            sigterm_timeout="9.0",
+            sigkill_timeout="1.0",
+        )
+
+    def _bind(self, action, *, new_live=False):
+        self.groups.add(action)
+
+        def started(event, context):
+            self.started_groups.add(action)
+            if new_live and self.pending is not None and not self.pending.done():
+                self.live = True
+                self.pending.set_result(dict(ok=True, contract=self.contract))
+            return []
+
+        def exited(event, context):
+            self.groups.discard(action)
+            self.started_groups.discard(action)
+            self.cleanup_failed = self.cleanup_failed or event.returncode != 0
+            if self.pending is not None and not self.pending.done() and not self.groups:
+                if self.closing or self.cleanup_failed:
+                    self.pending.set_result(
+                        dict(ok=False, error="static lifecycle group cleanup failed")
+                    )
+                    return []
+                self.binding["global_instance"] = secrets.token_hex(16)
+                (self.directory / "global-coverage.json").unlink(missing_ok=True)
+                self._prepare("live")
+                return self._bind(self._planner(), new_live=True)
+            return []
+
+        return [
+            *resource_handlers("navigation", [action]),
+            RegisterEventHandler(OnProcessStart(target_action=action, on_start=started)),
+            RegisterEventHandler(OnProcessExit(target_action=action, on_exit=exited)),
+            action,
+        ]
+
+    def start_groups(self, context):
+        return [*self._bind(self._planner()), *self._bind(_localization_entry(context)[0])]
+
+    async def _request(self, reader, writer):
+        try:
+            row = json.loads(await asyncio.wait_for(reader.readline(), 2))
+            if self.closing:
+                raise RuntimeError("navigation startup is closing")
+            if row != dict(command="prepare_live", run_nonce=self.binding["run_nonce"]):
+                raise ValueError("foreign navigation startup request")
+            if self.live:
+                result = dict(ok=True, contract=self.contract)
+            else:
+                if self.pending is None:
+                    if not self.groups or self.groups != self.started_groups:
+                        raise RuntimeError("static lifecycle handles unavailable")
+                    self.pending = asyncio.get_running_loop().create_future()
+                    for action in tuple(self.groups):
+                        self.context.emit_event_sync(
+                            SignalProcess(
+                                signal_number=signal.SIGINT, process_matcher=matches_action(action)
+                            )
+                        )
+                result = await asyncio.wait_for(asyncio.shield(self.pending), 22)
+            writer.write((json.dumps(result) + "\n").encode())
+            await writer.drain()
+        except (ValueError, RuntimeError, asyncio.TimeoutError) as exc:
+            writer.write((json.dumps(dict(ok=False, error=str(exc))) + "\n").encode())
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+    def listen(self, context):
+        async def start():
+            self.server = await asyncio.start_unix_server(
+                self._request, path=self.endpoint, limit=8192
+            )
+            os.chmod(self.endpoint, 0o600)
+
+        context.add_completion_future(context.asyncio_loop.create_task(start()))
+        return []
+
+    def cleanup(self, context):
+        self.closing = True
+        if self.server is not None:
+            self.server.close()
+
+        # Launch settles owned groups before releasing the temporary run artifacts.
+        async def finish():
+            if self.server is not None:
+                await self.server.wait_closed()
+            deadline = asyncio.get_running_loop().time() + 12
+            while self.groups and asyncio.get_running_loop().time() < deadline:
+                await asyncio.sleep(0.05)
+            if not self.groups:
+                shutil.rmtree(self.directory)
+
+        context.add_completion_future(context.asyncio_loop.create_task(finish()))
+        return []
+
+
 def _simulation_nodes(context):
     sim = FindPackageShare("senior_sim")
     nav = FindPackageShare("senior_navigation")
@@ -91,8 +249,12 @@ def _simulation_nodes(context):
         },
         convert_types=True,
     )
+    startup = _NavigationStartup(context, Path(controller_params.perform(context)))
+    controller_params = str(startup.parameters)
     return [
         RegisterEventHandler(OnProcessExit(on_exit=report_ros_exit)),
+        RegisterEventHandler(OnShutdown(on_shutdown=[OpaqueFunction(function=startup.cleanup)])),
+        OpaqueFunction(function=startup.listen),
         OpaqueFunction(function=environment_assets, condition=navigation),
         IncludeLaunchDescription(
             PythonLaunchDescriptionSource(
@@ -105,17 +267,7 @@ def _simulation_nodes(context):
                 "use_sim_time": LaunchConfiguration("use_sim_time"),
             }.items(),
         ),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([nav, "launch", "navigation.launch.py"])
-            ),
-            condition=navigation,
-            launch_arguments={
-                "external_controller": "true",
-                "use_sim_time": LaunchConfiguration("use_sim_time"),
-            }.items(),
-        ),
-        OpaqueFunction(function=_localization_entry, condition=navigation),
+        OpaqueFunction(function=startup.start_groups, condition=navigation),
         Node(
             package="senior_sim",
             executable="simulation_camera",

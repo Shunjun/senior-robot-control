@@ -75,3 +75,95 @@ def test_scan_projection_accounts_for_robot_and_sensor_mount_and_limits_payload(
     assert points == [{"x": 1.0, "y": 3.2}]
     many = project_scan(Pose2D(0, 0, 0), Pose2D(0, 0, 0), [1.0] * 720, 0, 0.01, 0.08, 20)
     assert len(many) <= 64
+
+
+async def test_simulation_handoff_waits_for_both_owned_groups(tmp_path):
+    """Exercise the real launch owner's handshake with only launch events substituted."""
+    import ast
+    import asyncio
+    import json
+    import os
+    import secrets
+    import shutil
+    import signal
+    import tempfile
+    from types import SimpleNamespace as NS
+
+    from senior_navigation.parameters import prepare_navigation_parameters, request_live_handoff
+
+    path = Path("ros2/src/senior_sim/launch/simulation_motion.launch.py")
+    definition = next(
+        n
+        for n in ast.parse(path.read_text()).body
+        if isinstance(n, ast.ClassDef) and n.name == "_NavigationStartup"
+    )
+
+    class Event:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
+
+    namespace = dict(
+        asyncio=asyncio,
+        json=json,
+        os=os,
+        secrets=secrets,
+        shutil=shutil,
+        signal=signal,
+        tempfile=tempfile,
+        Path=Path,
+        prepare_navigation_parameters=prepare_navigation_parameters,
+        resource_handlers=lambda *_: [],
+        RegisterEventHandler=lambda x: x,
+        OnProcessStart=Event,
+        OnProcessExit=Event,
+        SignalProcess=Event,
+        matches_action=lambda action: action,
+    )
+    exec(compile(ast.Module(body=[definition], type_ignores=[]), str(path), "exec"), namespace)
+    futures, signals = [], []
+    context = NS(
+        asyncio_loop=asyncio.get_running_loop(),
+        add_completion_future=futures.append,
+        emit_event_sync=signals.append,
+    )
+    owner = namespace["_NavigationStartup"](
+        context, Path("ros2/src/senior_navigation/config/nav2.yaml")
+    )
+    a, b, live = object(), object(), object()
+    owner._planner = lambda: live
+    first, second = owner._bind(a), owner._bind(b)
+    first[0].on_start(NS(), context)
+    second[0].on_start(NS(), context)
+    owner.listen(context)
+    await asyncio.gather(*futures)
+    contract = dict(owner.contract)
+    task = asyncio.create_task(request_live_handoff(contract))
+    try:
+        for _ in range(100):
+            if len(signals) == 2:
+                break
+            await asyncio.sleep(0.001)
+        assert {s.process_matcher for s in signals} == {a, b}
+        assert not task.done() and owner.contract["mode"] == "static"
+        assert first[1].on_exit(NS(returncode=0), context) == []
+        assert not task.done() and owner.contract["mode"] == "static"
+        replacement = second[1].on_exit(NS(returncode=0), context)
+        assert replacement[-1] is live and owner.contract["mode"] == "live"
+        replacement[0].on_start(NS(), context)
+        await task
+        assert contract["mode"] == "live"
+        assert contract["global_instance_permit"] == owner.binding["global_instance"]
+        replacement[1].on_exit(NS(returncode=0), context)
+    finally:
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        owner.groups.clear()
+        owner.cleanup(context)
+        await asyncio.gather(*futures)
+
+
+async def test_external_hardware_static_owner_without_handle_cannot_be_taken_over():
+    from senior_navigation.parameters import request_live_handoff
+
+    with pytest.raises(RuntimeError, match="external static localization owner"):
+        await request_live_handoff(dict(mode="static", run_nonce="run"))

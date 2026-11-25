@@ -50,9 +50,18 @@ class NativeFixture:
         self.navigation = NativeNavigationBridge(SimpleNamespace(), self.reference, None)
         self.pose_sequence = 0
         self.raster = None
+        self.coverage_roles = {"global", "local"}
+        self.receipt_cycle = 0
+        self.selection_observations = []
         self.navigation._publish_fixed_grid = lambda grid: None
         self.navigation._publish_current = lambda *args: None
         self.navigation.host_boot_id = "host"
+        self.navigation.contract = dict(
+            contract_directory=str(self.root),
+            run_nonce="fixture",
+            global_instance_permit="g",
+            local_instance_permit="l",
+        )
 
     def transfer(self, cut):
         path = self.root / "transfer.json"
@@ -122,7 +131,12 @@ class NativeFixture:
             if not fields["active"]:
                 self.navigation.withdraw()
                 return dict(ok=True)
-            self.navigation.authorize_reference(fields)
+            if fields.get("navigation_selected") is True:
+                before = (self.reference.grid() is not None, self.reference._navigation_covered())
+                self.navigation.authorize_reference(fields)
+                self.selection_observations.append((before, self.reference._authorization))
+            else:
+                self.navigation.authorize_reference(fields)
             return dict(ok=True)
         if action == "install_fixed":
             from senior_mapping.ros_runtime import _read_fixed_transfer
@@ -226,6 +240,54 @@ class NativeFixture:
             header,
         )
         self.navigation.slot.flush()
+        self.complete_costmaps()
+
+    def complete_costmaps(self):
+        """Explicit synthetic Nav2 results; these never claim installed layer coverage."""
+        from senior_mapping.shared_scan import CurrentLayerCoverage
+
+        self.receipt_cycle += 1
+        auth = self.reference._authorization
+        scan = self.navigation._scan
+        if auth is None or scan is None or not auth.lease_until_steady_ns:
+            return
+        now = time.monotonic_ns()
+        for role in self.coverage_roles:
+            self.reference.observe_costmap_coverage(
+                role,
+                CurrentLayerCoverage(
+                    run_nonce=auth.run_nonce,
+                    host_boot_id=auth.host_boot_id,
+                    owner_instance=auth.owner_instance,
+                    authority_epoch=auth.authority_epoch,
+                    role=role,
+                    role_instance_permit=getattr(auth, role + "_instance_permit"),
+                    plugin_instance=role,
+                    cycle=self.receipt_cycle,
+                    status="ready",
+                    map_id=auth.map_id,
+                    reference_revision=auth.reference_revision,
+                    reference_generation=auth.reference_generation,
+                    backend_boot=auth.backend_boot,
+                    key=scan.key,
+                    sample_steady_ns=scan.capture.time.sample_steady_ns,
+                    scan_deadline_steady_ns=scan.valid_until_steady_ns,
+                    coverage_domain_epoch=auth.coverage_domain_epoch,
+                    geometry=auth.geometry,
+                    expected_fixed_revision=auth.fixed_revision,
+                    expected_grid_id=auth.expected_grid_id,
+                    cycle_started_steady_ns=now,
+                    cycle_completed_steady_ns=now,
+                    valid_until_steady_ns=auth.lease_until_steady_ns,
+                    master_frame="map",
+                    master_geometry=auth.geometry,
+                    updated_bounds=(-1.0, -1.0, 1.0, 1.0),
+                    global_all_hits_covered=True,
+                    local_in_window_hits_covered=True,
+                    transform_valid=True,
+                    cleanup_complete=True,
+                ),
+            )
 
     def cut(self):
         from dataclasses import asdict
@@ -337,6 +399,11 @@ async def test_production_assembly_continuously_saves_and_reopens_canonical_home
                 await asyncio.sleep(0.01)
             else:
                 raise AssertionError("automatic checkpoint/navigation publication did not settle")
+            assert native.selection_observations
+            before_selection, selected_auth = native.selection_observations[0]
+            # Bootstrap basis exists without navigation permission.
+            assert before_selection == (True, False)
+            assert selected_auth.status == "selected" and selected_auth.lease_until_steady_ns == 0
             first = catalog["entries"][0]
             if scenario == "matched":
                 destination = tmp_path / "map-transfer/authoritative.zip"
@@ -363,6 +430,23 @@ async def test_production_assembly_continuously_saves_and_reopens_canonical_home
             assert state["localized"] is True
             assert state["map_generation"] == state["localization_generation"]
             assert state["map_grid_id"] == manifest["grid_id"]
+            if scenario == "matched":
+                from dataclasses import replace
+
+                # Real manager/IPC state cannot be reopened by fresh scans or local-only success.
+                native.coverage_roles = {"local"}
+                previous_global = native.reference._costmaps["global"]
+                native.receipt_cycle += 1
+                native.reference.observe_costmap_coverage(
+                    "global", replace(previous_global, cycle=native.receipt_cycle, status="invalid")
+                )
+                native.emit_scan()
+                refused = await managed.state_requests(client).request("state.get")
+                assert refused["localized"] and not refused["navigation_ready"]
+                native.coverage_roles = {"global", "local"}
+                native.complete_costmaps()
+                restored = await managed.state_requests(client).request("state.get")
+                assert restored["navigation_ready"]
             assert (await points.home()).waypoint.map_ref.map_id == first["map_ref"]["map_id"]
             if scenario == "matched":
                 selected = (await managed.request("map.catalog"))["selection"]

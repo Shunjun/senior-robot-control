@@ -232,7 +232,7 @@ def test_scan_a_b_invalid_updates_reference_tf_without_rpc_or_keyframe(monkeypat
     b = message(2, ranges=(4.0, 5.0))
     bridge.observe_scan(decode(a), a.scan.capture)
     assert ref.pose() == Pose2D(10.0, 0.0, 0.0)
-    assert ref.qualified(MapRef("map", 1), "R1")
+    assert ref._coverage and not ref.qualified(MapRef("map", 1), "R1")
     bridge.observe_scan(decode(b), b.scan.capture)
     assert len(transforms) == 2 and transforms[-1] == b.scan.capture.stamp
     assert outputs[-1][2] != outputs[-2][2] and len(outputs[-1][2]) == 2
@@ -259,7 +259,7 @@ def test_valid_empty_coverage_pending_and_new_reference_floor():
     a = message(1, ranges=(float("nan"), float("inf")))
     bridge.observe_scan(decode(a), a.scan.capture)
     assert outputs[-1][0] and outputs[-1][2] == ()
-    assert ref.qualified(MapRef("map", 1), "R1")
+    assert ref._coverage and not ref.qualified(MapRef("map", 1), "R1")
     b = message(2, ranges=(19.0, 19.0))
     b.odom_base.x = 40.0
     bridge.observe_scan(decode(b), b.scan.capture)
@@ -271,7 +271,7 @@ def test_valid_empty_coverage_pending_and_new_reference_floor():
     assert ref.pose() is None
     c = message(3)
     bridge.observe_scan(decode(c), c.scan.capture)
-    assert ref.qualified(MapRef("map", 1), "R2")
+    assert ref._coverage and not ref.qualified(MapRef("map", 1), "R2")
     bridge.invalidate_current("source_retired", retired=True)
     bridge.observe_scan(decode(message(4)), header(4))
     assert outputs[-1] == (False, "source_retired", (), 0)
@@ -382,7 +382,8 @@ def test_bridge_install_rejects_scan_sampled_before_new_reference():
     assert not outputs[-1][0] and ref.pose() is None
     fresh = message(3)
     bridge.observe_scan(decode(fresh), fresh.scan.capture)
-    assert outputs[-1][0] and ref.qualified(MapRef("map", 1), "R2")
+    assert outputs[-1][0] and ref._coverage
+    assert not ref.qualified(MapRef("map", 1), "R2")
 
 
 def test_adapter_requires_original_authenticated_native_receipt_metadata():
@@ -476,3 +477,215 @@ def test_real_graph_install_uses_c3_digest_independent_of_keyframe_order():
         assert cut["anchors"] == original_anchors  # native graph/capture wire stays intact
         digests.append(bases[0].anchor_digest)
     assert digests[0] == digests[1]
+
+
+def test_bootstrap_selection_two_roles_and_original_expiry(monkeypatch, tmp_path):
+    from dataclasses import replace
+
+    from senior_mapping.shared_scan import (
+        ContractSlot,
+        CostmapGeometry,
+        CurrentLayerCoverage,
+        ReferenceAuthorization,
+        ScanKey,
+        read_contract_record,
+    )
+
+    now = time.monotonic_ns()
+    monkeypatch.setattr(time, "monotonic_ns", lambda: now)
+    ref = reference()
+    scan = decode(message(10))
+    ref.observe("backend", header(10), Pose2D(0.0, 0.0, 0.0))
+    ref.set_current_coverage(True)
+    assert not ref.qualified(MapRef("map", 1), "R1")
+    geometry = CostmapGeometry(100, 100, 1.0, -50.0, -50.0)
+    auth = ReferenceAuthorization(
+        run_nonce="run",
+        host_boot_id="host",
+        owner_instance="owner",
+        revision=1,
+        authority_epoch=1,
+        status="selected",
+        map_id="map",
+        reference_revision=1,
+        reference_generation="R1",
+        backend_boot="backend",
+        source=dict(zip(tuple(ScanKey.__dataclass_fields__)[:-1], scan.key.source, strict=True)),
+        selection_token="selection",
+        selection_generation=1,
+        navigation_floor_steady_ns=now - 1,
+        geometry=geometry,
+        coverage_domain_epoch=1,
+        global_instance_permit="g",
+        local_instance_permit="l",
+        lease_until_steady_ns=scan.valid_until_steady_ns,
+    )
+    ref.set_navigation_authorization(auth, accepted_key=scan.key)
+    slot = ContractSlot(tmp_path / "reference.json", ReferenceAuthorization)
+    try:
+        slot.offer(auth)
+        slot.flush()
+        assert read_contract_record(slot.path, ReferenceAuthorization) == auth
+        import pytest
+
+        # The encoding cap rejects the whole candidate and preserves the previous inode.
+        overlarge = replace(
+            auth,
+            revision=2,
+            **{
+                name: "\0" * 128
+                for name in (
+                    "run_nonce",
+                    "host_boot_id",
+                    "owner_instance",
+                    "reason",
+                    "map_id",
+                    "reference_generation",
+                    "backend_boot",
+                    "selection_token",
+                    "anchor_digest",
+                    "expected_grid_id",
+                    "global_instance_permit",
+                    "local_instance_permit",
+                )
+            },
+        )
+        slot.offer(overlarge)
+        with pytest.raises(OSError, match="8KiB"):
+            slot.flush()
+        assert read_contract_record(slot.path, ReferenceAuthorization) == auth
+        slot.offer(replace(auth, revision=3))
+        slot.flush()
+        # An older candidate cannot replace a later observed authorization revision.
+        slot.offer(auth)
+        slot.flush()
+        assert read_contract_record(slot.path, ReferenceAuthorization).revision == 3
+
+        def receipt(role, cycle=1, status="ready"):
+            return CurrentLayerCoverage(
+                run_nonce="run",
+                host_boot_id="host",
+                owner_instance="owner",
+                authority_epoch=1,
+                role=role,
+                role_instance_permit={"global": "g", "local": "l"}[role],
+                plugin_instance=role,
+                cycle=cycle,
+                status=status,
+                map_id="map",
+                reference_revision=1,
+                reference_generation="R1",
+                backend_boot="backend",
+                key=scan.key,
+                sample_steady_ns=now,
+                scan_deadline_steady_ns=scan.valid_until_steady_ns,
+                coverage_domain_epoch=1,
+                geometry=geometry,
+                cycle_started_steady_ns=now,
+                cycle_completed_steady_ns=now,
+                valid_until_steady_ns=scan.valid_until_steady_ns,
+                master_frame="map",
+                master_geometry=geometry,
+                updated_bounds=(-50.0, -50.0, 50.0, 50.0),
+                global_all_hits_covered=True,
+                local_in_window_hits_covered=True,
+                transform_valid=True,
+                cleanup_complete=True,
+            )
+
+        ref.observe_costmap_coverage("global", receipt("global"))
+        assert not ref.qualified(MapRef("map", 1), "R1")
+        ref.observe_costmap_coverage("local", receipt("local"))
+        assert ref.qualified(MapRef("map", 1), "R1")
+        # A later accepted Q does not invalidate an unexpired completed costmap cycle.
+        ref.set_navigation_authorization(
+            replace(auth, revision=2), accepted_key=replace(scan.key, sequence=11)
+        )
+        assert ref.qualified(MapRef("map", 1), "R1")
+        ref.observe_costmap_coverage("global", receipt("global", 2, "invalid"))
+        ref.set_current_coverage(True)
+        ref.observe_costmap_coverage("local", receipt("local", 2))
+        ref.observe_costmap_coverage("global", receipt("global", 1))
+        assert not ref.qualified(MapRef("map", 1), "R1")
+        ref.observe_costmap_coverage("global", receipt("global", 3))
+        assert ref.qualified(MapRef("map", 1), "R1")
+        # A new plugin instance cannot authorize itself with an existing role permit.
+        ref.observe_costmap_coverage(
+            "global", replace(receipt("global", 4), plugin_instance="foreign")
+        )
+        assert not ref.qualified(MapRef("map", 1), "R1")
+        ref.observe_costmap_coverage("global", receipt("global", 5))
+        # Exercise the actual independent receipt-file reader, including a bad inode.
+        from senior_mapping.navigation_bridge import NativeNavigationBridge
+
+        bridge = NativeNavigationBridge(NS(), ref, None)
+        bridge.contract = dict(contract_directory=str(tmp_path))
+        bridge.authorization_slot = slot
+        writers = {
+            role: ContractSlot(tmp_path / (role + "-coverage.json"), CurrentLayerCoverage)
+            for role in ("global", "local")
+        }
+        try:
+            for role, writer in writers.items():
+                writer.offer(receipt(role, 6))
+                writer.flush()
+            bridge.poll_contract()
+            assert ref.qualified(MapRef("map", 1), "R1")
+            writers["global"].path.unlink()
+            writers["global"].path.symlink_to(slot.path)
+            bridge.poll_contract()
+            ref.set_current_coverage(True)
+            assert not ref.qualified(MapRef("map", 1), "R1")
+            writers["global"].offer(receipt("global", 7))
+            writers["global"].flush()
+            bridge.poll_contract()
+            assert ref.qualified(MapRef("map", 1), "R1")
+        finally:
+            for writer in writers.values():
+                writer.close()
+        # Only the controller owner can select a new local instance using a rotated permit.
+        auth = replace(auth, revision=3, local_instance_permit="l2")
+        ref.set_navigation_authorization(auth, accepted_key=scan.key)
+        ref.observe_costmap_coverage("local", receipt("local", 20))
+        assert not ref.qualified(MapRef("map", 1), "R1")
+        ref.observe_costmap_coverage(
+            "local",
+            replace(
+                receipt("local", 1), role_instance_permit="l2", plugin_instance="restarted-local"
+            ),
+        )
+        assert ref.qualified(MapRef("map", 1), "R1")
+        # Domain changes clear both completed cycles, even though MapRef/R did not change.
+        ref.set_navigation_authorization(
+            replace(auth, revision=4, coverage_domain_epoch=2), accepted_key=scan.key
+        )
+        ref.observe_costmap_coverage("global", receipt("global", 8))
+        assert not ref.qualified(MapRef("map", 1), "R1")
+        ref.set_navigation_authorization(replace(auth, revision=5), accepted_key=scan.key)
+        ref.observe_costmap_coverage("global", receipt("global", 9))
+        ref.observe_costmap_coverage(
+            "local",
+            replace(
+                receipt("local", 2), role_instance_permit="l2", plugin_instance="restarted-local"
+            ),
+        )
+        assert ref.qualified(MapRef("map", 1), "R1")
+        assert ref.state("idle", navigation_ready=True)["navigation_ready"]
+        now = scan.valid_until_steady_ns
+        assert not ref.qualified(MapRef("map", 1), "R1")
+        assert not ref.state("idle", navigation_ready=True)["navigation_ready"]
+    finally:
+        slot.close()
+
+
+def test_static_fallback_remains_qualified_without_navigation_contract():
+    fallback = NS(
+        qualified=lambda ref, generation: ref == MapRef("static", 1) and generation == "G",
+        pose=lambda: Pose2D(1.0, 2.0, 0.0),
+        state=lambda *a, **k: dict(navigation_ready=k["navigation_ready"]),
+    )
+    ref = LiveMappingReference(NS(), fallback)
+    assert not ref.enabled
+    assert ref.qualified(MapRef("static", 1), "G")
+    assert ref.pose() == Pose2D(1.0, 2.0, 0.0)
+    assert ref.state("manual", navigation_ready=True)["navigation_ready"]

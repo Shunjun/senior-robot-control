@@ -10,6 +10,7 @@ from collections.abc import Callable
 from typing import Any
 
 from senior_mapping.references import rebase_pose
+from senior_mapping.shared_scan import CurrentLayerCoverage, ReferenceAuthorization, ScanKey
 from senior_mapping.workspace import WorkspaceGrid
 
 from vehicle_core.sample_time import SampleTime
@@ -32,6 +33,11 @@ class LiveMappingReference:
         self._source: tuple[Any, ...] | None = None
         self._latest: tuple[SampleTime, Pose2D, int] | None = None
         self._available = False
+        self._authorization: ReferenceAuthorization | None = None
+        self._accepted_key = None
+        self._costmaps: dict[str, CurrentLayerCoverage] = {}
+        self._instances: dict[str, str] = {}
+        self._cycles: dict[str, int] = {}
         self._coverage = False
         self.coverage_reason = "current_scan_unavailable"
         self._map_owner: Callable[[], bool] | None = None
@@ -42,6 +48,10 @@ class LiveMappingReference:
         self._source = self._latest = None
 
     def withdraw(self) -> None:
+        self._authorization = None
+        self._costmaps.clear()
+        self._instances.clear()
+        self._cycles.clear()
         self._grid = self._map_basis = self._odom_basis = None
         self._generation = None
         self._available = False
@@ -54,6 +64,132 @@ class LiveMappingReference:
     def set_current_coverage(self, valid: bool, reason: str | None = None) -> None:
         self._coverage = valid
         self.coverage_reason = reason
+
+    def set_navigation_authorization(
+        self, record: ReferenceAuthorization, *, accepted_key: ScanKey | None = None
+    ) -> None:
+        previous = self._authorization
+        if (
+            previous is not None
+            and record.owner_instance == previous.owner_instance
+            and (
+                record.revision <= previous.revision
+                or record.authority_epoch < previous.authority_epoch
+            )
+        ):
+            return
+        if previous is None or any(
+            getattr(previous, name) != getattr(record, name)
+            for name in (
+                "run_nonce",
+                "owner_instance",
+                "authority_epoch",
+                "coverage_domain_epoch",
+                "geometry",
+            )
+        ):
+            self._costmaps.clear()
+        for role in ("global", "local"):
+            permit = role + "_instance_permit"
+            if previous is None or getattr(previous, permit) != getattr(record, permit):
+                self._costmaps.pop(role, None)
+                self._instances.pop(role, None)
+                self._cycles.pop(role, None)
+        self._authorization = record
+        self._accepted_key = accepted_key
+        if record.status != "selected":
+            self._costmaps.clear()
+
+    def observe_costmap_coverage(self, role: str, record: CurrentLayerCoverage) -> None:
+        auth = self._authorization
+        if role not in ("global", "local"):
+            raise ValueError("unknown costmap role")
+        if auth is None:
+            return
+        # Foreign/stale role records cannot supersede a newly rotated permit.
+        if (
+            any(
+                getattr(record, name) != getattr(auth, name)
+                for name in (
+                    "run_nonce",
+                    "host_boot_id",
+                    "owner_instance",
+                    "authority_epoch",
+                )
+            )
+            or record.role != role
+            or record.role_instance_permit != getattr(auth, role + "_instance_permit")
+        ):
+            return
+        instance = self._instances.get(role)
+        if instance is not None and record.plugin_instance != instance:
+            self._costmaps.pop(role, None)
+            return
+        if record.cycle <= self._cycles.get(role, -1):
+            return
+        self._instances[role] = record.plugin_instance
+        self._cycles[role] = record.cycle
+        self._costmaps[role] = record
+
+    def invalidate_costmap_coverage(self, role: str) -> None:
+        self._costmaps.pop(role, None)
+
+    def _navigation_covered(self) -> bool:
+        auth, key = self._authorization, self._accepted_key
+        now = time.monotonic_ns()
+        if (
+            not self._coverage
+            or auth is None
+            or auth.status != "selected"
+            or key is None
+            or auth.source
+            != dict(zip(tuple(ScanKey.__dataclass_fields__)[:-1], key.source, strict=True))
+            or not now < auth.lease_until_steady_ns
+            or self._grid is None
+            or auth.map_id != self._grid.map_ref.map_id
+            or auth.reference_revision != self._grid.map_ref.reference_revision
+            or auth.reference_generation != self._generation
+            or self._latest is None
+            or self._latest[0].sample_steady_ns <= auth.navigation_floor_steady_ns
+        ):
+            return False
+        for role in ("global", "local"):
+            row = self._costmaps.get(role)
+            if (
+                row is None
+                or row.status != "ready"
+                or row.key is None
+                or any(
+                    getattr(row, name) != getattr(auth, name)
+                    for name in (
+                        "map_id",
+                        "reference_revision",
+                        "reference_generation",
+                        "backend_boot",
+                        "coverage_domain_epoch",
+                        "geometry",
+                    )
+                )
+                or tuple(row.key.source) != tuple(key.source)
+                or row.key.sequence > key.sequence
+            ):
+                return False
+            if (
+                not max(auth.acceptance_floor_steady_ns, auth.navigation_floor_steady_ns)
+                < row.sample_steady_ns
+                <= row.cycle_completed_steady_ns
+                <= now
+                or not now < min(row.valid_until_steady_ns, auth.lease_until_steady_ns)
+                or row.master_frame not in (("map",) if role == "global" else ("map", "odom"))
+                or not row.transform_valid
+                or not row.cleanup_complete
+                or not getattr(
+                    row,
+                    role + ("_all_hits_covered" if role == "global" else "_in_window_hits_covered"),
+                )
+            ):
+                return False
+        return True
 
     def install(
         self,
@@ -160,7 +296,7 @@ class LiveMappingReference:
             and ref == self._grid.map_ref
             and generation == self._generation
             and self.pose() is not None
-            and self._coverage
+            and self._navigation_covered()
         )
 
     def state(
@@ -184,7 +320,9 @@ class LiveMappingReference:
             "map_generation": self._generation if grid else None,
             "localization_generation": self._generation if pose else None,
             "map_grid_id": grid.grid_id if grid else None,
-            "navigation_ready": navigation_ready and pose is not None and self._coverage,
+            "navigation_ready": navigation_ready
+            and pose is not None
+            and self._navigation_covered(),
             "current_coverage_reason": self.coverage_reason,
             "robot_pose": None if pose is None else {"x": pose.x, "y": pose.y, "yaw": pose.yaw},
             "scan_points": [],
