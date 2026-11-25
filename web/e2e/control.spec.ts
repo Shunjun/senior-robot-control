@@ -347,6 +347,7 @@ for (const viewport of [
         ];
         return {
           edge: card.bottom - bounds.bottom,
+          operationsClear: footer.closest("[data-primary]")!.querySelector(".workspace-operations")!.getBoundingClientRect().bottom <= footer.querySelector('[aria-label="地图图例"]')!.getBoundingClientRect().top,
           toolsClear:
             footer
               .querySelector('[aria-label="放大"]')!
@@ -368,6 +369,7 @@ for (const viewport of [
       });
       expect(geometry.contained).toBe(true);
       expect(geometry.toolsClear).toBe(true);
+      expect(geometry.operationsClear).toBe(true);
       // The approved phone dock is 140px, with 32px visible items; 44px boxes would change the layout.
       followup.visibleTargetGeometry = geometry.touchTargets;
       expect(geometry.edge).toBeCloseTo(viewport.width === 390 ? 10 : 12, 0);
