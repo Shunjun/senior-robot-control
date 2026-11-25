@@ -6,6 +6,9 @@ import { VehicleLogs } from "../logs/VehicleLogs";
 import type { WorkspacePage } from "./useWorkspaceView";
 import { useVehicleView } from "./useVehicleView";
 interface VehicleToolsProps {
+  // Compatible: standalone consumers can omit session actions.
+  onLogout?: (() => void) | undefined;
+  loggingOut?: boolean | undefined;
   port?: VehiclePort;
   page?: WorkspacePage;
   onBack?: () => void;
@@ -13,6 +16,8 @@ interface VehicleToolsProps {
   onCameraChange?: (value: boolean) => void;
 }
 export function VehicleTools({
+  onLogout,
+  loggingOut,
   port,
   page = "control",
   onBack,
@@ -25,6 +30,8 @@ export function VehicleTools({
       <div hidden={page !== "settings"}>
         <VehicleSettings
           onBack={onBack}
+          onLogout={onLogout}
+          loggingOut={loggingOut}
           cameraOn={cameraOn}
           onCameraChange={onCameraChange}
           {...(port ? { port } : {})}

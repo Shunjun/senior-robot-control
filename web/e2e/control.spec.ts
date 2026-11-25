@@ -33,12 +33,42 @@ for (const viewport of [
           return {
             x: r.x, y: r.y, width: r.width, height: r.height,
             hit: element.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)),
+            hitTarget: document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)?.outerHTML.slice(0, 400),
+            text: element.textContent,
           };
         });
-        expect(result.hit).toBe(true);
+        expect(result.hit, JSON.stringify(result)).toBe(true);
         return result;
       }
+      async function typography(name: string) {
+        const metrics = await page.evaluate(() => {
+          const probe = document.createElement("span");
+          probe.className = "text-xs";
+          document.body.appendChild(probe);
+          const minimum = Number.parseFloat(getComputedStyle(probe).fontSize);
+          probe.remove();
+          const sizes: Array<{ text: string; size: number; tag: string }> = [];
+          const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+          while (walker.nextNode()) {
+            const node = walker.currentNode;
+            const element = node.parentElement;
+            if (!node.textContent?.trim() || !element?.checkVisibility() || element.closest(".app-sr-only, .settings-sr-only, script, style")) continue;
+            if (!element.getBoundingClientRect().width) continue;
+            sizes.push({ text: node.textContent.trim().slice(0, 80), size: Number.parseFloat(getComputedStyle(element).fontSize), tag: element.tagName });
+          }
+          return { minimum, sizes, width: innerWidth, scrollWidth: document.documentElement.scrollWidth };
+        });
+        expect(metrics.sizes.filter(s => s.size < metrics.minimum), name).toEqual([]);
+        expect(metrics.scrollWidth, name).toBeLessThanOrEqual(viewport.width);
+        followup[`typography-${name}`] = metrics;
+      }
+      async function expandedTypography(name: string) {
+        const opened = await page.locator("details").evaluateAll(elements => elements.filter(e => e.checkVisibility() && !(e as HTMLDetailsElement).open).map(e => { (e as HTMLDetailsElement).open = true; e.setAttribute("data-typography-opened", ""); return true; }));
+        await typography(`${name}-details-${opened.length}`);
+        await page.locator("details[data-typography-opened]").evaluateAll(elements => elements.forEach(e => { (e as HTMLDetailsElement).open = false; e.removeAttribute("data-typography-opened"); }));
+      }
       async function capture(name: string) {
+        await expandedTypography(name);
         await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
       }
       await page.setViewportSize(viewport);
@@ -76,6 +106,12 @@ for (const viewport of [
       await expect(
         page.getByRole("button", { name: "急停", exact: true }),
       ).toHaveCount(0);
+      await page.getByRole("button", { name: "设置", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "车辆设置", exact: true })).toBeVisible();
+      followup.emptyLogout = await boundsAndHit(page.getByRole("button", { name: "退出登录", exact: true }));
+      await capture("empty-settings");
+      await page.getByRole("button", { name: "返回控制 ↗", exact: true }).click();
+      await expect(page.getByRole("heading", { name: "还没有选择车辆", exact: true })).toBeVisible();
       await expect(
         page.getByRole("navigation", { name: "设备列表" }),
       ).toHaveCount(0);
@@ -181,9 +217,26 @@ for (const viewport of [
         w.stickOwner = document.querySelector("[aria-label=驾驶摇杆]");
       });
       const measurement = page.getByTestId("measured-speed");
-      expect(
-        await measurement.evaluate((el) => getComputedStyle(el).fontSize),
-      ).toBe(viewport.width === 390 ? "29px" : "42px");
+      const standardReadout = await page.evaluate((mobile) => {
+        const probe = document.createElement("span");
+        probe.style.fontSize = mobile ? "var(--text-3xl)" : "var(--text-4xl)";
+        document.body.appendChild(probe);
+        const size = getComputedStyle(probe).fontSize;
+        probe.remove();
+        return size;
+      }, viewport.width === 390);
+      const readoutSize = await measurement.evaluate(el => getComputedStyle(el).fontSize);
+      expect(readoutSize).toBe(standardReadout);
+      followup.readout = { actual: readoutSize, standard: standardReadout };
+      const readingBounds = await page.getByLabel("车辆测量读数", { exact: true }).evaluate(element => {
+        const parent = element.getBoundingClientRect();
+        return Array.from(element.children).map(child => {
+          const rect = child.getBoundingClientRect();
+          return { text: child.textContent, contained: rect.left >= parent.left && rect.right <= parent.right };
+        });
+      });
+      expect(readingBounds.every(reading => reading.contained)).toBe(true);
+      followup.readingBounds = readingBounds;
       await expect(
         page.getByRole("button", { name: "释放控制权", exact: true }),
       ).toHaveCount(0);
@@ -205,7 +258,59 @@ for (const viewport of [
           );
         }),
       ).toBeLessThan(0.5);
-      await page.getByRole("button", { name: "交换主次画面" }).click();
+      const viewportEvidence: Record<string, unknown> = {};
+      async function mapGeometry(stage: string) {
+        await expect.poll(async () => map.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          const box = element.querySelector("svg")!.viewBox.baseVal;
+          return Math.max(Math.abs(bounds.width - box.width), Math.abs(bounds.height - box.height));
+        })).toBeLessThan(0.01);
+        const geometry = await map.evaluate(element => {
+          const bounds = element.getBoundingClientRect();
+          const zoom = Number(element.getAttribute("data-zoom"));
+          const center = { x: Number(element.getAttribute("data-center-x")), y: Number(element.getAttribute("data-center-y")) };
+          return {
+            bounds: { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height }, zoom, center,
+            corners: [0, bounds.width].flatMap(x => [0, bounds.height].map(y => ({
+              x: center.x + (x - bounds.width / 2) / zoom,
+              y: center.y - (y - bounds.height / 2) / zoom,
+            }))),
+            sameOwner: (window as unknown as Record<string, unknown>).mapOwner === element,
+          };
+        });
+        expect(geometry.sameOwner).toBe(true);
+        viewportEvidence[stage] = geometry;
+        return geometry;
+      }
+      type Geometry = Awaited<ReturnType<typeof mapGeometry>>;
+      function containsRange(outer: Geometry, selected: Geometry) {
+        expect(outer.center.x).toBeCloseTo(selected.center.x, 9);
+        expect(outer.center.y).toBeCloseTo(selected.center.y, 9);
+        for (const corner of selected.corners) {
+          const x = outer.bounds.width / 2 + (corner.x - outer.center.x) * outer.zoom;
+          const y = outer.bounds.height / 2 - (corner.y - outer.center.y) * outer.zoom;
+          expect(x).toBeGreaterThanOrEqual(-0.05);
+          expect(x).toBeLessThanOrEqual(outer.bounds.width + 0.05);
+          expect(y).toBeGreaterThanOrEqual(-0.05);
+          expect(y).toBeLessThanOrEqual(outer.bounds.height + 0.05);
+        }
+      }
+      const swap = page.getByRole("button", { name: "交换主次画面" });
+      const mainRange = await mapGeometry("main-initial");
+      // The real fixture grid has arrived; the temporary empty map must not own initialization.
+      expect(mainRange.center.x).toBeCloseTo(-0.11915569905747692, 9);
+      expect(mainRange.center.y).toBeCloseTo(0.4944788464952019, 9);
+      await page.screenshot({ path: testInfo.outputPath("map-main-initial.png"), fullPage: true });
+      for (let cycle = 0; cycle < 3; cycle++) {
+        await swap.click();
+        containsRange(await mapGeometry(`mini-${cycle}`), mainRange);
+        await swap.click();
+        const returned = await mapGeometry(`main-return-${cycle}`);
+        containsRange(returned, mainRange);
+        expect(returned.zoom).toBeCloseTo(mainRange.zoom, 9);
+      }
+      await swap.click();
+      containsRange(await mapGeometry("mini-before-zoom"), mainRange);
       async function checkScale(stage: string) {
         const scale = await page.getByLabel("地图比例尺", { exact: true }).evaluate(element => {
           const line = element.querySelector("i")!;
@@ -232,12 +337,68 @@ for (const viewport of [
       }
       await checkScale("before");
       const zoomBefore = Number(await map.getAttribute("data-zoom"));
+      viewportEvidence.zoomTool = await boundsAndHit(page.getByRole("button", { name: "放大", exact: true }));
       await page.getByRole("button", { name: "放大", exact: true }).click();
       expect(Number(await map.getAttribute("data-zoom"))).toBeGreaterThan(
         zoomBefore,
       );
       await checkScale("after");
+      const miniZoomed = await mapGeometry("mini-zoomed");
+      expect(miniZoomed.zoom).toBeCloseTo(zoomBefore * 1.25, 9);
+      // The selected range is the original logical rectangle divided by the user zoom.
+      const zoomedRange = { ...mainRange, corners: mainRange.corners.map(point => ({
+        x: mainRange.center.x + (point.x - mainRange.center.x) / 1.25,
+        y: mainRange.center.y + (point.y - mainRange.center.y) / 1.25,
+      })) };
+      containsRange(miniZoomed, zoomedRange);
+      await swap.click();
+      const mainZoomed = await mapGeometry("main-after-mini-zoom");
+      containsRange(mainZoomed, zoomedRange);
+      expect(mainZoomed.zoom).toBeCloseTo(mainRange.zoom * 1.25, 9);
+      await swap.click();
+      expect((await mapGeometry("mini-zoom-return")).zoom).toBeCloseTo(miniZoomed.zoom, 9);
+      // Native wheel and pointer input in clear mini-map space use the actual px/m.
+      await map.scrollIntoViewIfNeeded();
+      const beforeWheel = await mapGeometry("mini-before-wheel");
+      // Native wheel coordinates are integral CSS pixels in mobile Chrome.
+      // Use integral client positions, retaining fractional element bounds.
+      const client = { x: Math.ceil(beforeWheel.bounds.x + 12), y: Math.ceil(beforeWheel.bounds.y + 12) };
+      const anchor = { x: client.x - beforeWheel.bounds.x, y: client.y - beforeWheel.bounds.y };
+      viewportEvidence.wheelInput = { client, anchor };
+      const anchorWorld = {
+        x: beforeWheel.center.x + (anchor.x - beforeWheel.bounds.width / 2) / beforeWheel.zoom,
+        y: beforeWheel.center.y - (anchor.y - beforeWheel.bounds.height / 2) / beforeWheel.zoom,
+      };
+      await page.mouse.move(client.x, client.y);
+      await page.mouse.wheel(0, -110);
+      await expect.poll(async () => Number(await map.getAttribute("data-zoom"))).toBeGreaterThan(beforeWheel.zoom);
+      const wheeled = await mapGeometry("mini-after-wheel");
+      expect(wheeled.center.x + (anchor.x - wheeled.bounds.width / 2) / wheeled.zoom).toBeCloseTo(anchorWorld.x, 8);
+      expect(wheeled.center.y - (anchor.y - wheeled.bounds.height / 2) / wheeled.zoom).toBeCloseTo(anchorWorld.y, 8);
+      await page.mouse.down();
+      await page.mouse.move(client.x + 20, client.y + 6, { steps: 3 });
+      await page.mouse.up();
+      const panned = await mapGeometry("mini-panned");
+      expect(panned.center.x).toBeCloseTo(wheeled.center.x - 20 / wheeled.zoom, 8);
+      expect(panned.center.y).toBeCloseTo(wheeled.center.y + 6 / wheeled.zoom, 8);
+      await swap.click();
+      const mainPanned = await mapGeometry("main-after-mini-pan");
+      expect(mainPanned.center).toEqual(panned.center);
+      expect(mainPanned.zoom).toBeCloseTo(mainZoomed.zoom * wheeled.zoom / miniZoomed.zoom, 8);
+      await swap.click();
+      const miniReturned = await mapGeometry("mini-pan-return");
+      expect(miniReturned.center).toEqual(panned.center);
+      expect(miniReturned.zoom).toBeCloseTo(panned.zoom, 9);
+      viewportEvidence.fitTool = await boundsAndHit(page.getByRole("button", { name: "适应窗口", exact: true }));
       await page.getByRole("button", { name: "适应窗口", exact: true }).click();
+      const miniFitted = await mapGeometry("mini-fit");
+      await checkScale("fit");
+      await swap.click();
+      const mainFitted = await mapGeometry("main-fit-return");
+      containsRange(miniFitted, mainFitted);
+      await swap.click();
+      expect((await mapGeometry("mini-fit-return")).zoom).toBeCloseTo(miniFitted.zoom, 9);
+      followup.mapViewport = viewportEvidence;
       await expect(
         page
           .getByRole("button", { name: "放大", exact: true })
@@ -248,7 +409,8 @@ for (const viewport of [
         path: testInfo.outputPath("mini-map.png"),
         fullPage: true,
       });
-      await map.click({ position: { x: 40, y: 40 } });
+      // The enlarged auxiliary text wraps the mini-map toolbar; click clear map space.
+      await map.click({ position: { x: 12, y: 12 } });
       expect(
         await page.evaluate(() =>
           document
@@ -293,6 +455,7 @@ for (const viewport of [
         ];
         return {
           edge: card.bottom - bounds.bottom,
+          operationsClear: footer.closest("[data-primary]")!.querySelector(".workspace-operations")!.getBoundingClientRect().bottom <= footer.querySelector('[aria-label="地图图例"]')!.getBoundingClientRect().top,
           toolsClear:
             footer
               .querySelector('[aria-label="放大"]')!
@@ -314,6 +477,7 @@ for (const viewport of [
       });
       expect(geometry.contained).toBe(true);
       expect(geometry.toolsClear).toBe(true);
+      expect(geometry.operationsClear).toBe(true);
       // The approved phone dock is 140px, with 32px visible items; 44px boxes would change the layout.
       followup.visibleTargetGeometry = geometry.touchTargets;
       expect(geometry.edge).toBeCloseTo(viewport.width === 390 ? 10 : 12, 0);
@@ -345,6 +509,15 @@ for (const viewport of [
         await page.screenshot({ path: testInfo.outputPath("followup-layers-feedback-viewport.png") });
       }
       await page.evaluate(() => window.scrollTo(0, 0));
+      const readingToastOverlap = await page.getByLabel("车辆测量读数", { exact: true }).evaluate(element => {
+        const toast = document.querySelector(".workspace-toast");
+        if (!toast) return false;
+        const a = element.getBoundingClientRect(), b = toast.getBoundingClientRect();
+        return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
+      });
+      expect(readingToastOverlap).toBe(false);
+      followup.readingToastOverlap = readingToastOverlap;
+      await expandedTypography("drive");
       await page.screenshot({
         path: testInfo.outputPath("drive.png"),
         fullPage: true,
@@ -379,6 +552,7 @@ for (const viewport of [
       ).toBeVisible();
       await expect(page.locator("img")).toHaveCount(0);
       await expect(page.getByText(/安全 fixture：逐行日志/)).toBeVisible();
+      await capture("logs");
       await page.getByRole("button", { name: "设置", exact: true }).click();
       await expect(page.getByLabel("低速线速度上限")).toHaveValue("1.8");
       await expect(page.getByLabel("高速角速度请求上限")).toBeVisible();
@@ -390,14 +564,17 @@ for (const viewport of [
       await page
         .getByRole("switch", { name: "显示摄像头预览", exact: true })
         .click();
+      await capture("settings-camera");
       await page
         .getByRole("button", { name: "状态与性能", exact: true })
         .click();
+      await capture("settings-status");
       await expect(
         page.getByText("车辆诊断与固定回波校准", { exact: true }),
       ).toBeVisible();
       await page.getByRole("button", { name: "日志配置", exact: true }).click();
       await expect(page.getByLabel(/^保留时间（小时）/)).toBeVisible();
+      await capture("settings-logging");
       await page.getByRole("button", { name: "驾驶与操控", exact: true }).click();
       await expect(page.getByLabel("低速线速度上限")).toHaveValue("2.16");
       await page.getByRole("button", { name: "切换速度单位" }).click();
@@ -584,6 +761,7 @@ for (const viewport of [
         ),
       ).toBe(true);
       await page.evaluate(() => window.scrollTo(0, 0));
+      await expandedTypography("tasks");
       await page.screenshot({
         path: testInfo.outputPath("tasks.png"),
         fullPage: true,
@@ -658,6 +836,16 @@ for (const viewport of [
             }
           ).__wheelFixture.calls,
       );
+      await page.getByRole("button", { name: "设置", exact: true }).click();
+      const logout = page.locator(".settings-card > header").getByRole("button", { name: "退出登录", exact: true });
+      await expect(logout).toBeEnabled();
+      followup.logout = await boundsAndHit(logout);
+      await capture("settings-logout");
+      await logout.click();
+      await expect(page.getByRole("heading", { name: "登录控制台", exact: true })).toBeVisible();
+      const deletes = await page.evaluate(() => (window as unknown as { __wheelFixture: { calls: Array<{ http?: string; method?: string }> } }).__wheelFixture.calls.filter(c => c.http === "/api/session" && c.method === "DELETE"));
+      expect(deletes).toHaveLength(1);
+      await capture("logged-out");
       await writeFile(testInfo.outputPath("followup-bounds.json"), JSON.stringify(followup, null, 2));
       expect(calls.some((call) => call.type === "control.release")).toBe(true);
       expect(
@@ -669,6 +857,96 @@ for (const viewport of [
           timezone: "Asia/Shanghai",
         },
       });
+    });
+  });
+}
+
+// Real browser geometry: the same legal center travel drives input and drawing.
+for (const viewport of [{ width: 1280, height: 770 }, { width: 390, height: 844 }]) {
+  test.describe(`joystick radius ${viewport.width}px`, () => {
+    test.use({ viewport });
+    test('pointer follows the legal travel and releases to center', async ({ page }, testInfo) => {
+      await page.route('**/*', route => {
+        const url = new URL(route.request().url());
+        return url.origin === new URL(baseURL!).origin &&
+          (url.pathname.startsWith('/robots/') || url.pathname.startsWith('/assets/') ||
+            ['/control-fixture.js', '/preview-extension.js'].includes(url.pathname))
+          ? route.continue() : route.abort();
+      });
+      await page.addInitScript({ path: fixture });
+      await page.goto(`${baseURL}/robots/fixture-A`);
+      const stick = page.getByRole('group', { name: '驾驶摇杆' });
+      await page.getByRole('button', { name: '获取控制权', exact: true }).click();
+      await expect(stick).toHaveAttribute('aria-disabled', 'false');
+      await stick.scrollIntoViewIfNeeded();
+      const geometry = () => stick.evaluate(pad => {
+        const disc = pad.getBoundingClientRect();
+        const knob = pad.querySelector('.drive-single-knob')!.getBoundingClientRect();
+        const style = getComputedStyle(pad);
+        const border = Math.max(...[style.borderTopWidth, style.borderRightWidth,
+          style.borderBottomWidth, style.borderLeftWidth].map(Number.parseFloat));
+        return { cx: disc.x + disc.width / 2, cy: disc.y + disc.height / 2,
+          kx: knob.x + knob.width / 2, ky: knob.y + knob.height / 2,
+          discWidth: disc.width, knobWidth: knob.width, border,
+          travel: Math.min(disc.width, disc.height) / 2 - border - Math.max(knob.width, knob.height) / 2,
+          linear: Number((pad as HTMLElement).dataset.linear), turn: Number((pad as HTMLElement).dataset.turn) };
+      });
+      const initial = await geometry();
+      expect(initial.discWidth).toBe(viewport.width === 390 ? 142 : 184);
+      const { cx, cy, travel } = initial;
+      const evidence: unknown[] = [initial];
+      await page.mouse.move(cx, cy);
+      await page.mouse.down();
+      for (const [x, y] of [[.2, -.2], [.4, -.4], [.37, -.43]]) {
+        await page.mouse.move(cx + x! * travel, cy + y! * travel);
+        await expect.poll(async () => {
+          const g = await geometry();
+          return Math.hypot(g.kx - (cx + x! * travel), g.ky - (cy + y! * travel));
+        }).toBeLessThanOrEqual(Math.SQRT2 * .025 * travel + .05);
+        const g = await geometry();
+        expect(g.linear).toBe(Math.round(-y! * 20) / 20);
+        expect(g.turn).toBe(Math.round(-x! * 20) / 20);
+        evidence.push({ pointer: { x: cx + x! * travel, y: cy + y! * travel }, ...g });
+      }
+      await page.screenshot({ path: testInfo.outputPath('joystick-free.png') });
+      // .55 rounds with sqrt(1-.55²) to (.55,.85): output norm > 1 is preserved,
+      // while the handle's final rendering must stay inside the legal circle.
+      for (const [x, y] of [[0, -1], [.55, -Math.sqrt(1 - .55 ** 2)], [2, -2]]) {
+        await page.mouse.move(cx + x! * travel, cy + y! * travel);
+        await expect.poll(async () => {
+          const g = await geometry();
+          return Math.hypot(g.kx - cx, g.ky - cy);
+        }).toBeLessThanOrEqual(travel + .05);
+        const g = await geometry();
+        expect(Math.abs(g.linear)).toBeLessThanOrEqual(1);
+        expect(Math.abs(g.turn)).toBeLessThanOrEqual(1);
+        if (x === 0) expect([g.linear, g.turn]).toEqual([1, 0]);
+        if (x === .55) expect([g.linear, g.turn]).toEqual([.85, -.55]);
+        if (x === 2) expect([g.linear, g.turn]).toEqual([.7, -.7]);
+        evidence.push({ pointer: { x: cx + x! * travel, y: cy + y! * travel }, ...g });
+      }
+      await page.mouse.up();
+      await expect(stick).toHaveAttribute('data-linear', '0');
+      await expect(stick).toHaveAttribute('data-turn', '0');
+      const released = await geometry();
+      expect(Math.hypot(released.kx - cx, released.ky - cy)).toBeLessThan(.05);
+      await stick.focus();
+      await page.keyboard.down('ArrowUp');
+      await expect.poll(async () => (await geometry()).ky).toBeCloseTo(cy - travel, 1);
+      await page.keyboard.up('ArrowUp');
+      await expect(stick).toHaveAttribute('data-linear', '0');
+      const calls = await page.evaluate(() => (window as unknown as {
+        __wheelFixture: { calls: Array<{ type?: string; payload?: { linear?: number; turn?: number } }> }
+      }).__wheelFixture.calls.filter(c => c.type === 'drive.intent' || c.type === 'drive.stop'));
+      expect(calls.some(c => c.type === 'drive.stop')).toBe(true);
+      const intents = calls.filter(c => c.type === 'drive.intent');
+      expect(intents.length).toBeGreaterThan(0);
+      for (const intent of intents) {
+        expect(Math.abs(intent.payload!.linear!)).toBeLessThanOrEqual(1);
+        expect(Math.abs(intent.payload!.turn!)).toBeLessThanOrEqual(1);
+      }
+      await page.getByRole('button', { name: '释放控制权', exact: true }).click();
+      await writeFile(testInfo.outputPath('joystick-radius.json'), JSON.stringify({ evidence, released, calls }, null, 2));
     });
   });
 }

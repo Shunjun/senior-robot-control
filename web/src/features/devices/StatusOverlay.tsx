@@ -17,7 +17,7 @@ const ui = {
     "border-solid border-line rounded-card shadow-ui-card [&>div[role=group]]:mt-3 [&>div[role=group]]:mr-0 [&>div[role=group]]:mb-3 [&>div[role=group]]:ml-0"
   ].join(" "),
   head: [
-    "status-overlay-head flex items-center justify-between gap-2.5 [&_h2]:text-[15px] [&_h2]:font-medium [&_h2]:mt-0",
+    "status-overlay-head flex items-center justify-between gap-2.5 [&_h2]:text-base [&_h2]:font-medium [&_h2]:mt-0",
     "[&_h2]:mr-0 [&_h2]:mb-[5px] [&_h2]:ml-0 [&_button]:pt-1 [&_button]:pr-[7px] [&_button]:pb-1 [&_button]:pl-[7px] [&_button]:bg-none",
     "[&_button]:bg-transparent [&_button]:border-0 [&_button]:border-none [&_button]:border-current [&_button]:text-quiet"
   ].join(" "),
@@ -25,14 +25,14 @@ const ui = {
     "status-overlay-motion-readings flex items-center justify-between gap-2.5"
   ].join(" "),
   tiny: [
-    "status-overlay-tiny text-[10px] text-muted"
+    "status-overlay-tiny text-xs text-muted"
   ].join(" "),
   speed: [
-    "status-overlay-speed font-light text-[42px] leading-[normal] font-number tracking-[-1.4px] [&_small]:font-normal [&_small]:text-[11px]",
+    "status-overlay-speed font-light text-4xl leading-[normal] font-number tracking-[-1.4px] [&_small]:font-normal [&_small]:text-xs",
     "[&_small]:leading-[normal] [&_small]:font-ui [&_small]:tracking-[0] [&_small]:text-muted"
   ].join(" "),
   turn: [
-    "status-overlay-turn text-[10px] text-muted"
+    "status-overlay-turn text-xs text-muted"
   ].join(" "),
   chart: [
     "status-overlay-chart w-full h-[56px] mt-2 mr-0 mb-2 ml-0"
@@ -48,21 +48,18 @@ const ui = {
     "rounded-full text-status-overlay-gauge-color [&[data-unavailable=true]]:text-status-overlay-gauge-color-2 [&[data-unavailable=true]]:opacity-[0.65]"
   ].join(" "),
   attitudeCaption: [
-    "status-overlay-attitude-caption grid grid-cols-[auto_auto] gap-[2px_4px] text-[8px] text-status-overlay-attitude-caption-color"
+    "status-overlay-attitude-caption grid grid-cols-[auto_auto] gap-[2px_4px] text-xs text-status-overlay-attitude-caption-color"
   ].join(" "),
   heading: [
-    "status-overlay-heading text-[9px] text-status-overlay-attitude-caption-color"
+    "status-overlay-heading text-xs text-status-overlay-attitude-caption-color"
   ].join(" "),
   cpu: [
     "status-overlay-cpu flex items-center justify-between border-t [border-top-style:solid] border-t-workspace-legend-border-color pt-2.5",
-    "mt-3 text-[10px]"
+    "mt-3 text-xs"
   ].join(" "),
   track: [
     "status-overlay-track h-[4px] rounded-2xs bg-none bg-workspace-legend-border-color mt-2 mr-0 mb-2",
     "ml-0 [&_i]:block [&_i]:h-[4px] [&_i]:bg-none [&_i]:bg-amber [&_i]:rounded-2xs"
-  ].join(" "),
-  source: [
-    "status-overlay-source mt-2.5 text-[9px] text-performance-panel-freshness-color [&_summary]:cursor-pointer [&_p]:text-[10px] [&_p]:leading-[1.8]"
   ].join(" "),
 } as const;
 
@@ -257,13 +254,6 @@ export function StatusOverlay({
           <div className={ui.track}>
             {cpu !== null && <i style={{ width: `${cpu}%` }} />}
           </div>
-          <details className={ui.source}>
-            <summary>测量来源</summary>
-            <p>
-              真实测量速度 · {body && !body.stale ? body.source : "轮速里程计"}
-              ；俯仰与横滚尚未由车端提供。
-            </p>
-          </details>
         </div>
       )}
     </FloatingCard>

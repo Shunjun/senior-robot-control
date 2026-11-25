@@ -9,7 +9,7 @@ const ui = {
   stickHorizontal: "w-[190px] h-[110px]",
   track: "absolute inset-3 rounded-md border border-line",
   thumb: "absolute size-12 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber",
-  stickHint: "text-[12px] text-ink-dim",
+  stickHint: "text-xs text-ink-dim",
 } as const;
 
 /** Why a stick let go. The drive view passes it on as the reason for the stop. */

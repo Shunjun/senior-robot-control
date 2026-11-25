@@ -297,14 +297,35 @@ describe("session", () => {
     expect(screen.getByRole("heading", { name: "登录控制台" })).toBeTruthy();
   });
 
-  it("logs out and returns to login", async () => {
+  it.each([
+    { path: "/robots", error: null },
+    { path: "/robots/robot-alpha", error: null },
+    { path: "/robots/missing", error: null },
+    { path: "/robots", error: new UnauthorizedError("session expired") },
+    { path: "/robots", error: new ApiError("failed", 500) },
+  ])("logs out through settings at $path with $error", async ({ path, error }) => {
     const api = new FakeApi();
-    mount("/robots", api, new FakeLink());
-    await openDevices();
-    await screen.findByRole("navigation", { name: "设备列表" });
-    fireEvent.click(screen.getByRole("button", { name: "退出登录" }));
-    await screen.findByRole("heading", { name: "登录控制台" });
-    expect(api.loggedOut).toBe(1);
+    const link = new FakeLink();
+    const logout = vi.spyOn(api, "logout");
+    if (error) logout.mockRejectedValue(error);
+    mount(path, api, link);
+    const settings = await screen.findByRole("button", { name: "设置" });
+    if (path === "/robots/robot-alpha") await waitFor(() => expect(link.connects).toContain("robot-alpha"));
+    const disconnects = link.disconnects;
+    expect(screen.queryByRole("button", { name: "退出登录" })).toBeNull();
+    fireEvent.click(settings);
+    const header = screen.getByRole("heading", { name: "车辆设置" }).closest("header")!;
+    expect(within(header).getByRole("button", { name: /返回控制/ })).toBeTruthy();
+    fireEvent.click(within(header).getByRole("button", { name: "退出登录" }));
+    if (error && !(error instanceof UnauthorizedError)) {
+      await screen.findByText("退出登录失败，会话仍然有效。请重试。");
+      expect(screen.getByRole("heading", { name: "车辆设置" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "退出登录" }).hasAttribute("disabled")).toBe(false);
+    } else {
+      await screen.findByRole("heading", { name: "登录控制台" });
+      if (path === "/robots/robot-alpha") expect(link.disconnects).toBe(disconnects + 1);
+    }
+    expect(logout).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -1353,6 +1374,8 @@ describe("device pairing", () => {
         fireEvent.click(screen.getByRole("button", { name: "重新生成配对码" })),
       );
       expect(screen.getByText("second-code")).toBeTruthy();
+      fireEvent.click(screen.getByRole("button", { name: "关闭配对" }));
+      fireEvent.click(screen.getByRole("button", { name: "设置" }));
       await act(async () =>
         fireEvent.click(screen.getByRole("button", { name: "退出登录" })),
       );
@@ -1373,21 +1396,33 @@ describe("device pairing", () => {
           finishLogout = resolve;
         }),
     );
+    const api = Object.assign(new FakeApi(), { createPairingCode, logout });
     mount(
       "/robots",
-      Object.assign(new FakeApi(), { createPairingCode, logout }),
+      api,
       new FakeLink(),
     );
     fireEvent.click(await screen.findByRole("button", { name: "配对新车" }));
     fireEvent.click(screen.getByRole("button", { name: "生成配对码" }));
     await screen.findByText("pending-code");
+    fireEvent.click(screen.getByRole("button", { name: "关闭配对" }));
+    let finishList!: (robots: RobotSummary[]) => void;
+    vi.spyOn(api, "listRobots").mockImplementation(() => new Promise(resolve => { finishList = resolve; }));
+    await openDevices();
+    fireEvent.click(screen.getByRole("button", { name: "刷新设备" }));
+    fireEvent.click(screen.getByRole("button", { name: "关闭设备列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
     const button = screen.getByRole("button", { name: "退出登录" });
     fireEvent.click(button);
     fireEvent.click(button);
     expect(logout).toHaveBeenCalledTimes(1);
+    expect(button.hasAttribute("disabled")).toBe(true);
     expect(screen.queryByText("pending-code")).toBeNull();
     await act(async () => finishLogout());
     expect(await screen.findByLabelText("管理员密码")).toBeTruthy();
+    await act(async () => finishList([ALPHA, BETA]));
+    expect(screen.getByLabelText("管理员密码")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "设置" })).toBeNull();
   });
 
   it("clears a pairing code on return from a suspended page", async () => {
@@ -2012,6 +2047,11 @@ describe("device unpairing", () => {
     await openDevices();
     expect(screen.getByRole("link", { name: /Beta/ })).toBeTruthy();
     expect(link.disconnects).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByRole("button", { name: "关闭设备列表" }));
+    fireEvent.click(screen.getByRole("button", { name: "设置" }));
+    expect(screen.getByRole("button", { name: "退出登录" }).hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /返回控制/ }));
+    expect(screen.getByRole("heading", { name: "还没有选择车辆" })).toBeTruthy();
   });
 
   it("keeps the device after failure and allows retry or cancellation", async () => {

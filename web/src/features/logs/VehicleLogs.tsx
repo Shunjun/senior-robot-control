@@ -16,9 +16,9 @@ const ui = {
   card: [
     "logs-card absolute inset-0 overflow-auto pt-7 pr-7 pb-7 pl-7",
     "bg-none bg-full-view min-w-0 z-[20] [&>header]:flex [&>header]:justify-between [&>header]:items-center [&>header]:gap-2.5",
-    "[&>header]:mb-6 [&_footer]:flex [&_footer]:justify-between [&_footer]:items-center [&_footer]:gap-2.5 [&_footer]:mt-3.5 [&_footer]:text-muted [&_footer]:text-[10px]",
-    "[&_h1]:text-[23px] [&_h1]:font-[450] [&_h1]:mt-0 [&_h1]:mr-0 [&_h1]:mb-2 [&_h1]:ml-0 [&_header_p]:mt-0 [&_header_p]:mr-0",
-    "[&_header_p]:mb-0 [&_header_p]:ml-0 [&_header_p]:text-[11px] [&_header_p]:text-muted [&_header_p]:leading-[1.8] [&_footer_button]:pt-[7px] [&_footer_button]:pr-2.5 [&_footer_button]:pb-[7px]",
+    "[&>header]:mb-6 [&_footer]:flex [&_footer]:justify-between [&_footer]:items-center [&_footer]:gap-2.5 [&_footer]:mt-3.5 [&_footer]:text-muted [&_footer]:text-xs",
+    "[&_h1]:text-2xl [&_h1]:font-[450] [&_h1]:mt-0 [&_h1]:mr-0 [&_h1]:mb-2 [&_h1]:ml-0 [&_header_p]:mt-0 [&_header_p]:mr-0",
+    "[&_header_p]:mb-0 [&_header_p]:ml-0 [&_header_p]:text-xs [&_header_p]:text-muted [&_header_p]:leading-[1.8] [&_footer_button]:pt-[7px] [&_footer_button]:pr-2.5 [&_footer_button]:pb-[7px]",
     "[&_footer_button]:pl-2.5 [&_footer_button]:text-inherit [&_footer_button]:bg-none [&_footer_button]:bg-control [&_footer_button]:border [&_footer_button]:border-solid [&_footer_button]:border-devices-item-border-color [&_footer_button]:rounded-control",
     "[&_footer_button]:cursor-pointer [&_footer_button:disabled]:opacity-[0.36] [&_footer_button:disabled]:cursor-not-allowed max-[760.001px]:pt-4.5 max-[760.001px]:pr-4.5 max-[760.001px]:pb-4.5 max-[760.001px]:pl-4.5 max-[460.001px]:pt-3.5",
     "max-[460.001px]:pr-3.5 max-[460.001px]:pb-3.5 max-[460.001px]:pl-3.5"
@@ -35,12 +35,12 @@ const ui = {
     "[&_button]:whitespace-nowrap max-[460.001px]:flex-wrap max-[460.001px]:[&_input]:[flex-basis:100%] max-[460.001px]:[&_select]:w-[100px]"
   ].join(" "),
   caption: [
-    "logs-caption flex justify-between gap-[15px] text-log-caption text-[10px] mt-[19px] mr-0",
+    "logs-caption flex justify-between gap-[15px] text-log-caption text-xs mt-[19px] mr-0",
     "mb-[15px] ml-0 pb-[13px] border-b [border-bottom-style:solid] border-b-logs-caption-border-bottom-color [&_i]:[display:inline-block] [&_i]:w-[5px]",
-    "[&_i]:h-[5px] [&_i]:mr-1.5 [&_i]:rounded-full [&_i]:bg-none [&_i]:bg-online max-[460.001px]:text-[9px] max-[460.001px]:gap-2"
+    "[&_i]:h-[5px] [&_i]:mr-1.5 [&_i]:rounded-full [&_i]:bg-none [&_i]:bg-online max-[460.001px]:text-xs max-[460.001px]:gap-2"
   ].join(" "),
   collection: [
-    "logs-collection text-[9px] text-muted mb-3 [&_summary]:cursor-pointer"
+    "logs-collection text-xs text-muted mb-3 [&_summary]:cursor-pointer"
   ].join(" "),
   collectionTools: [
     "logs-collection-tools [&_input]:min-w-0 [&_input]:pt-2.5 [&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:text-input-ink",
@@ -49,28 +49,28 @@ const ui = {
   ].join(" "),
   gap: [
     "logs-gap border-l-[3px] [border-left-style:solid] border-l-amber bg-none bg-amber-wash text-amber pt-2.5",
-    "pr-2.5 pb-2.5 pl-2.5 text-[11px]"
+    "pr-2.5 pb-2.5 pl-2.5 text-xs"
   ].join(" "),
   stream: [
-    "logs-stream font-normal text-[12px] leading-[1.95] font-log [overflow-wrap:anywhere]"
+    "logs-stream font-normal text-xs leading-[1.95] font-log [overflow-wrap:anywhere]"
   ].join(" "),
   entry: [
     "logs-entry flex flex-wrap items-baseline [column-gap:11px] pt-[7px] pr-2.5 pb-[7px]",
     "pl-2.5 rounded-xs mt-px mr-0 mb-px ml-0 [&:hover]:bg-none [&:hover]:bg-app-empty-symbol-background-color",
-    "[&_time]:text-[11px] [&_time]:text-log-time [&_time]:tabular-nums [&_time]:whitespace-nowrap [&_details]:[flex-basis:100%] [&_details]:text-muted [&_details]:text-[9px] [&_summary]:cursor-pointer",
-    "[&_details_small]:block [&_details_small]:text-[9px] [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere] [&_pre]:font-normal [&_pre]:text-[11px] [&_pre]:leading-[1.8] [&_pre]:font-data",
+    "[&_time]:text-xs [&_time]:text-log-time [&_time]:tabular-nums [&_time]:whitespace-nowrap [&_details]:[flex-basis:100%] [&_details]:text-muted [&_details]:text-xs [&_summary]:cursor-pointer",
+    "[&_details_small]:block [&_details_small]:text-xs [&_pre]:whitespace-pre-wrap [&_pre]:[overflow-wrap:anywhere] [&_pre]:font-normal [&_pre]:text-xs [&_pre]:leading-[1.8] [&_pre]:font-data",
     "[&[data-level=INFO]_.logs-level]:text-log-info [&[data-level=WARNING]]:bg-none [&[data-level=WARNING]]:bg-log-warning-surface [&[data-level=WARNING]_.logs-level]:text-log-warning [&[data-level=WARNING]_.logs-message]:text-log-warning-message [&[data-level=ERROR]_.logs-level]:text-log-error [&[data-level=CRITICAL]_.logs-level]:text-log-error [&[data-level=ERROR]_.logs-message]:font-semibold",
     "[&[data-level=ERROR]_.logs-message]:text-log-error-message [&[data-level=CRITICAL]_.logs-message]:font-semibold [&[data-level=CRITICAL]_.logs-message]:text-log-error-message [&[data-module=connection]_.logs-module]:text-log-connection [&[data-module=mapping]_.logs-module]:text-log-mapping [&[data-module=scheduler]_.logs-module]:text-log-scheduler [&[data-module=safety]_.logs-module]:text-log-safety max-[460.001px]:pt-[9px]",
-    "max-[460.001px]:pr-[3px] max-[460.001px]:pb-[9px] max-[460.001px]:pl-[3px] max-[460.001px]:[column-gap:8px] max-[460.001px]:[&_time]:text-[10px]"
+    "max-[460.001px]:pr-[3px] max-[460.001px]:pb-[9px] max-[460.001px]:pl-[3px] max-[460.001px]:[column-gap:8px] max-[460.001px]:[&_time]:text-xs"
   ].join(" "),
   level: [
-    "logs-level text-[10px] tracking-[0.3px] font-semibold text-log-level"
+    "logs-level text-xs tracking-[0.3px] font-semibold text-log-level"
   ].join(" "),
   module: [
-    "logs-module text-[11px] text-log-module max-[460.001px]:text-[10px]"
+    "logs-module text-xs text-log-module max-[460.001px]:text-xs"
   ].join(" "),
   message: [
-    "logs-message flex-1 min-w-[180px] whitespace-pre-wrap text-log-message max-[460.001px]:[flex-basis:100%] max-[460.001px]:text-[11px] max-[460.001px]:leading-[1.9]",
+    "logs-message flex-1 min-w-[180px] whitespace-pre-wrap text-log-message max-[460.001px]:[flex-basis:100%] max-[460.001px]:text-xs max-[460.001px]:leading-[1.9]",
     "max-[460.001px]:mt-0.5"
   ].join(" "),
 } as const;

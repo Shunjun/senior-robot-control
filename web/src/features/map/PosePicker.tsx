@@ -8,10 +8,10 @@ const ui = {
   poseBanner: [
     "map-pose-banner absolute top-[65px] left-[50%] [transform:translateX(-50%)] z-[14] w-[max-content] max-w-[90%]",
     "pt-[11px] pr-[15px] pb-[11px] pl-[15px] bg-none bg-map-pose-banner-background-color border border-solid",
-    "border-map-pose-banner-border-color rounded-lg text-[12px] shadow-map-pose-banner max-[760.001px]:top-15 max-[760.001px]:text-[10px] max-[460.001px]:w-[max-content]"
+    "border-map-pose-banner-border-color rounded-lg text-xs shadow-map-pose-banner max-[760.001px]:top-15 max-[760.001px]:text-xs max-[460.001px]:w-[max-content]"
   ].join(" "),
   bannerRow: [
-    "map-banner-row flex items-center gap-2.5 flex-wrap [&_button]:text-[11px] [&_button]:pt-1.5 [&_button]:pr-[9px]",
+    "map-banner-row flex items-center gap-2.5 flex-wrap [&_button]:text-xs [&_button]:pt-1.5 [&_button]:pr-[9px]",
     "[&_button]:pb-1.5 [&_button]:pl-[9px] max-[460.001px]:justify-center max-[460.001px]:gap-1.5"
   ].join(" "),
   primary: [
@@ -23,17 +23,17 @@ const ui = {
     "bg-control border border-solid border-devices-item-border-color rounded-control cursor-pointer [&:disabled]:opacity-[0.36] [&:disabled]:cursor-not-allowed"
   ].join(" "),
   quiet: [
-    "map-quiet text-muted text-[11px] leading-[1.8] mt-0 mr-0 mb-0 ml-0"
+    "map-quiet text-muted text-xs leading-[1.8] mt-0 mr-0 mb-0 ml-0"
   ].join(" "),
   coordinateDetails: [
-    "map-coordinate-details mt-2 text-muted text-[9px] [&_summary]:cursor-pointer"
+    "map-coordinate-details mt-2 text-muted text-xs [&_summary]:cursor-pointer"
   ].join(" "),
   fields: [
     "map-fields grid grid-cols-[repeat(3,_minmax(0,_1fr))] gap-3 mt-2 mr-0 mb-2 ml-0",
     "max-[460.001px]:gap-1.5"
   ].join(" "),
   field: [
-    "map-field grid gap-[7px] text-[11px] text-field [&_input]:min-w-0 [&_input]:w-full [&_input]:pt-2.5",
+    "map-field grid gap-[7px] text-xs text-field [&_input]:min-w-0 [&_input]:w-full [&_input]:pt-2.5",
     "[&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:text-input-ink [&_input]:bg-none [&_input]:bg-input [&_input]:border",
     "[&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input max-[460.001px]:[&_input]:pt-1.5 max-[460.001px]:[&_input]:pr-1.5 max-[460.001px]:[&_input]:pb-1.5 max-[460.001px]:[&_input]:pl-1.5"
   ].join(" "),

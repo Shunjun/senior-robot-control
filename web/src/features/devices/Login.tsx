@@ -16,8 +16,8 @@ const ui = {
     "login-page min-h-[calc(100svh_-_38px)] flex flex-col max-[460.001px]:min-h-[calc(100svh_-_24px)]"
   ].join(" "),
   brand: [
-    "login-brand text-[20px] tracking-[2px] font-semibold flex gap-[9px] items-center [&_svg]:w-[29px]",
-    "[&_svg]:h-[29px] max-[460.001px]:text-[17px]"
+    "login-brand text-xl tracking-[2px] font-semibold flex gap-[9px] items-center [&_svg]:w-[29px]",
+    "[&_svg]:h-[29px] max-[460.001px]:text-base"
   ].join(" "),
   loginStage: [
     "login-login-stage flex-1 grid place-items-center pt-10 pr-0 pb-10 pl-0",
@@ -30,13 +30,13 @@ const ui = {
     "[@media(max-height:_460px)]:pb-5.5 [@media(max-height:_460px)]:pl-5.5"
   ].join(" "),
   loginTitle: [
-    "login-login-title text-[25px] font-[450] mt-0 mr-0 mb-[5px] ml-0 max-[460.001px]:text-[23px]"
+    "login-login-title text-2xl font-[450] mt-0 mr-0 mb-[5px] ml-0 max-[460.001px]:text-2xl"
   ].join(" "),
   loginHint: [
-    "login-login-hint text-ink-dim text-[12px] mt-0 mr-0 mb-[25px] ml-0 leading-[1.8]"
+    "login-login-hint text-ink-dim text-xs mt-0 mr-0 mb-[25px] ml-0 leading-[1.8]"
   ].join(" "),
   field: [
-    "login-field text-[11px] text-ink-soft block mb-2"
+    "login-field text-xs text-ink-soft block mb-2"
   ].join(" "),
   passwordField: [
     "login-password-field relative [&_.login-reveal]:absolute [&_.login-reveal]:right-0.5 [&_.login-reveal]:top-px [&_.login-reveal]:border-0 [&_.login-reveal]:border-none [&_.login-reveal]:border-current",
@@ -54,7 +54,7 @@ const ui = {
     "login-message min-h-[24px] mt-3 mr-0 mb-0 ml-0"
   ].join(" "),
   failure: [
-    "login-failure text-[11px] text-login-failure-color mt-0 mr-0 mb-0 ml-0"
+    "login-failure text-xs text-login-failure-color mt-0 mr-0 mb-0 ml-0"
   ].join(" "),
   primary: [
     "login-primary"

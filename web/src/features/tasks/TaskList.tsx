@@ -47,33 +47,33 @@ import { Switch } from "../../components/ui/Switch";
 const ui = {
   map: [
     "tasks-map min-w-0 min-h-0 h-full overflow-hidden [&>.tasks-note]:absolute [&>.tasks-note]:left-4 [&>.tasks-note]:top-25",
-    "[&>.tasks-note]:pt-[5px] [&>.tasks-note]:pr-2 [&>.tasks-note]:pb-[5px] [&>.tasks-note]:pl-2 [&>.tasks-note]:bg-none [&>.tasks-note]:bg-tasks-map-background-color [&>.tasks-note]:rounded-sm [&>.tasks-note]:text-[9px]",
+    "[&>.tasks-note]:pt-[5px] [&>.tasks-note]:pr-2 [&>.tasks-note]:pb-[5px] [&>.tasks-note]:pl-2 [&>.tasks-note]:bg-none [&>.tasks-note]:bg-tasks-map-background-color [&>.tasks-note]:rounded-sm [&>.tasks-note]:text-xs",
     "[&>.tasks-note]:pointer-events-none"
   ].join(" "),
   warning: [
     "tasks-warning mt-2 mr-0 mb-2 ml-0 pt-2 pr-2 pb-2",
-    "pl-2 bg-none bg-amber-wash rounded-md text-[10px]"
+    "pl-2 bg-none bg-amber-wash rounded-md text-xs"
   ].join(" "),
   note: [
-    "tasks-note text-muted text-[10px] leading-[1.8] mt-0 mr-0 mb-0 ml-0"
+    "tasks-note text-muted text-xs leading-[1.8] mt-0 mr-0 mb-0 ml-0"
   ].join(" "),
   picking: [
     "tasks-picking absolute top-[65px] left-[50%] [transform:translateX(-50%)] z-[14] flex items-center",
     "gap-2.5 w-[max-content] max-w-[90%] pt-[11px] pr-[15px] pb-[11px] pl-[15px] border",
-    "border-solid border-map-pose-banner-border-color rounded-lg bg-none bg-map-pose-banner-background-color text-[12px] shadow-map-pose-banner [&_button]:text-[11px]",
-    "[&_button]:pt-1.5 [&_button]:pr-[9px] [&_button]:pb-1.5 [&_button]:pl-[9px] max-[760.001px]:top-15 max-[760.001px]:text-[10px] max-[460.001px]:flex-wrap max-[460.001px]:justify-center",
+    "border-solid border-map-pose-banner-border-color rounded-lg bg-none bg-map-pose-banner-background-color text-xs shadow-map-pose-banner [&_button]:text-xs",
+    "[&_button]:pt-1.5 [&_button]:pr-[9px] [&_button]:pb-1.5 [&_button]:pl-[9px] max-[760.001px]:top-15 max-[760.001px]:text-xs max-[460.001px]:flex-wrap max-[460.001px]:justify-center",
     "max-[460.001px]:gap-1.5 max-[460.001px]:w-[max-content] max-[460.001px]:[&>span]:[flex-basis:100%] max-[460.001px]:[&>span]:text-center"
   ].join(" "),
   panel: [
-    "tasks-panel min-w-0 [&[data-task-stage=editor]_.tasks-header_h3]:text-[15px] [&[data-task-stage=editor]_.tasks-header_h3]:font-bold [&_.tasks-close]:border-0 [&_.tasks-close]:border-none [&_.tasks-close]:border-current [&_.tasks-close]:pt-1 [&_.tasks-close]:pr-[7px] [&_.tasks-close]:pb-1",
-    "[&_.tasks-close]:pl-[7px] [&_.tasks-close]:bg-none [&_.tasks-close]:bg-transparent [&_.tasks-close]:text-quiet [&_.tasks-close]:text-[11px] [&[hidden]]:hidden"
+    "tasks-panel min-w-0 [&[data-task-stage=editor]_.tasks-header_h3]:text-base [&[data-task-stage=editor]_.tasks-header_h3]:font-bold [&_.tasks-close]:border-0 [&_.tasks-close]:border-none [&_.tasks-close]:border-current [&_.tasks-close]:pt-1 [&_.tasks-close]:pr-[7px] [&_.tasks-close]:pb-1",
+    "[&_.tasks-close]:pl-[7px] [&_.tasks-close]:bg-none [&_.tasks-close]:bg-transparent [&_.tasks-close]:text-quiet [&_.tasks-close]:text-xs [&[hidden]]:hidden"
   ].join(" "),
   header: [
-    "tasks-header flex items-center justify-between gap-2.5 [&_h3]:text-[15px] [&_h3]:font-medium [&_h3]:mt-0",
-    "[&_h3]:mr-0 [&_h3]:mb-[5px] [&_h3]:ml-0 max-[460.001px]:[&_h3]:text-[14px]"
+    "tasks-header flex items-center justify-between gap-2.5 [&_h3]:text-base [&_h3]:font-medium [&_h3]:mt-0",
+    "[&_h3]:mr-0 [&_h3]:mb-[5px] [&_h3]:ml-0 max-[460.001px]:[&_h3]:text-sm"
   ].join(" "),
   english: [
-    "tasks-english font-normal text-[9px] leading-[normal] font-mono tracking-[1px] text-english"
+    "tasks-english font-normal text-xs leading-[normal] font-mono tracking-[1px] text-english"
   ].join(" "),
   close: [
     "tasks-close"
@@ -82,61 +82,61 @@ const ui = {
     "tasks-body min-w-0"
   ].join(" "),
   description: [
-    "tasks-description text-muted leading-[1.8] mt-0 mr-0 mb-0 ml-0 text-[11px]",
-    "max-[460.001px]:text-[10px]"
+    "tasks-description text-muted leading-[1.8] mt-0 mr-0 mb-0 ml-0 text-xs",
+    "max-[460.001px]:text-xs"
   ].join(" "),
   taskActions: [
-    "tasks-task-actions flex gap-[7px] mt-3 [&>button]:flex-1 [&>button]:text-[11px] [&>button]:gap-1 [&>button]:px-[9px] [&+.tasks-task-item]:mt-3"
+    "tasks-task-actions flex gap-[7px] mt-3 [&>button]:flex-1 [&>button]:text-xs [&>button]:gap-1 [&>button]:px-[9px] [&+.tasks-task-item]:mt-3"
   ].join(" "),
   taskItem: [
     "tasks-task-item border-t [border-top-style:solid] border-t-control-hover pt-3.5 pr-0 pb-[9px] pl-0",
     "mt-0"
   ].join(" "),
   taskIdentity: [
-    "tasks-task-identity flex items-center justify-between gap-2.5 [&_strong]:min-w-0 [&_strong]:[overflow-wrap:anywhere] [&_strong]:text-[12px]",
+    "tasks-task-identity flex items-center justify-between gap-2.5 [&_strong]:min-w-0 [&_strong]:[overflow-wrap:anywhere] [&_strong]:text-xs",
     "[&_strong]:font-medium"
   ].join(" "),
   taskStatus: [
-    "tasks-task-status text-[10px] text-map-stale-banner-color block mt-1.5"
+    "tasks-task-status text-xs text-map-stale-banner-color block mt-1.5"
   ].join(" "),
   taskButtons: [
-    "tasks-task-buttons flex gap-[5px] flex-wrap mt-[9px] [&_button]:text-[10px] [&_button]:pt-[7px] [&_button]:pr-2.5",
+    "tasks-task-buttons flex gap-[5px] flex-wrap mt-[9px] [&_button]:text-xs [&_button]:pt-[7px] [&_button]:pr-2.5",
     "[&_button]:pb-[7px] [&_button]:pl-2.5 max-[460.001px]:gap-1 max-[460.001px]:[&_button]:pt-1.5 max-[460.001px]:[&_button]:pr-2 max-[460.001px]:[&_button]:pb-1.5 max-[460.001px]:[&_button]:pl-2"
   ].join(" "),
   taskDetails: [
-    "tasks-task-details text-[9px] text-muted mt-[7px] [&_summary]:cursor-pointer [&_code]:block [&_code]:[overflow-wrap:anywhere] [&_code]:mt-[7px]",
-    "[&_code]:mr-0 [&_code]:mb-[7px] [&_code]:ml-0 [&_button]:text-[10px] [&_button]:pt-[5px] [&_button]:pr-2 [&_button]:pb-[5px] [&_button]:pl-2"
+    "tasks-task-details text-xs text-muted mt-[7px] [&_summary]:cursor-pointer [&_code]:block [&_code]:[overflow-wrap:anywhere] [&_code]:mt-[7px]",
+    "[&_code]:mr-0 [&_code]:mb-[7px] [&_code]:ml-0 [&_button]:text-xs [&_button]:pt-[5px] [&_button]:pr-2 [&_button]:pb-[5px] [&_button]:pl-2"
   ].join(" "),
   queueInfo: [
-    "tasks-queue-info text-[10px] bg-none bg-control rounded-md pt-[9px] pr-[9px] pb-[9px]",
+    "tasks-queue-info text-xs bg-none bg-control rounded-md pt-[9px] pr-[9px] pb-[9px]",
     "pl-[9px] mt-3 text-tasks-queue-info-color leading-[1.8]"
   ].join(" "),
   routePreview: [
-    "tasks-route-preview [&_button]:pt-[7px] [&_button]:pr-[9px] [&_button]:pb-[7px] [&_button]:pl-[9px] [&_button]:text-[10px] [&_button]:text-inherit [&_button]:bg-none",
+    "tasks-route-preview [&_button]:pt-[7px] [&_button]:pr-[9px] [&_button]:pb-[7px] [&_button]:pl-[9px] [&_button]:text-xs [&_button]:text-inherit [&_button]:bg-none",
     "[&_button]:bg-control [&_button]:border [&_button]:border-solid [&_button]:border-devices-item-border-color [&_button]:rounded-control [&_button]:cursor-pointer pt-2.5 pr-2.5",
     "pb-2.5 pl-2.5 mt-3 mr-0 mb-3 ml-0 border border-solid",
-    "border-line rounded-md [&_h4]:text-[12px] [&_h4]:mt-0 [&_h4]:mr-0 [&_h4]:mb-2 [&_h4]:ml-0"
+    "border-line rounded-md [&_h4]:text-xs [&_h4]:mt-0 [&_h4]:mr-0 [&_h4]:mb-2 [&_h4]:ml-0"
   ].join(" "),
   fields: [
     "tasks-fields border-0 border-none border-current mt-0 mr-0 mb-0 ml-0",
     "pt-0 pr-0 pb-0 pl-0 min-w-0 [&[hidden]]:hidden"
   ].join(" "),
   enableRow: [
-    "tasks-enable-row flex items-center justify-between gap-2 text-muted text-[11px] mt-3.5"
+    "tasks-enable-row flex items-center justify-between gap-2 text-muted text-xs mt-3.5"
   ].join(" "),
   pointHead: [
-    "tasks-point-head flex items-center justify-between gap-2 text-muted text-[11px] mt-4.5"
+    "tasks-point-head flex items-center justify-between gap-2 text-muted text-xs mt-4.5"
   ].join(" "),
   route: [
     "tasks-route list-none pt-0 pr-0 pb-0 pl-0 mt-3 mr-0",
     "mb-3 ml-0 [&_li]:bg-none [&_li]:bg-control [&_li]:border [&_li]:border-solid [&_li]:border-logs-caption-border-bottom-color [&_li]:rounded-md",
-    "[&_li]:mb-[5px] [&_li]:pt-[7px] [&_li]:pr-2 [&_li]:pb-[7px] [&_li]:pl-2 [&_li]:text-[11px] [&_li]:cursor-grab [&_.tasks-task-row]:flex-nowrap",
-    "[&_button]:grid [&_button]:place-items-center [&_button]:flex-none [&_button]:pt-[3px] [&_button]:pr-[5px] [&_button]:pb-[3px] [&_button]:pl-[5px] [&_button]:text-[11px]",
+    "[&_li]:mb-[5px] [&_li]:pt-[7px] [&_li]:pr-2 [&_li]:pb-[7px] [&_li]:pl-2 [&_li]:text-xs [&_li]:cursor-grab [&_.tasks-task-row]:flex-nowrap",
+    "[&_button]:grid [&_button]:place-items-center [&_button]:flex-none [&_button]:pt-[3px] [&_button]:pr-[5px] [&_button]:pb-[3px] [&_button]:pl-[5px] [&_button]:text-xs",
     "[&_button]:bg-none [&_button]:bg-control [&_button]:border [&_button]:border-solid [&_button]:border-devices-item-border-color [&_button]:rounded-control [&_button]:cursor-pointer [&_button:disabled]:opacity-[0.36]",
     "[&_button:disabled]:cursor-not-allowed max-[460.001px]:[&_.tasks-task-row]:gap-[5px]"
   ].join(" "),
   taskRow: [
-    "tasks-task-row [&_label]:grid [&_label]:gap-[7px] [&_label]:text-field [&_label]:text-[11px] [&_input]:min-w-0 [&_input]:w-full [&_input]:pt-2.5",
+    "tasks-task-row [&_label]:grid [&_label]:gap-[7px] [&_label]:text-field [&_label]:text-xs [&_input]:min-w-0 [&_input]:w-full [&_input]:pt-2.5",
     "[&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:text-input-ink [&_input]:bg-none [&_input]:bg-input [&_input]:border",
     "[&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input [&_select]:min-w-0 [&_select]:w-full [&_select]:pt-2.5 [&_select]:pr-2.5 [&_select]:pb-2.5",
     "[&_select]:pl-2.5 [&_select]:text-input-ink [&_select]:bg-none [&_select]:bg-input [&_select]:border [&_select]:border-solid [&_select]:border-login-input-border-color",
@@ -147,19 +147,19 @@ const ui = {
   ].join(" "),
   pointNumber: [
     "tasks-point-number grid place-items-center w-[21px] h-[21px] rounded-full bg-none bg-amber",
-    "text-white text-[10px] flex-none"
+    "text-white text-xs flex-none"
   ].join(" "),
   pointLabel: [
-    "tasks-point-label flex-1 min-w-0 whitespace-nowrap [&_small]:text-muted [&_small]:text-[10px] [&_small]:ml-[5px] max-[460.001px]:text-[10px]",
-    "max-[460.001px]:[&_small]:text-[9px] max-[460.001px]:[&_small]:ml-[3px]"
+    "tasks-point-label flex-1 min-w-0 whitespace-nowrap [&_small]:text-muted [&_small]:text-xs [&_small]:ml-[5px] max-[460.001px]:text-xs",
+    "max-[460.001px]:[&_small]:text-xs max-[460.001px]:[&_small]:ml-[3px]"
   ].join(" "),
   waypointDetails: [
-    "tasks-waypoint-details [&_summary]:cursor-pointer mt-2.5 text-[10px] text-muted [&_.tasks-task-row]:mt-2 [&_.tasks-task-row]:mr-0 [&_.tasks-task-row]:mb-2",
-    "[&_.tasks-task-row]:ml-0 [&_button]:pt-[7px] [&_button]:pr-[9px] [&_button]:pb-[7px] [&_button]:pl-[9px] [&_button]:text-[10px] [&_button]:text-inherit [&_button]:bg-none",
+    "tasks-waypoint-details [&_summary]:cursor-pointer mt-2.5 text-xs text-muted [&_.tasks-task-row]:mt-2 [&_.tasks-task-row]:mr-0 [&_.tasks-task-row]:mb-2",
+    "[&_.tasks-task-row]:ml-0 [&_button]:pt-[7px] [&_button]:pr-[9px] [&_button]:pb-[7px] [&_button]:pl-[9px] [&_button]:text-xs [&_button]:text-inherit [&_button]:bg-none",
     "[&_button]:bg-control [&_button]:border [&_button]:border-solid [&_button]:border-devices-item-border-color [&_button]:rounded-control [&_button]:cursor-pointer"
   ].join(" "),
   footer: [
-    "tasks-footer [&_p]:text-[11px] [&_p]:[overflow-wrap:anywhere] [&_p]:mt-2.5 [&_p]:mr-0 [&_p]:mb-2.5 [&_p]:ml-0"
+    "tasks-footer [&_p]:text-xs [&_p]:[overflow-wrap:anywhere] [&_p]:mt-2.5 [&_p]:mr-0 [&_p]:mb-2.5 [&_p]:ml-0"
   ].join(" "),
   workspace: [
     "tasks-workspace grid grid-cols-[minmax(0,_3fr)_minmax(320px,_2fr)] gap-1.5 [&_.tasks-panel]:pt-[19px] [&_.tasks-panel]:pr-[19px] [&_.tasks-panel]:pb-[19px] [&_.tasks-panel]:pl-[19px]",

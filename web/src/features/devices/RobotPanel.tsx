@@ -18,18 +18,21 @@ const ui = {
   ].join(" "),
   connectionEmpty: [
     "devices-connection-empty absolute inset-0 flex flex-col items-center justify-center text-center",
-    "pt-6 pr-6 pb-6 pl-6 text-muted [&_h2]:text-ink [&_h2]:text-[23px] [&_h2]:font-[450]",
-    "[&_p]:text-[12px] [&_p]:leading-[2] [&_p]:max-w-[360px]"
+    "pt-6 pr-6 pb-6 pl-6 text-muted [&_h2]:text-ink [&_h2]:text-2xl [&_h2]:font-[450]",
+    "[&_p]:text-xs [&_p]:leading-[2] [&_p]:max-w-[360px]"
   ].join(" "),
   connectionNotice: [
     "devices-connection-notice absolute left-4 right-4 top-15.5 z-[28] flex items-center",
     "gap-3 pt-2.5 pr-3 pb-2.5 pl-3 border border-solid border-devices-connection-notice-border-color",
-    "rounded-control bg-none bg-devices-connection-notice-background-color text-[11px] [&_p]:mt-0 [&_p]:mr-0 [&_p]:mb-0 [&_p]:ml-0",
+    "rounded-control bg-none bg-devices-connection-notice-background-color text-xs [&_p]:mt-0 [&_p]:mr-0 [&_p]:mb-0 [&_p]:ml-0",
     "[&_button]:flex-none max-[460.001px]:left-3 max-[460.001px]:right-3 max-[460.001px]:flex-wrap"
   ].join(" "),
 } as const;
 
 export interface RobotPanelProps {
+  // Compatible: standalone consumers can omit session actions.
+  onLogout?: (() => void) | undefined;
+  loggingOut?: boolean | undefined;
   robot: RobotSummary;
   link: RobotLink;
   /** The control socket closed. The app re-checks the session, since a 401 ends it. */
@@ -45,6 +48,8 @@ type LinkState = "connecting" | "open" | "closed";
 // ---------------------------------------------------------------- panel
 
 export function RobotPanel({
+  onLogout,
+  loggingOut,
   robot,
   link,
   onLinkLost,
@@ -146,7 +151,7 @@ export function RobotPanel({
             <div className={ui.connectionNotice} role="alert">
               <div>
                 <p>车辆连接已断开，正在显示最后已知状态。</p>
-                <details className="mt-1 text-[9px] text-muted"><summary className="cursor-pointer">连接详情</summary>
+                <details className="mt-1 text-xs text-muted"><summary className="cursor-pointer">连接详情</summary>
                   <p>缓存快照 · 非实时</p>
                   <p>关闭码 {closeCode ?? "未提供"} · 最后同步 {new Date(snapshot.last_synced_at * 1000).toLocaleTimeString("zh-CN", {hour12:false})}</p>
                 </details>
@@ -159,6 +164,8 @@ export function RobotPanel({
         key={`tools-${robot.id}`}
         {...(link.vehicle ? { port: link.vehicle } : {})}
         page={page}
+        onLogout={onLogout}
+        loggingOut={loggingOut}
         onBack={() => onPageChange?.("control")}
         cameraOn={cameraOn}
         onCameraChange={setCameraOn}
