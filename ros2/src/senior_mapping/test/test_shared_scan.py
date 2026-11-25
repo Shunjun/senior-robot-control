@@ -106,7 +106,7 @@ def test_slot_retirement_reference_floor_and_late_writes(tmp_path):
     )
     try:
         basis = ReferenceBasis(
-            "map", 1, "R1", 1, "digest", "0", Pose2D(10.0, 0.0, 0.0), Pose2D(0.0, 0.0, 0.0)
+            "map", 1, "R1", 1, "0" * 64, "0", Pose2D(10.0, 0.0, 0.0), Pose2D(0.0, 0.0, 0.0)
         )
         slot.install_reference(basis)
         a, b = decode(message(1)), decode(message(2))
@@ -124,7 +124,7 @@ def test_slot_retirement_reference_floor_and_late_writes(tmp_path):
         assert retired.status == "retired" and retired.scan is None
         slot.install_reference(
             ReferenceBasis(
-                "map", 2, "R2", 2, "digest2", "1", Pose2D(20.0, 0.0, 0.0), Pose2D(0.0, 0.0, 0.0)
+                "map", 2, "R2", 2, "1" * 64, "1", Pose2D(20.0, 0.0, 0.0), Pose2D(0.0, 0.0, 0.0)
             )
         )
         assert not slot.write(b)
@@ -262,7 +262,7 @@ def test_unseen_scan_captured_before_new_reference_cannot_cross_floor(tmp_path):
         delayed = decode(message(5))
         slot.install_reference(
             ReferenceBasis(
-                "map", 2, "R2", 2, "digest", "0", Pose2D(0.0, 0.0, 0.0), Pose2D(0.0, 0.0, 0.0)
+                "map", 2, "R2", 2, "0" * 64, "0", Pose2D(0.0, 0.0, 0.0), Pose2D(0.0, 0.0, 0.0)
             )
         )
         assert not slot.write(delayed), "newer unseen sequence was captured under old reference"
@@ -342,3 +342,79 @@ def test_adapter_requires_original_authenticated_native_receipt_metadata():
         current, {"publisher_gid": owner.endpoint_gid, "native_receipt_authenticated": True}
     )
     assert outputs[-1][0] and len(outputs[-1][2]) == 3
+
+
+def test_real_graph_install_uses_c3_digest_independent_of_keyframe_order():
+    from senior_mapping.navigation_bridge import NativeNavigationBridge
+    from senior_mapping.ros_runtime import RosMappingBackend
+
+    frames = [NS(id=i, x=float(i), y=0.0, yaw=0.0) for i in (0, 1, 2, 10)]
+    digests = []
+    for ordered in (frames, list(reversed(frames))):
+        cut = RosMappingBackend._graph(NS(
+            boot_id="backend", graph_commit_sequence=1, odom_frame="odom",
+            map_frame="map", keyframes=ordered,
+        ))
+        original_anchors = [dict(row) for row in cut["anchors"]]
+        cut.update(keyframe_id=0, odom=[0.0, 0.0, 0.0])
+        ref = reference()
+        bridge = NativeNavigationBridge(NS(), ref, None)
+        bridge.boot = "backend"
+        bridge._grid = (1, ref.grid(), object())
+        bridge._publisher = NS(publish=lambda _: None)
+        bridge._publish_current = lambda *args: None
+        bases = []
+        bridge.slot = NS(install_reference=lambda basis, target=bases, **kw: target.append(basis),
+                         invalidate=lambda _: None)
+        bridge.observe_cut(cut)
+        bridge.install(dict(active=True, grid_sequence=1, sequence=1, map_id="map",
+                            reference_revision=1, generation="R1"))
+        # Independent review's literal C3 result, not an expectation built by our helper.
+        assert bases[0].anchor_digest == (
+            "df9170d6bdc8571fc6657a6cffa56f545366733859708317fcfe164c991334f9"
+        )
+        from senior_mapping.evidence import anchor_digest
+
+        records = [dict(anchor_id=str(f.id), available=True,
+                        pose=dict(x=f.x, y=f.y, yaw=f.yaw)) for f in ordered]
+        assert bases[0].anchor_digest == anchor_digest(records)
+        assert cut["anchors"] == original_anchors  # native graph/capture wire stays intact
+        digests.append(bases[0].anchor_digest)
+    assert digests[0] == digests[1]
+
+
+def test_canonical_anchor_records_preserve_availability_and_normalize_binary64():
+    import hashlib
+
+    import pytest
+    from senior_mapping.evidence import anchor_digest, canonical_anchor_records
+
+    rows = [dict(anchor_id="é", available=False, pose=None),
+            dict(anchor_id="2", available=True, pose=dict(x=-0.0, y=1, yaw=0))]
+    assert canonical_anchor_records(rows) == [
+        dict(anchor_id="2", available=True, pose=dict(x=0.0, y=1.0, yaw=0.0)),
+        dict(anchor_id="é", available=False, pose=None),
+    ]
+    expected_bytes = (b'[{"anchor_id":"2","available":true,"pose":{"x":0.0,"y":1.0,"yaw":0.0}},'
+                      b'{"anchor_id":"\\u00e9","available":false,"pose":null}]')
+    assert anchor_digest(rows) == hashlib.sha256(expected_bytes).hexdigest()
+    with pytest.raises(ValueError):
+        canonical_anchor_records(rows + [rows[0]])
+    with pytest.raises(ValueError):
+        canonical_anchor_records([dict(anchor_id="0", available=False, pose=dict(x=0, y=0, yaw=0))])
+    with pytest.raises(ValueError):
+        canonical_anchor_records([
+            dict(anchor_id="0", available=True, pose=dict(x=float("nan"), y=0, yaw=0))
+        ])
+    with pytest.raises(ValueError):
+        canonical_anchor_records([dict(anchor_id=" 0", available=False, pose=None)])
+
+
+def test_reference_basis_rejects_non_sha256_digest():
+    import pytest
+    from senior_mapping.shared_scan import ReferenceBasis
+
+    for digest in ("digest", "A" * 64, "0" * 63):
+        with pytest.raises(ValueError):
+            ReferenceBasis("map", 1, "R1", 1, digest, "0",
+                           Pose2D(0.0, 0.0, 0.0), Pose2D(0.0, 0.0, 0.0))

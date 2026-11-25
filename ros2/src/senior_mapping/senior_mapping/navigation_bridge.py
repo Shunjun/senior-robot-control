@@ -11,6 +11,7 @@ import time
 from dataclasses import replace
 from typing import Any
 
+from senior_mapping.evidence import anchor_digest
 from senior_mapping.shared_scan import QualifiedScan, ReferenceBasis, project_hits
 from senior_mapping.workspace import WorkspaceGrid
 from vehicle_core.errors import DomainError, ErrorCode
@@ -148,6 +149,13 @@ class NativeNavigationBridge:
             raise DomainError(ErrorCode.VALIDATION, "reference generation is required")
         if sequence != cut["sequence"] and generation != self.reference.map_generation:
             raise DomainError(ErrorCode.CONFLICT, "corrected reference needs a new raster")
+        # //Compatible: preserve the native id/x/y/yaw graph and capture wire format.
+        # Native keyframe IDs are int32; C3 hashes complete string-ID records.
+        digest = anchor_digest([
+            dict(anchor_id=str(row["id"]), available=True,
+                 pose={axis: row[axis] for axis in ("x", "y", "yaw")})
+            for row in cut["anchors"]
+        ])
         anchor = next(row for row in cut["anchors"] if row["id"] == cut["keyframe_id"])
         self._prepare_publishers()
         self._publisher.publish(message)
@@ -169,9 +177,7 @@ class NativeNavigationBridge:
             ref.reference_revision,
             generation,
             cut["sequence"],
-            hashlib.sha256(
-                json.dumps(cut["anchors"], sort_keys=True, separators=(",", ":")).encode()
-            ).hexdigest(),
+            digest,
             str(anchor["id"]),
             Pose2D(anchor["x"], anchor["y"], anchor["yaw"]),
             Pose2D(*cut["odom"]),

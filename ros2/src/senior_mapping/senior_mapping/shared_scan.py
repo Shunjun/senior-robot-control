@@ -234,7 +234,12 @@ class ReferenceBasis:
     def __post_init__(self) -> None:
         for value in (self.map_id, self.reference_generation, self.anchor_id):
             _text(value, 128)
-        _text(self.anchor_digest, 64)
+        if (
+            not isinstance(self.anchor_digest, str)
+            or len(self.anchor_digest) != 64
+            or any(char not in "0123456789abcdef" for char in self.anchor_digest)
+        ):
+            raise ValueError("anchor digest must be SHA256 lowercase hex")
         _u64(self.reference_revision)
         _u64(self.graph_sequence)
 
