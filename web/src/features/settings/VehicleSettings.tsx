@@ -449,17 +449,13 @@ export const VehicleSettings = memo(function VehicleSettings({
   const refreshControls = (
     <footer className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-4">
       <Button
+        className="ml-auto shrink-0"
         disabled={!available || busy !== null}
         onClick={() => void refresh()}
       >
         <RefreshCw aria-hidden="true" />
         刷新配置
       </Button>
-      {data && (
-        <span className="text-[10px] text-ink-dim">
-          配置修订号：驾驶 {data.snapshot.driving_version} · 日志 {data.snapshot.logging_version}
-        </span>
-      )}
     </footer>
   );
   return (
@@ -516,7 +512,14 @@ export const VehicleSettings = memo(function VehicleSettings({
           )}
           <div className={ui.groups}>
             <div hidden={category !== "driving"}>
-              <h2>驾驶与操控</h2>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h2>驾驶与操控</h2>
+                {data && (
+                  <span className="text-[10px] text-ink-dim">
+                    · 修订 {data.snapshot.driving_version}
+                  </span>
+                )}
+              </div>
               <p>保存后由车端确认生效；速度显示单位与控制页一致。</p>
               {data && (
                 <DrivingForm
@@ -530,7 +533,14 @@ export const VehicleSettings = memo(function VehicleSettings({
               {refreshControls}
             </div>
             <div hidden={category !== "logging"}>
-              <h2>日志配置</h2>
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <h2>日志配置</h2>
+                {data && (
+                  <span className="text-[10px] text-ink-dim">
+                    · 修订 {data.snapshot.logging_version}
+                  </span>
+                )}
+              </div>
               {data && (
                 <LoggingForm
                   key={`logging-${saved.logging}`}
