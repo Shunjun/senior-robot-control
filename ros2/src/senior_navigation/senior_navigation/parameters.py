@@ -36,11 +36,12 @@ def prepare_navigation_parameters(
         if mode == "live":
             params["plugins"] = ["static_layer", "current_scan_layer", "inflation_layer"]
             params.pop("obstacle_layer", None)
-            params["static_layer"] = dict(
-                plugin="nav2_costmap_2d::StaticLayer",
-                map_subscribe_transient_local=True,
-                use_maximum=False,
-            )
+            # //Compatible: Humble StaticLayer reads use_maximum on the costmap node.
+            params["use_maximum"] = False
+            static = params.setdefault("static_layer", {})
+            static.setdefault("plugin", "nav2_costmap_2d::StaticLayer")
+            static.setdefault("map_subscribe_transient_local", True)
+            static.pop("use_maximum", None)
             params["current_scan_layer"] = dict(
                 plugin="senior_navigation::CurrentScanLayer",
                 enabled=True,

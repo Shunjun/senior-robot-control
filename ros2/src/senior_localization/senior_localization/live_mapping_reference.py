@@ -34,6 +34,8 @@ class LiveMappingReference:
         self._latest: tuple[SampleTime, Pose2D, int] | None = None
         self._available = False
         self._authorization: ReferenceAuthorization | None = None
+        self._last_authorization: ReferenceAuthorization | None = None
+        self._permits: dict[str, tuple[str, str, str]] = {}
         self._accepted_key = None
         self._costmaps: dict[str, CurrentLayerCoverage] = {}
         self._instances: dict[str, str] = {}
@@ -50,8 +52,7 @@ class LiveMappingReference:
     def withdraw(self) -> None:
         self._authorization = None
         self._costmaps.clear()
-        self._instances.clear()
-        self._cycles.clear()
+        self._accepted_key = None
         self._grid = self._map_basis = self._odom_basis = None
         self._generation = None
         self._available = False
@@ -68,7 +69,7 @@ class LiveMappingReference:
     def set_navigation_authorization(
         self, record: ReferenceAuthorization, *, accepted_key: ScanKey | None = None
     ) -> None:
-        previous = self._authorization
+        previous = self._last_authorization
         if (
             previous is not None
             and record.owner_instance == previous.owner_instance
@@ -91,11 +92,13 @@ class LiveMappingReference:
             self._costmaps.clear()
         for role in ("global", "local"):
             permit = role + "_instance_permit"
-            if previous is None or getattr(previous, permit) != getattr(record, permit):
+            scope = (record.run_nonce, record.host_boot_id, getattr(record, permit))
+            if self._permits.get(role) != scope:
+                self._permits[role] = scope
                 self._costmaps.pop(role, None)
                 self._instances.pop(role, None)
                 self._cycles.pop(role, None)
-        self._authorization = record
+        self._authorization = self._last_authorization = record
         self._accepted_key = accepted_key
         if record.status != "selected":
             self._costmaps.clear()

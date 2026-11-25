@@ -58,6 +58,7 @@ class NativeNavigationBridge:
         self._selection = None
         self._navigation_floor_ns = 0
         self._geometry = None
+        self._authority_identity = None
 
     def configure_contract(self, contract):
         self.contract = contract
@@ -68,7 +69,13 @@ class NativeNavigationBridge:
     def export_authorization(self):
         self._authorization_revision += 1
         w, scan = self._fixed_watermark, self._scan
-        selected = self._selection is not None and not self._retired
+        installed = w is not None and self._authorized == (
+            w.map_ref.map_id,
+            w.map_ref.reference_revision,
+            w.reference_generation,
+        )
+        revoked = self._retired or (self._authorized is not None and not installed)
+        selected = self._selection is not None and installed and not revoked
         lease = 0
         if (
             selected
@@ -80,14 +87,34 @@ class NativeNavigationBridge:
         ):
             lease = scan.valid_until_steady_ns
         contract = self.contract or {}
+        # //Compatible: the frozen consumer rejects identity changes within one epoch.
+        # Derive epochs at the publication boundary, including intermediate revoked
+        # offers between owner authorization and verified fixed installation.
+        identity = (
+            self.boot,
+            None if w is None else (w.map_ref, w.reference_generation, w.source),
+            self._reference_floor,
+            self._reference_floor_steady_ns,
+            self._navigation_floor_ns,
+            self._selection,
+            contract.get("global_instance_permit", ""),
+            contract.get("local_instance_permit", ""),
+        )
+        if identity != self._authority_identity:
+            self._authority_epoch += 1
+            self._authority_identity = identity
         return ReferenceAuthorization(
             run_nonce=contract.get("run_nonce", "unconfigured"),
             host_boot_id=self.host_boot_id or "unknown",
             owner_instance=self._owner_instance,
             revision=self._authorization_revision,
             authority_epoch=self._authority_epoch,
-            status="revoked" if self._retired else "selected" if selected else "bootstrap",
-            reason="reference_unavailable" if self._retired else "",
+            status="revoked" if revoked else "selected" if selected else "bootstrap",
+            reason="reference_unavailable"
+            if self._retired
+            else "reference_changed"
+            if revoked
+            else "",
             map_id="" if w is None else w.map_ref.map_id,
             reference_revision=0 if w is None else w.map_ref.reference_revision,
             reference_generation="" if w is None else w.reference_generation,
@@ -136,7 +163,6 @@ class NativeNavigationBridge:
                 raise DomainError(ErrorCode.CONFLICT, "navigation selection changed session")
             self._selection = selection
             self._navigation_floor_ns = time.monotonic_ns()
-            self._authority_epoch += 1
         self._offer_authorization()
 
     def poll_contract(self):
@@ -167,7 +193,6 @@ class NativeNavigationBridge:
         self._retired = False
         self._reference_floor_steady_ns = time.monotonic_ns()
         self._selection = None
-        self._authority_epoch += 1
         self._geometry = None
         self.odom_frame = odom_frame
         self.boot, self._cut, self._grid = boot, None, None
@@ -276,7 +301,6 @@ class NativeNavigationBridge:
             raise DomainError(ErrorCode.CONFLICT, "reference selection changed graph")
         token = (fields["map_id"], fields["reference_revision"], fields["generation"])
         if self._authorized != token:
-            self._authority_epoch += 1
             self._authorized = token
             self._owner_floor_ns = fields["acceptance_floor_steady_ns"]
             self._reference_floor = self._last_key
@@ -384,7 +408,6 @@ class NativeNavigationBridge:
             self._domain_epoch += 1
             self._geometry = geometry
         if previous is not None and previous.source != w.source:
-            self._authority_epoch += 1
             self._reference_floor_steady_ns = time.monotonic_ns()
             self.invalidate_current("source_changed")
         self._fixed_watermark = w

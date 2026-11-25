@@ -89,9 +89,9 @@ class _NavigationStartup:
         self.groups = set()
         self.started_groups = set()
         self.pending = None
-        self.live = False
+        self.phase = "static"
+        self.consumers = set()
         self.cleanup_failed = False
-        self.closing = False
         self.context = context
         self._prepare("static")
 
@@ -126,35 +126,82 @@ class _NavigationStartup:
             sigkill_timeout="1.0",
         )
 
+    def _fail_handoff(self, reason):
+        # Failure is terminal for this startup run. Late exits remain observed,
+        # but only a new launch owner/run may retry after real settlement.
+        if self.phase != "closing":
+            self.phase = "failed"
+        if self.pending is not None and not self.pending.done():
+            self.pending.set_result(dict(ok=False, error=reason))
+
+    def _signal_groups(self):
+        # //Compatible: Humble SignalProcess sends SIGINT only; this is no exit proof.
+        for action in tuple(self.groups):
+            self.context.emit_event_sync(
+                SignalProcess(signal_number=signal.SIGINT, process_matcher=matches_action(action))
+            )
+
     def _bind(self, action, *, new_live=False):
         self.groups.add(action)
 
         def started(event, context):
             self.started_groups.add(action)
-            if new_live and self.pending is not None and not self.pending.done():
-                self.live = True
-                self.pending.set_result(dict(ok=True, contract=self.contract))
+            if new_live:
+                if self.phase == "starting":
+                    self.phase = "live"
+                    self.pending.set_result(dict(ok=True, contract=self.contract))
+                else:
+                    # A queued Launch action may start after its request was fenced.
+                    self._signal_groups()
             return []
 
         def exited(event, context):
             self.groups.discard(action)
             self.started_groups.discard(action)
             self.cleanup_failed = self.cleanup_failed or event.returncode != 0
-            if self.pending is not None and not self.pending.done() and not self.groups:
-                if self.closing or self.cleanup_failed:
-                    self.pending.set_result(
-                        dict(ok=False, error="static lifecycle group cleanup failed")
-                    )
-                    return []
-                self.binding["global_instance"] = secrets.token_hex(16)
-                (self.directory / "global-coverage.json").unlink(missing_ok=True)
-                self._prepare("live")
-                return self._bind(self._planner(), new_live=True)
+            if self.cleanup_failed:
+                self._fail_handoff("lifecycle group cleanup unconfirmed")
+            elif self.phase in ("static", "live") or (self.phase == "starting" and new_live):
+                self._fail_handoff("lifecycle group exited outside the static handoff")
+            elif self.phase == "stopping" and not self.groups:
+                try:
+                    self.binding["global_instance"] = secrets.token_hex(16)
+                    (self.directory / "global-coverage.json").unlink(missing_ok=True)
+                    self._prepare("live")
+                    self.phase = "starting"
+                    return self._bind(self._planner(), new_live=True)
+                except Exception as exc:
+                    self._fail_handoff(str(exc))
+            return []
+
+        def spawn(context):
+            if self.phase == "starting":
+                return [action]
+            # This action has never been submitted to Launch, so no exit is owed.
+            self.groups.discard(action)
             return []
 
         return [
             *resource_handlers("navigation", [action]),
             RegisterEventHandler(OnProcessStart(target_action=action, on_start=started)),
+            RegisterEventHandler(OnProcessExit(target_action=action, on_exit=exited)),
+            OpaqueFunction(function=spawn) if new_live else action,
+        ]
+
+    def bind_consumer(self, action):
+        # A normal adapter exit follows its native/controller finally chain.
+        # Unknown/abnormal exit cannot establish descendant settlement.
+        self.consumers.add(action)
+
+        def exited(event, context):
+            if event.returncode == 0:
+                self.consumers.discard(action)
+            else:
+                self.cleanup_failed = True
+                self._fail_handoff("navigation consumer cleanup unconfirmed")
+            return []
+
+        return [
             RegisterEventHandler(OnProcessExit(target_action=action, on_exit=exited)),
             action,
         ]
@@ -162,35 +209,59 @@ class _NavigationStartup:
     def start_groups(self, context):
         return [*self._bind(self._planner()), *self._bind(_localization_entry(context)[0])]
 
+    async def _wait_handoff(self, reader):
+        disconnected = asyncio.create_task(reader.read(1))
+        try:
+            done, _ = await asyncio.wait(
+                (self.pending, disconnected), timeout=22, return_when=asyncio.FIRST_COMPLETED
+            )
+            if disconnected in done:
+                raise RuntimeError("navigation startup requester disconnected")
+            if self.pending not in done:
+                raise RuntimeError("navigation startup handoff timed out")
+            return self.pending.result()
+        finally:
+            disconnected.cancel()
+            await asyncio.gather(disconnected, return_exceptions=True)
+
     async def _request(self, reader, writer):
+        owns_handoff = False
         try:
             row = json.loads(await asyncio.wait_for(reader.readline(), 2))
-            if self.closing:
-                raise RuntimeError("navigation startup is closing")
             if row != dict(command="prepare_live", run_nonce=self.binding["run_nonce"]):
                 raise ValueError("foreign navigation startup request")
-            if self.live:
+            if self.phase == "live":
                 result = dict(ok=True, contract=self.contract)
+            elif self.phase == "static":
+                if not self.groups or self.groups != self.started_groups:
+                    raise RuntimeError("static lifecycle handles unavailable")
+                owns_handoff = True
+                self.pending = asyncio.get_running_loop().create_future()
+                self.phase = "stopping"
+                self._signal_groups()
+                result = await self._wait_handoff(reader)
             else:
-                if self.pending is None:
-                    if not self.groups or self.groups != self.started_groups:
-                        raise RuntimeError("static lifecycle handles unavailable")
-                    self.pending = asyncio.get_running_loop().create_future()
-                    for action in tuple(self.groups):
-                        self.context.emit_event_sync(
-                            SignalProcess(
-                                signal_number=signal.SIGINT, process_matcher=matches_action(action)
-                            )
-                        )
-                result = await asyncio.wait_for(asyncio.shield(self.pending), 22)
+                raise RuntimeError("navigation startup transaction unavailable: " + self.phase)
             writer.write((json.dumps(result) + "\n").encode())
             await writer.drain()
-        except (ValueError, RuntimeError, asyncio.TimeoutError) as exc:
-            writer.write((json.dumps(dict(ok=False, error=str(exc))) + "\n").encode())
-            await writer.drain()
+        except asyncio.CancelledError:
+            if owns_handoff:
+                self._fail_handoff("navigation startup request cancelled")
+            raise
+        except (ValueError, RuntimeError, OSError, asyncio.TimeoutError) as exc:
+            if owns_handoff:
+                self._fail_handoff(str(exc))
+            try:
+                writer.write((json.dumps(dict(ok=False, error=str(exc))) + "\n").encode())
+                await writer.drain()
+            except OSError:
+                pass
         finally:
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
 
     def listen(self, context):
         async def start():
@@ -203,7 +274,8 @@ class _NavigationStartup:
         return []
 
     def cleanup(self, context):
-        self.closing = True
+        self.phase = "closing"
+        self._fail_handoff("navigation startup is closing")
         if self.server is not None:
             self.server.close()
 
@@ -212,9 +284,9 @@ class _NavigationStartup:
             if self.server is not None:
                 await self.server.wait_closed()
             deadline = asyncio.get_running_loop().time() + 12
-            while self.groups and asyncio.get_running_loop().time() < deadline:
+            while (self.groups or self.consumers) and asyncio.get_running_loop().time() < deadline:
                 await asyncio.sleep(0.05)
-            if not self.groups:
+            if not self.groups and not self.consumers and not self.cleanup_failed:
                 shutil.rmtree(self.directory)
 
         context.add_completion_future(context.asyncio_loop.create_task(finish()))
@@ -312,29 +384,31 @@ def _simulation_nodes(context):
                 },
             ],
         ),
-        Node(
-            package="senior_robot",
-            executable="agent_adapter",
-            name="command_node",
-            parameters=[
-                params,
-                ros_sensor_parameters(),
-                common,
-                {
-                    "robot_id": ParameterValue(LaunchConfiguration("robot_id"), value_type=str),
-                    "ipc_replace_existing_socket": False,
-                    "hardware_navigation_reference": ParameterValue(
-                        LaunchConfiguration("navigation_reference"), value_type=str
-                    ),
-                    "navigation_controller_params": ParameterValue(
-                        controller_params, value_type=str
-                    ),
+        *startup.bind_consumer(
+            Node(
+                package="senior_robot",
+                executable="agent_adapter",
+                name="command_node",
+                parameters=[
+                    params,
+                    ros_sensor_parameters(),
+                    common,
+                    {
+                        "robot_id": ParameterValue(LaunchConfiguration("robot_id"), value_type=str),
+                        "ipc_replace_existing_socket": False,
+                        "hardware_navigation_reference": ParameterValue(
+                            LaunchConfiguration("navigation_reference"), value_type=str
+                        ),
+                        "navigation_controller_params": ParameterValue(
+                            controller_params, value_type=str
+                        ),
+                    },
+                ],
+                additional_env={
+                    "SENIOR_AGENT_SOCKET": LaunchConfiguration("agent_socket"),
+                    "SENIOR_LAUNCH_SOCKET_OWNER": secrets.token_hex(16),
                 },
-            ],
-            additional_env={
-                "SENIOR_AGENT_SOCKET": LaunchConfiguration("agent_socket"),
-                "SENIOR_LAUNCH_SOCKET_OWNER": secrets.token_hex(16),
-            },
+            )
         ),
     ]
 

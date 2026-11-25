@@ -106,3 +106,35 @@ async def test_hardware_supervision_holds_one_overlay_until_children_settle(tmp_
     assert await service_runtime.supervise(tmp_path, [], {}, profile=profile) == 7
     assert not observed[0].exists()
     assert profile.navigation_parameters == Path("ros2/src/senior_navigation/config/nav2.yaml")
+
+
+def test_live_overlay_overrides_node_maximum_and_preserves_static_settings(tmp_path):
+    import yaml
+    from senior_navigation.parameters import prepare_navigation_parameters
+
+    data = yaml.safe_load(Path("ros2/src/senior_navigation/config/nav2.yaml").read_text())
+    for role in ("global", "local"):
+        p = data[role + "_costmap"][role + "_costmap"]["ros__parameters"]
+        p.update(use_maximum=True, footprint_padding=0.07)
+        p["static_layer"] = dict(plugin="nav2_costmap_2d::StaticLayer", lethal_cost_threshold=98)
+    base = tmp_path / "base.yaml"
+    base.write_text(yaml.safe_dump(data))
+    output = prepare_navigation_parameters(
+        base,
+        output=tmp_path / "live.yaml",
+        mode="live",
+        contract_directory=tmp_path,
+        run_nonce="run",
+        host_boot_id="host",
+        global_instance="g",
+        local_instance="l",
+    )
+    live = yaml.safe_load(output.read_text())
+    for role in ("global", "local"):
+        before = data[role + "_costmap"][role + "_costmap"]["ros__parameters"]
+        p = live[role + "_costmap"][role + "_costmap"]["ros__parameters"]
+        assert p["use_maximum"] is False
+        assert "use_maximum" not in p["static_layer"]
+        assert p["static_layer"]["lethal_cost_threshold"] == 98
+        assert p["footprint_padding"] == 0.07
+        assert p.get("footprint") == before.get("footprint")

@@ -9,7 +9,7 @@ from senior_mapping.workspace import WorkspaceGrid
 from vehicle_core.values import MapRef, Pose2D
 
 
-def install_synthetic_fixed(bridge, fields):
+def install_synthetic_fixed(bridge, fields, *, fixed_revision=None):
     """Synthetic-admitted fixed F baseline replaces the retired raw install fixture."""
     from dataclasses import replace
 
@@ -67,7 +67,7 @@ def install_synthetic_fixed(bridge, fields):
         None if bridge._last_key is None else SourceIdentity.from_key(bridge._last_key),
         graph["sequence"],
         anchor_digest(fixed_anchor_records(anchors)),
-        revision,
+        revision if fixed_revision is None else fixed_revision,
         None,
         0,
         0,
@@ -689,3 +689,220 @@ def test_static_fallback_remains_qualified_without_navigation_contract():
     assert ref.qualified(MapRef("static", 1), "G")
     assert ref.pose() == Pose2D(1.0, 2.0, 0.0)
     assert ref.state("manual", navigation_ready=True)["navigation_ready"]
+
+
+def test_role_pins_and_cycles_survive_map_withdraw_begin(monkeypatch):
+    from dataclasses import replace
+
+    from senior_mapping.navigation_bridge import NativeNavigationBridge
+    from senior_mapping.shared_scan import CurrentLayerCoverage
+
+    now = time.monotonic_ns()
+    monkeypatch.setattr(time, "monotonic_ns", lambda: now)
+    ref = reference()
+    grid = ref.grid()
+    bridge = NativeNavigationBridge(NS(), ref, None)
+    bridge.host_boot_id = "host"
+    bridge.contract = dict(run_nonce="run", global_instance_permit="g", local_instance_permit="l")
+    bridge._publish_current = lambda *a: None
+    bridge._publish_transform = lambda *a: None
+
+    def session(boot, generation):
+        nonlocal now
+        bridge.begin(boot)
+        bridge._grid = (1, grid, object())
+        bridge.observe_cut(
+            dict(
+                boot_id=boot,
+                sequence=1,
+                keyframe_id="0",
+                anchors=[dict(id="0", x=10.0, y=0.0, yaw=0.0)],
+                odom=[0.0, 0.0, 0.0],
+            )
+        )
+        now += 1
+        first = message(1)
+        first.backend_boot = boot
+        bridge.observe_scan(decode(first), first.scan.capture)
+        fields = dict(sequence=1, map_id="map", reference_revision=1, generation=generation)
+        install_synthetic_fixed(bridge, fields)
+        bridge.authorize_navigation(
+            dict(**fields, selection_token="selection-" + boot, selection_generation=1)
+        )
+        now += 1
+        fresh = message(2)
+        fresh.backend_boot = boot
+        scan = decode(fresh)
+        bridge.observe_scan(scan, fresh.scan.capture)
+        return ref._authorization, scan
+
+    def receipt(role, instance, cycle):
+        return CurrentLayerCoverage(
+            run_nonce=auth.run_nonce,
+            host_boot_id="host",
+            owner_instance=auth.owner_instance,
+            authority_epoch=auth.authority_epoch,
+            role=role,
+            role_instance_permit=getattr(auth, role + "_instance_permit"),
+            plugin_instance=instance,
+            cycle=cycle,
+            status="ready",
+            map_id="map",
+            reference_revision=1,
+            reference_generation=auth.reference_generation,
+            backend_boot=auth.backend_boot,
+            key=scan.key,
+            sample_steady_ns=now,
+            scan_deadline_steady_ns=scan.valid_until_steady_ns,
+            coverage_domain_epoch=auth.coverage_domain_epoch,
+            geometry=auth.geometry,
+            master_geometry=auth.geometry,
+            cycle_started_steady_ns=now,
+            cycle_completed_steady_ns=now,
+            valid_until_steady_ns=scan.valid_until_steady_ns,
+            master_frame="map",
+            updated_bounds=(-50.0, -50.0, 50.0, 50.0),
+            global_all_hits_covered=True,
+            local_in_window_hits_covered=True,
+            transform_valid=True,
+            cleanup_complete=True,
+        )
+
+    auth, scan = session("backend", "R1")
+    old_auth = auth
+    old_rows = {r: receipt(r, r, 10) for r in ("global", "local")}
+    for role, row in old_rows.items():
+        ref.observe_costmap_coverage(role, row)
+    assert ref.qualified(grid.map_ref, "R1")
+    for role in ("global", "local"):
+        ref.observe_costmap_coverage(role, receipt(role, "replacement", 11))
+    assert not ref.qualified(grid.map_ref, "R1")
+    bridge.withdraw()
+    # Old authorization alone cannot reopen the retired reference or erase its pin.
+    ref.set_navigation_authorization(old_auth, accepted_key=scan.key)
+    assert not ref.qualified(grid.map_ref, "R1")
+    auth, scan = session("backend2", "R2")
+    for role in ("global", "local"):
+        ref.observe_costmap_coverage(role, receipt(role, "replacement", 12))
+    assert not ref.qualified(grid.map_ref, "R2")
+    for role in ("global", "local"):
+        ref.observe_costmap_coverage(role, old_rows[role])  # old epoch cannot restore
+        ref.observe_costmap_coverage(role, receipt(role, role, 10))  # cycle cannot rewind
+    assert not ref.qualified(grid.map_ref, "R2")
+    for role in ("global", "local"):
+        ref.observe_costmap_coverage(role, receipt(role, role, 11))
+    assert ref.qualified(grid.map_ref, "R2")
+    # Original owner rotates before a replacement spawn; both roles may start new cycles.
+    bridge.contract.update(global_instance_permit="g2", local_instance_permit="l2")
+    bridge._offer_authorization()
+    auth = ref._authorization
+    for role in ("global", "local"):
+        ref.observe_costmap_coverage(role, receipt(role, "owner-replacement", 1))
+    assert ref.qualified(grid.map_ref, "R2")
+    auth = replace(auth, run_nonce="new-startup-run", revision=auth.revision + 1)
+    ref.set_navigation_authorization(auth, accepted_key=scan.key)
+    for role in ("global", "local"):
+        ref.observe_costmap_coverage(role, receipt(role, "new-run-instance", 1))
+    assert ref.qualified(grid.map_ref, "R2")
+
+
+def test_real_bridge_authority_epochs_have_immutable_visible_identity(tmp_path, monkeypatch):
+    from dataclasses import asdict
+
+    from senior_mapping.navigation_bridge import NativeNavigationBridge
+    from senior_mapping.shared_scan import ReferenceAuthorization, read_contract_record
+
+    bridge = NativeNavigationBridge(NS(), reference(), None)
+    bridge.host_boot_id = "host"
+    bridge._publish_current = lambda *a: None
+    bridge._publish_transform = lambda *a: None
+    bridge.configure_contract(
+        dict(
+            contract_directory=str(tmp_path),
+            run_nonce="run",
+            global_instance_permit="g",
+            local_instance_permit="l",
+        )
+    )
+    slot = bridge.authorization_slot
+    offer = slot.offer
+    visible = []
+
+    def observe_inode(row):
+        offer(row)
+        slot.flush()  # Force every real offer to become observable before the next call.
+        installed = read_contract_record(slot.path, ReferenceAuthorization)
+        assert installed == row
+        visible.append(installed)
+
+    monkeypatch.setattr(slot, "offer", observe_inode)
+    try:
+        bridge.begin("backend")
+        grid = reference().grid()
+        bridge._grid = (1, grid, object())
+        bridge.observe_cut(
+            dict(
+                boot_id="backend",
+                sequence=1,
+                keyframe_id="0",
+                anchors=[dict(id="0", x=10.0, y=0.0, yaw=0.0)],
+                odom=[0.0, 0.0, 0.0],
+            )
+        )
+        fields = dict(sequence=1, map_id="map", reference_revision=1, generation="R1")
+        install_synthetic_fixed(bridge, fields)
+        bridge.authorize_navigation(
+            dict(**fields, selection_token="selection", selection_generation=1)
+        )
+        assert visible[-1].status == "selected" and visible[-1].lease_until_steady_ns == 0
+        fresh = message(1)
+        bridge.observe_scan(decode(fresh), fresh.scan.capture)
+        # First verified source after a source-less bootstrap basis; same R.
+        install_synthetic_fixed(bridge, fields, fixed_revision=1)
+        fresh = message(2)
+        bridge.observe_scan(decode(fresh), fresh.scan.capture)
+        assert visible[-1].lease_until_steady_ns == decode(fresh).valid_until_steady_ns
+        fields["generation"] = "R2"
+        install_synthetic_fixed(bridge, fields)
+        assert visible[-1].reference_generation == "R2"
+        assert visible[-1].selection_token == "selection"
+        assert visible[-1].lease_until_steady_ns == 0
+        fresh = message(3)
+        bridge.observe_scan(decode(fresh), fresh.scan.capture)
+        assert visible[-1].lease_until_steady_ns == decode(fresh).valid_until_steady_ns
+        bridge.rotate_local_permit("l2")
+        bridge.withdraw()
+        assert visible[-1].status == "revoked" and visible[-1].lease_until_steady_ns == 0
+        # Frozen sameAuthority identity, plus owner permits which also receive a new epoch.
+        names = (
+            "owner_instance",
+            "map_id",
+            "reference_revision",
+            "reference_generation",
+            "backend_boot",
+            "source",
+            "acceptance_floor",
+            "acceptance_floor_steady_ns",
+            "navigation_floor_steady_ns",
+            "selection_token",
+            "selection_generation",
+            "global_instance_permit",
+            "local_instance_permit",
+        )
+        epochs = {}
+        for row in visible:
+            print(
+                "VISIBLE_AUTHORITY",
+                row.authority_epoch,
+                row.status,
+                row.reference_generation,
+                row.source,
+                "revision",
+                row.revision,
+            )
+        for row in visible:
+            identity = {name: asdict(row)[name] for name in names}
+            old = epochs.setdefault(row.authority_epoch, identity)
+            assert old == identity, f"identity changed inside epoch {row.authority_epoch}"
+    finally:
+        slot.close()
