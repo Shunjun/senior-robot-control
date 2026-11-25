@@ -56,7 +56,32 @@
   border-radius: 8px;
   font-size: 11px;
 }
+/* Compatible: EmergencyStop retains its existing recovery-button class. */
+.ghost {
+  min-height: 44px;
+  min-width: 44px;
+  padding: 8px 12px;
+  border: 1px solid var(--amber);
+  border-radius: 9px;
+  color: var(--amber);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ghost:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.ghost:focus-visible {
+  outline: 2px solid var(--amber);
+  outline-offset: 2px;
+}
 .estopDock {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
   position: relative;
   margin-left: auto;
   max-width: min(340px, calc(100vw - 24px));
@@ -222,6 +247,15 @@
 .axisRight {
   right: 10px;
 }
+@media (min-width: 461px) and (max-width: 1000px) {
+  .estopDock[data-compact="true"]:has(> .ghost) {
+    display: grid;
+    justify-items: start;
+  }
+  .estopDock[data-compact="true"] > .estop + .ghost {
+    margin-top: 28px;
+  }
+}
 @media (max-width: 460px) {
   .drive {
     grid-template-columns: minmax(0, 1fr) 142px;
@@ -295,6 +329,13 @@
   }
   .estopDock {
     margin-left: 0;
+  }
+  /* Recovery actions need a full row below the compact header and logout. */
+  .estopDock[data-compact="true"]:has(> .ghost) {
+    grid-row: 3;
+    grid-column: 1/-1;
+    max-width: none;
+    margin-top: 18px;
   }
   .estopCap {
     font-size: 12px;

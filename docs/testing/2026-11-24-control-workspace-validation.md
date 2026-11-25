@@ -452,3 +452,17 @@ V1/V2、V4/V6、V7 在 `/dev/shm` 只读 baseline 副本的当前回归入口上
 `npm --prefix web run typecheck`、`npm --prefix web run build`通过（原chunk-size警告保留）；`TMPDIR=/dev/shm PLAYWRIGHT_BASE_URL=http://127.0.0.1:4148 PLAYWRIGHT_CHANNEL=chrome npm --prefix web run test:e2e -- control.spec.ts --output=/dev/shm/control-pr41-followup/e2e-results`三尺寸3 passed。新增的按钮相交探针曾把闭合details中的未绘制按钮算入，三尺寸失败；修正为真实checkVisibility后通过，失败日志单独保留，不冒称产品失败。后端不变未重跑，没有实车/ROS/真实配对/业务服务连接；4148仅本地dist静态资源，fetch/WS由安全fixture全部替换。
 
 修复前bounds、最终新原图、命中/请求计数、精确命令日志和小diff见 `/tmp/control-workspace-pr41-followup-2026-11-25/`；旧 `/tmp/control-workspace-visual-repair-2026-11-25/` 原图保持归档，不替换。844保留原min-height滚动，另附实际viewport图避免fullPage的sticky合成位置误读。PR41继续Draft，最终视觉验收仍待负责人亲阅。
+
+### PR41 独立审核追加 R6/R7（2026-11-25，待负责人亲阅）
+
+起点干净 `bc89449c80a1aebcdff7bd1889c814f48be78f47`，只改 Map.module.css、Drive.module.css、原 control.spec.ts 和本文4个已有路径，新增/删除0；与前五项合计9产品/2测试/1文档共12路径。MapCanvas/EmergencyStop/协议/资格/pending/控制状态机均未改，前五项修复保留。
+
+R6：删除手机20px硬上限；线段显式 border-box（标称长度包含两侧各1px边框）、flex-shrink:0、min-width:0，避免另一个最小宽度改写真实线长。手机现有两列工具中，比例尺在原跨列槽位内上下排线段/标注，不改变三组底边和44px工具。离线原失败探针同输入zoom50/1m：390实际20→50px，1440仍50px。安全fixture390连续缩放：1m×55.393342=55.393342，inline55.3933、rect55.390625；随后0.5m×69.241678=34.620839，inline34.6208、rect34.609375。两次工具组右界115、dock左界133，无覆盖；原比例尺算法、真实坐标/resolution未动。
+
+R7：恢复实际消费者ghost的橙色空心/9px圆角/44px热区、disabled和focus-visible；主急停红色不变。恢复态390占页头独立行，紧凑横屏单列并避让原退出入口。离线1440按钮高25.5→44px、radius0→9px；实际1440/390/844两个恢复按钮均98.015625×44px，透明底/橙边、2px键盘焦点，急停64×44且中心命中，所有可见页头按钮无相交。许可→禁止复位连续状态下，disabled opacity0.45、高44px，恢复请求数0→0；没有操作真实急停/恢复。
+
+Bug回归：原control.spec.ts增量比较米数×data-zoom/inline/rect、dock边界、恢复按钮样式/热区/键盘焦点、可见页头按钮相交和禁用零请求。bc89449生产bundle的390新增几何断言失败（inline55.3933实际20）；修复后通过。第一次CSS验证发现844恢复按钮与退出真实相交，已在同Drive CSS内修正，失败日志保留。早期4148连接拒绝和4147旧8cf菜单失败不算R6/R7红绿。
+
+复用回归：`npm --prefix web test -- --run src/features/drive/drive.test.tsx src/features/map/map.test.tsx src/api/vehicleState.test.ts`，3 files/49 passed；原急停/手动控制phase、资格及地图身份等保护保留。`npm --prefix web run typecheck`、`npm --prefix web run build`通过（原chunk-size警告保留）；E2E文件另用临时tsconfig严格类型检查通过。`TMPDIR=/dev/shm PLAYWRIGHT_BASE_URL=http://127.0.0.1:4148 PLAYWRIGHT_CHANNEL=chrome npm --prefix web run test:e2e -- control.spec.ts --output=/dev/shm/control-pr41-r6r7-delivery`，三尺寸3 passed；跨尺寸CSS影响恢复态布局，因此复用这一既有矩阵，无新增矩阵或后端重跑。
+
+4147旧归档和前五项26张图均不覆盖；4148仅web/dist静态预览，fetch/WS安全fixture截断，未连接业务/实车/ROS/真实认证配对视频。新增8张实际viewport截图（390比例尺缩放前后；三尺寸许可恢复/禁止复位），34张统一原图索引和每命令/版本/数值见 `/tmp/control-workspace-pr41-scale-recovery-delivery-2026-11-25.md` 及 `/tmp/control-workspace-pr41-scale-recovery-2026-11-25/evidence-index.html`。PR41保持Draft，不代行负责人最终验收。

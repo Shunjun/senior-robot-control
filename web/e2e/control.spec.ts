@@ -53,6 +53,22 @@ for (const viewport of [
           : route.abort();
       });
       await page.addInitScript({ path: fixture });
+      // Extend only the safe socket fixture; no production or real service state.
+      await page.addInitScript({ content: `
+        const SafeSocket = window.WebSocket;
+        window.WebSocket = class extends SafeSocket {
+          emit(frame) {
+            if (frame.type === 'snapshot' && window.__recoveryProbe) {
+              const ui = frame.payload.vehicle_ui;
+              ui.confirmed_estop_status = 'software_latched';
+              ui.mode = 'estop';
+              ui.allowed_actions = window.__recoveryProbe === 'allowed'
+                ? ['estop_reset', 'fault_recover'] : [];
+            }
+            super.emit(frame);
+          }
+        };
+      ` });
       await page.goto(baseURL!);
       await expect(
         page.getByRole("heading", { name: "选择车辆，开始工作" }),
@@ -146,11 +162,35 @@ for (const viewport of [
         }),
       ).toBeLessThan(0.5);
       await page.getByRole("button", { name: "交换主次画面" }).click();
+      async function checkScale(stage: string) {
+        const scale = await page.getByLabel("地图比例尺", { exact: true }).evaluate(element => {
+          const line = element.querySelector("i")!;
+          const rect = line.getBoundingClientRect();
+          const zoom = Number(document.querySelector('[role="application"][aria-label="地图"]')!.getAttribute("data-zoom"));
+          const meters = Number(element.textContent!.replace("m", "").trim());
+          const style = getComputedStyle(line);
+          const dock = document.querySelector('[aria-label="视图底部工具"] > :nth-child(2)')!.getBoundingClientRect();
+          const group = element.parentElement!.getBoundingClientRect();
+          return { meters, zoom, inlineWidth: parseFloat(line.style.width), width: rect.width,
+            boxSizing: style.boxSizing, borderLeft: style.borderLeftWidth, borderRight: style.borderRightWidth,
+            scaleRight: element.getBoundingClientRect().right, groupRight: group.right, dockLeft: dock.left };
+        });
+        expect(Math.abs(scale.inlineWidth - scale.meters * scale.zoom)).toBeLessThan(0.05);
+        // The declared length includes the two 1px end borders (border-box).
+        expect(Math.abs(scale.width - scale.inlineWidth)).toBeLessThan(0.05);
+        expect(scale.boxSizing).toBe("border-box");
+        expect(scale.scaleRight).toBeLessThanOrEqual(scale.dockLeft);
+        expect(scale.groupRight).toBeLessThanOrEqual(scale.dockLeft);
+        followup[`scale-${stage}`] = scale;
+        if (viewport.width === 390) await page.screenshot({ path: testInfo.outputPath(`scale-${stage}.png`) });
+      }
+      await checkScale("before");
       const zoomBefore = Number(await map.getAttribute("data-zoom"));
       await page.getByRole("button", { name: "放大", exact: true }).click();
       expect(Number(await map.getAttribute("data-zoom"))).toBeGreaterThan(
         zoomBefore,
       );
+      await checkScale("after");
       await page.getByRole("button", { name: "适应窗口", exact: true }).click();
       await expect(
         page
@@ -485,6 +525,66 @@ for (const viewport of [
         path: testInfo.outputPath("tasks.png"),
         fullPage: true,
       });
+      await page.evaluate(() => { (window as unknown as Record<string, unknown>).__recoveryProbe = "allowed"; });
+      const reset = page.getByRole("button", { name: "复位软件急停", exact: true });
+      const recover = page.getByRole("button", { name: "恢复执行故障", exact: true });
+      await expect(reset).toBeEnabled();
+      await expect(recover).toBeEnabled();
+      const recovery = [];
+      for (const button of [reset, recover]) {
+        const bounds = await boundsAndHit(button);
+        expect(bounds.width).toBeGreaterThanOrEqual(44);
+        expect(bounds.height).toBeGreaterThanOrEqual(44);
+        await button.focus();
+        await page.keyboard.press("Tab");
+        await page.keyboard.press("Shift+Tab");
+        const style = await button.evaluate(e => {
+          const s = getComputedStyle(e);
+          return { radius: s.borderRadius, background: s.backgroundColor, border: s.borderColor,
+            focus: e.matches(":focus-visible"), outline: s.outlineStyle, outlineWidth: s.outlineWidth };
+        });
+        expect(style.radius).toBe("9px");
+        expect(style.background).toBe("rgba(0, 0, 0, 0)");
+        expect(style.focus).toBe(true);
+        expect(style.outline).toBe("solid");
+        recovery.push({ bounds, style });
+      }
+      const estop = page.getByRole("button", { name: "急停", exact: true });
+      const estopBounds = await boundsAndHit(estop);
+      expect(estopBounds.height).toBeGreaterThanOrEqual(44);
+      const headerButtons = await page.locator("header button").evaluateAll(elements => elements
+        .filter(e => e.checkVisibility()).map(e => {
+          const r = e.getBoundingClientRect();
+          return { text: e.textContent, x: r.x, y: r.y, right: r.right, bottom: r.bottom };
+        }));
+      for (let a = 0; a < headerButtons.length; a++) for (let b = a + 1; b < headerButtons.length; b++) {
+        const x = headerButtons[a]!, y = headerButtons[b]!;
+        expect(Math.min(x.right, y.right) - Math.max(x.x, y.x) > 0.5 &&
+          Math.min(x.bottom, y.bottom) - Math.max(x.y, y.y) > 0.5, `${x.text} overlaps ${y.text}`).toBe(false);
+      }
+      followup.recovery = { buttons: recovery, estop: estopBounds, headerButtons,
+        estopBackground: await estop.evaluate(e => getComputedStyle(e).backgroundColor) };
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.screenshot({ path: testInfo.outputPath("recovery-actions.png") });
+      const recoveryCalls = () => page.evaluate(() => (window as unknown as {
+        __wheelFixture: { calls: Array<{ type?: string }> }
+      }).__wheelFixture.calls.filter(c => c.type === "safety.estop.reset" || c.type === "safety.fault.recover").length);
+      const beforeDisabled = await recoveryCalls();
+      await page.evaluate(() => { (window as unknown as Record<string, unknown>).__recoveryProbe = "disabled"; });
+      await expect(reset).toBeDisabled();
+      await expect(recover).toHaveCount(0);
+      // Native disabled dispatch must remain inert, including keyboard input.
+      await reset.dispatchEvent("click");
+      await estop.focus();
+      await page.keyboard.press("Tab");
+      const afterDisabled = await recoveryCalls();
+      expect(afterDisabled).toBe(beforeDisabled);
+      followup.disabledRecovery = { requestsBefore: beforeDisabled, requestsAfter: afterDisabled,
+        ...await reset.evaluate(e => ({ disabled: (e as HTMLButtonElement).disabled,
+          opacity: getComputedStyle(e).opacity, height: e.getBoundingClientRect().height })) };
+      await boundsAndHit(estop);
+      await page.evaluate(() => window.scrollTo(0, 0));
+      await page.screenshot({ path: testInfo.outputPath("recovery-disabled.png") });
       const calls = await page.evaluate(
         () =>
           (

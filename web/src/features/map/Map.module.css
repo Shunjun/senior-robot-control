@@ -437,7 +437,9 @@
 }
 .scaleHtml i {
   display: block;
-  min-width: 10px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  min-width: 0;
   height: 7px;
   border: 1px solid currentColor;
   border-top: 0;
@@ -585,9 +587,6 @@
   }
 }
 @media (max-width: 460px) {
-  .scaleHtml i {
-    max-width: 20px;
-  }
   .fields {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
@@ -608,6 +607,8 @@
     grid-template-columns: repeat(2, 44px);
   }
   .toolbar[data-docked="true"] .scaleHtml {
+    flex-direction: column;
+    align-items: flex-start;
     gap: 3px;
     grid-column: 1/-1;
     font-size: 8px;
