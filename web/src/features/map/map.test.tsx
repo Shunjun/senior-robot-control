@@ -1,6 +1,4 @@
 import { act, cleanup, fireEvent, render, screen, within } from "@testing-library/react";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
 import { useState, type ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -207,6 +205,34 @@ describe("test_rotated_map_coordinates_roundtrip", () => {
 // ---------------------------------------------------------------- canvas behaviour
 
 describe("MapCanvas", () => {
+  it.each(["pointer", "keyboard"] as const)(
+    "keeps the first selected position while a second %s action sets heading",
+    (input) => {
+      const position = vi.fn();
+      const heading = vi.fn();
+      const { rerender } = render(
+        <MapCanvas map={ROTATED} stale={false} view={VIEW} pickEnabled onPick={position} onPickHeading={heading} />,
+      );
+      const surface = screen.getByRole("application", { name: "地图" });
+      stubRect(surface);
+      fireEvent.pointerDown(surface, { pointerId: 1, clientX: 320, clientY: 210 });
+      fireEvent.pointerUp(surface, { pointerId: 1, clientX: 320, clientY: 210 });
+      expect(heading).not.toHaveBeenCalled();
+      const first = position.mock.calls[0]![0] as Pose;
+      rerender(<MapCanvas map={ROTATED} stale={false} view={VIEW} pickEnabled draft={first} onPick={position} onPickHeading={heading} />);
+      if (input === "pointer") {
+        fireEvent.pointerDown(surface, { pointerId: 2, clientX: 320, clientY: 110 });
+        fireEvent.pointerUp(surface, { pointerId: 2, clientX: 320, clientY: 110 });
+      } else {
+        fireEvent.keyDown(surface, { key: "ArrowUp" });
+        fireEvent.keyDown(surface, { key: "Enter" });
+      }
+      expect(position).toHaveBeenCalledTimes(1);
+      expect(heading).toHaveBeenCalledOnce();
+      expect(heading.mock.calls[0]![0]).toEqual({ ...first, yaw: Math.PI / 2 });
+    },
+  );
+
   it("zooms and pans from buttons and the keyboard", () => {
     render(<MapCanvas map={ROTATED} stale={false} />);
     const surface = screen.getByRole("application", { name: "地图" });
@@ -304,22 +330,19 @@ describe("MapCanvas", () => {
 
 // ---------------------------------------------------------------- goal gating
 
-function Harness({
-  snap,
-  map,
-  onGoal,
-  onHint,
-}: {
+interface HarnessProps {
   snap: RobotSnapshot;
   map: OccupancySnapshot;
   onGoal: (goal: MapGoal) => void;
   onHint: (hint: PoseHint) => void;
-}): ReactElement {
+  selectionMode?: "goal" | "hint" | "home";
+}
+function Harness({ snap, map, onGoal, onHint, selectionMode = "goal" }: HarnessProps): ReactElement {
   const [draft, setDraft] = useState<Pose | null>(null);
   return (
     <>
       <MapCanvas map={map} stale={snap.stale} view={VIEW} pickEnabled draft={draft} onPick={setDraft} />
-      <PosePicker snapshot={snap} map={map} draft={draft} onDraftChange={setDraft} onGoal={onGoal} onHint={onHint} />
+      <PosePicker selectionMode={selectionMode} snapshot={snap} map={map} draft={draft} onDraftChange={setDraft} onGoal={onGoal} onHint={onHint} />
     </>
   );
 }
@@ -355,7 +378,7 @@ describe("PosePicker", () => {
   it("emits a goal that carries the map reference", () => {
     const onGoal = vi.fn();
     render(<Harness snap={snapshot()} map={ROTATED} onGoal={onGoal} onHint={vi.fn()} />);
-    expect((screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByRole("button", { name: "确认目标" })).toBeNull();
     setField("X (m)", "3.2");
     setField("Y (m)", "-1.8");
     setField("朝向 (°)", "90");
@@ -390,14 +413,14 @@ describe("PosePicker", () => {
   it("offers a localization hint while not localized, with the map reference", () => {
     const onHint = vi.fn();
     const onGoal = vi.fn();
-    render(<Harness snap={snapshot({ localized: false })} map={ROTATED} onGoal={onGoal} onHint={onHint} />);
+    const { rerender } = render(<Harness snap={snapshot({ localized: false })} map={ROTATED} onGoal={onGoal} onHint={onHint} />);
     // Goals need a localized robot; a hint is how it becomes localized.
     setField("X (m)", "3.2");
     setField("Y (m)", "-1.8");
     expect((screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/定位未完成.*不能下达目标/)).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("radio", { name: "重定位提示" }));
+    rerender(<Harness selectionMode="hint" snap={snapshot({ localized: false })} map={ROTATED} onGoal={onGoal} onHint={onHint} />);
     const submit = screen.getByRole("button", { name: "提交定位提示" }) as HTMLButtonElement;
     expect(submit.disabled).toBe(false);
     fireEvent.click(submit);
@@ -411,9 +434,8 @@ describe("PosePicker", () => {
   it("blocks a hint on a cached map", () => {
     const onHint = vi.fn();
     render(
-      <Harness snap={snapshot({ stale: true, connected: false, localized: false })} map={ROTATED} onGoal={vi.fn()} onHint={onHint} />,
+      <Harness selectionMode="hint" snap={snapshot({ stale: true, connected: false, localized: false })} map={ROTATED} onGoal={vi.fn()} onHint={onHint} />,
     );
-    fireEvent.click(screen.getByRole("radio", { name: "重定位提示" }));
     setField("X (m)", "3.2");
     setField("Y (m)", "-1.8");
     const submit = screen.getByRole("button", { name: "提交定位提示" }) as HTMLButtonElement;
@@ -429,7 +451,8 @@ describe("HomeControls", () => {
   it("test_home_unset_and_localization_pending_disable_navigation", async () => {
     const link = new FakeLink();
     const { rerender } = render(<HomeControls snapshot={snapshot({ home: null })} link={link} />);
-    const start = () => screen.getByRole("button", { name: "返航" }) as HTMLButtonElement;
+    const start = () => screen.getByRole("button", { name: "返回 Home" }) as HTMLButtonElement;
+    fireEvent.click(screen.getByText("定位与 Home 详情"));
     const resume = () => screen.getByRole("button", { name: "继续导航" }) as HTMLButtonElement;
 
     expect(start().disabled).toBe(true);
@@ -458,15 +481,15 @@ describe("HomeControls", () => {
   it("blocks start and resume while a cross-robot Home is unconfirmed", () => {
     const home = { waypoint_id: "home-1", map_ref: MAP_REF, status: "pending_confirmation" };
     render(<HomeControls snapshot={snapshot({ home })} link={new FakeLink()} />);
-    expect((screen.getByRole("button", { name: "返航" }) as HTMLButtonElement).disabled).toBe(true);
-    expect((screen.getByRole("button", { name: "继续导航" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "返回 Home" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "继续导航", hidden: true }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/尚未确认/)).toBeTruthy();
   });
 
   it("blocks navigation when Home belongs to another map", () => {
     const home = { waypoint_id: "home-1", map_ref: { map_id: "map-9", reference_revision: 1 }, status: "ready" };
     render(<HomeControls snapshot={snapshot({ home })} link={new FakeLink()} />);
-    expect((screen.getByRole("button", { name: "返航" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "返回 Home" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/Home 不属于当前地图/)).toBeTruthy();
   });
 
@@ -576,24 +599,16 @@ describe("HomeControls", () => {
   it("shows Home and localization state, and a missing snapshot as unknown", () => {
     const { rerender } = render(<HomeControls snapshot={snapshot()} link={new FakeLink()} />);
     expect(screen.getByText(/home-1/)).toBeTruthy();
-    expect(screen.getByRole("status", { name: "定位状态" }).textContent).toContain("已定位");
+    expect(screen.getByRole("status", { name: "定位状态" }).textContent).toContain("定位正常");
     rerender(<HomeControls snapshot={null} link={new FakeLink()} />);
     expect(screen.getByText(/等待车端快照/)).toBeTruthy();
-    expect((screen.getByRole("button", { name: "返航" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "返回 Home" }) as HTMLButtonElement).disabled).toBe(true);
   });
 });
 
-// ---------------------------------------------------------------- layout
-
-describe("map layout", () => {
-  it("keeps the map usable in landscape and the controls large", () => {
-    const css = readFileSync(resolve(__dirname, "Map.module.css"), "utf8");
-    expect(css).toMatch(/@media[^{]*orientation:\s*landscape/);
-    expect(css).toMatch(/touch-action:\s*none/);
-    expect(css).toMatch(/min-height:\s*var\(--touch\)/);
-    expect(css).toMatch(/:focus-visible/);
-  });
-});
+// Frozen geometry, keyboard focus and touch handling are checked in the actual
+// three-size browser flow. The old regex test required enlarged controls and an
+// extra landscape layout, both contradicted by the approved final cascade.
 
 it("renders live scan hits in the map frame and hides all live overlays on cached maps", () => {
   const live = { map: ROTATED, view: VIEW, robot: { x: 3.4, y: -1.6, yaw: Math.PI / 2 }, scanPoints: [{ x: 3.5, y: -1.5 }] };

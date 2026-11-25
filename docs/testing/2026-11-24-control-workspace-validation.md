@@ -419,3 +419,50 @@ browser-final有**13张本版截图**：每尺寸drive/mini-map/estop-scrolled/t
 合并后再次确认两子树干净、两HEAD相对父HEAD独有提交均0，检查Orca全部子树会话均在空闲shell/已完成worker提示，没有另行运行的开发/返修任务或明确keep-open要求。使用Orca `worktree rm --delete-branch --json` 正常移除两子worktree（无force）；机制保留了本地分支，随后基于当前父HEAD已包含全部提交以普通 `git branch -d` 删除。前后worktree/sessions清单及两个cleanup收据保存在证据目录；父工作区、原main工作区和main分支均保留。
 
 **未验证**：真实HTTP/WS服务集成、实车、ROS、真实视频/WebRTC/TURN、真实配对兑换。原control.integration.spec.ts保留且默认不连接服务器，此轮只类型检查。缺实际轮廓仍箭头fallback并提示尺寸不可用；FIFO/run-now缺失仍提示暂未实现。需要contracts/cloud与车端协同部署，不能宣传任意版本双向兼容或新数据库可直接降级。集成交付时PR40保持Draft；负责人已完成同版验收，本次授权在前置检查满足后转Ready，最终发布结果见本次交付报告，不能以本地验证代替已推送声明。
+
+## 2026-11-25 批准 DEMO 返修（待负责人亲阅）
+
+本轮从已合并 PR40 的同一 tree 继续，在 `feat/control-workspace` 正常 merge `origin/main=11a26906` 更新祖先。移除 RobotPanel 旧 article、同步/诊断外层；共享 viewport、锚定设备菜单与独立配对 modal；驾驶唯一底部权限动作与大速度；浮动预览、任务 list/pick/editor、地图目录/包操作、状态 CPU 真样本；完整日志及四类设置。已批准追加登录按独立圆角页面接入，单密码与原认证链不变。
+
+新增实质场景（六条连续流程，非样式镜像）：
+
+- V1/V2 空页无默认菜单、外点/Escape焦点、选离线车/取消选择。
+- V4/V6 connecting → waiting → snapshot 保持同一 viewport，无旧 article / 同步行。
+- V7 preparing → prepared → release 始终只有一个权限动作，不自动发送 intent。
+- V15 list → 三点 → 撤销 → editor，同一草稿和橙色顺序。
+- V24 校准开始结果未知 → 换分类/日志/设置 → 查询原 start_request_id，仅一次 start。
+- 登录显示/隐藏不改密码、不提交；busy防重复；成功清密码并初始化设备。
+
+V1/V2、V4/V6、V7 在 `/dev/shm` 只读 baseline 副本的当前回归入口上分别失败（3 failed），当前实现对应场景通过。原视觉复现、具体断言、失败日志与同版截图索引归档在 `/tmp/control-workspace-visual-repair-delivery-2026-11-25.md`；不能将旧历史验收当成本轮批准。
+
+复用原有效回归：手动控制迟到/新按压/松手/切页/背压/急停；名称 N7/N9/N10 与 Unicode；任务 F1 七恢复输入与 R1/R2；v2/legacy 地图身份/迟到 tile；原生栅格/比例尺；性能同 sequence 时效；日志原文/分页/download；设置 SI、版本冲突/未知同 ID 重试；固定回波校准状态。未修改后端、API、Transport 或 ManualController。
+
+验证：受影响 13 个 Vitest 入口 187 passed；最终地图/任务补验 38 passed；`npm run typecheck` 与 `npm run build` 通过，保留原 Vite chunk-size 提示。三尺寸生产客户端安全 fixture `control.spec.ts` 分别以1440×1000、390×844、844×390执行；最终命令与结果以交付报告为准，浏览器截图不是实车证明。登录/控制/配对/地图/视频均仅安全静态 fixture，非 API fetch 一律拒绝、WebSocket全替换、路由仅静态资源放行。
+
+真实能力差异：摄像头默认关闭且与设置共用 owner；无真实视频帧、无实车认证/配对验证；无校准几何仍箭头/尺寸不可用；roll/pitch/缺样本明确不可用；立即执行/FIFO/缺图层/画质采样写入仍暂未实现且零请求。390为44px热区使用184px dock、图例入口和更高底部避让，小图仍浮于驾驶卡上方；844允许冻结稿 min-height 产生滚动。负责人仍须亲阅实际 diff 和全部视图，本文不替代最终视觉验收。
+
+### PR41 负责人亲阅后五项定向收尾（2026-11-25）
+
+8cf7de6 的视觉交付仍有五项遗漏，旧版本不视为最终验收：设备菜单关闭/刷新相交约6px且配对入口非主色、390任务编辑卡宽315而非340、复制码仍为原生按钮、设置仍称高档/低档、桌面更多图层入口被隐藏。本次只修上述内容：菜单 actions 使用共享 Button/IconButton 的真实槽位，配对用 primary；配对页交互统一共享控件；桌面315px规则限定在461px及以上；设置文案改低速/高速；更多图层恢复可点击并沿原本地提示。
+
+范围为7个现有产品文件、2个现有测试文件及本文，共10路径，新增/删除0，全部在原44路径内。App.tsx 是菜单关闭 owner 和配对 primary variant 的必要依赖，实施前已向负责人报告。Compatible：DeviceList 的 onClose 可选，独立使用不强制出现关闭；code/command/expiry、请求链、协议 key/SI值、任务 owner/调度、原底部三组同底线保持。
+
+本次复用：devices/settings/tasks 共120条原有效回归通过，包含配对取消/过期/认证、配置SI/冲突/未知同ID、原任务恢复与调度；文案定位迁移，没有新增重复业务场景或CSS镜像单测。定向浏览器检查复用三尺寸安全fixture，在原生产客户端流程增加菜单真实bounds无相交及中心命中、配对复制及焦点环、390编辑卡左右12px/宽340及滚动重排/保存命中/可见按钮无相交、三尺寸图层入口命中与原提示/零新增请求；只豁免独立GET /api/robots轮询，所有其他HTTP与socket调用完整比较。
+
+`npm --prefix web run typecheck`、`npm --prefix web run build`通过（原chunk-size警告保留）；`TMPDIR=/dev/shm PLAYWRIGHT_BASE_URL=http://127.0.0.1:4148 PLAYWRIGHT_CHANNEL=chrome npm --prefix web run test:e2e -- control.spec.ts --output=/dev/shm/control-pr41-followup/e2e-results`三尺寸3 passed。新增的按钮相交探针曾把闭合details中的未绘制按钮算入，三尺寸失败；修正为真实checkVisibility后通过，失败日志单独保留，不冒称产品失败。后端不变未重跑，没有实车/ROS/真实配对/业务服务连接；4148仅本地dist静态资源，fetch/WS由安全fixture全部替换。
+
+修复前bounds、最终新原图、命中/请求计数、精确命令日志和小diff见 `/tmp/control-workspace-pr41-followup-2026-11-25/`；旧 `/tmp/control-workspace-visual-repair-2026-11-25/` 原图保持归档，不替换。844保留原min-height滚动，另附实际viewport图避免fullPage的sticky合成位置误读。PR41继续Draft，最终视觉验收仍待负责人亲阅。
+
+### PR41 独立审核追加 R6/R7（2026-11-25，待负责人亲阅）
+
+起点干净 `bc89449c80a1aebcdff7bd1889c814f48be78f47`，只改 Map.module.css、Drive.module.css、原 control.spec.ts 和本文4个已有路径，新增/删除0；与前五项合计9产品/2测试/1文档共12路径。MapCanvas/EmergencyStop/协议/资格/pending/控制状态机均未改，前五项修复保留。
+
+R6：删除手机20px硬上限；线段显式 border-box（标称长度包含两侧各1px边框）、flex-shrink:0、min-width:0，避免另一个最小宽度改写真实线长。手机现有两列工具中，比例尺在原跨列槽位内上下排线段/标注，不改变三组底边和44px工具。离线原失败探针同输入zoom50/1m：390实际20→50px，1440仍50px。安全fixture390连续缩放：1m×55.393342=55.393342，inline55.3933、rect55.390625；随后0.5m×69.241678=34.620839，inline34.6208、rect34.609375。两次工具组右界115、dock左界133，无覆盖；原比例尺算法、真实坐标/resolution未动。
+
+R7：恢复实际消费者ghost的橙色空心/9px圆角/44px热区、disabled和focus-visible；主急停红色不变。恢复态390占页头独立行，紧凑横屏单列并避让原退出入口。离线1440按钮高25.5→44px、radius0→9px；实际1440/390/844两个恢复按钮均98.015625×44px，透明底/橙边、2px键盘焦点，急停64×44且中心命中，所有可见页头按钮无相交。许可→禁止复位连续状态下，disabled opacity0.45、高44px，恢复请求数0→0；没有操作真实急停/恢复。
+
+Bug回归：原control.spec.ts增量比较米数×data-zoom/inline/rect、dock边界、恢复按钮样式/热区/键盘焦点、可见页头按钮相交和禁用零请求。bc89449生产bundle的390新增几何断言失败（inline55.3933实际20）；修复后通过。第一次CSS验证发现844恢复按钮与退出真实相交，已在同Drive CSS内修正，失败日志保留。早期4148连接拒绝和4147旧8cf菜单失败不算R6/R7红绿。
+
+复用回归：`npm --prefix web test -- --run src/features/drive/drive.test.tsx src/features/map/map.test.tsx src/api/vehicleState.test.ts`，3 files/49 passed；原急停/手动控制phase、资格及地图身份等保护保留。`npm --prefix web run typecheck`、`npm --prefix web run build`通过（原chunk-size警告保留）；E2E文件另用临时tsconfig严格类型检查通过。`TMPDIR=/dev/shm PLAYWRIGHT_BASE_URL=http://127.0.0.1:4148 PLAYWRIGHT_CHANNEL=chrome npm --prefix web run test:e2e -- control.spec.ts --output=/dev/shm/control-pr41-r6r7-delivery`，三尺寸3 passed；跨尺寸CSS影响恢复态布局，因此复用这一既有矩阵，无新增矩阵或后端重跑。
+
+4147旧归档和前五项26张图均不覆盖；4148仅web/dist静态预览，fetch/WS安全fixture截断，未连接业务/实车/ROS/真实认证配对视频。新增8张实际viewport截图（390比例尺缩放前后；三尺寸许可恢复/禁止复位），34张统一原图索引和每命令/版本/数值见 `/tmp/control-workspace-pr41-scale-recovery-delivery-2026-11-25.md` 及 `/tmp/control-workspace-pr41-scale-recovery-2026-11-25/evidence-index.html`。PR41保持Draft，不代行负责人最终验收。

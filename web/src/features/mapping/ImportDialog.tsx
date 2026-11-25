@@ -1,12 +1,16 @@
 import type { ReactElement } from "react";
+import { Button } from "../../components/ui/Button";
 
-export function ImportDialog({ disabled, onImport }: {
+export function ImportDialog({
+  disabled,
+  onImport,
+}: {
   disabled: boolean;
   onImport: () => void;
 }): ReactElement {
   return (
-    <button type="button" disabled={disabled} onClick={onImport}>
+    <Button variant="primary" disabled={disabled} onClick={onImport}>
       导入地图包
-    </button>
+    </Button>
   );
 }
