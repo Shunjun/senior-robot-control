@@ -473,6 +473,8 @@ class LegacyAnchorBinding:
             for value in (self.base_cell_indices, self.local_quads, self.original_bindings)
         ):
             raise ValueError("legacy binding members must be immutable tuples")
+        # Copy caller-owned inner lists before this C3 record can enter a cut.
+        object.__setattr__(self, "local_quads", tuple(tuple(q) for q in self.local_quads))
         n = len(self.base_cell_indices)
         if (
             n > FIXED_MEMBERS
@@ -485,6 +487,9 @@ class LegacyAnchorBinding:
             self.base_cell_indices, self.local_quads, self.original_bindings, strict=False
         ):
             fixed_uint(index, 32)
+            # CellEvidence is an unchanged V1 type; close its alias at C3 admission.
+            if type(binding.evidence.cell) is not tuple:
+                raise ValueError("legacy evidence cell must be an immutable tuple")
             if (
                 len(quad) != 8
                 or binding.evidence.anchor_id != self.anchor_id

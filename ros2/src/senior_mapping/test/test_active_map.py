@@ -414,3 +414,197 @@ def test_fixed_three_state_lifecycle_episode():
     state["accepting"] = True
     with pytest.raises(DomainError):
         active.accept_scan(token, scan, replace(cut.basis))
+
+
+def repair_graph_correction(active, token, sequence, x):
+    from dataclasses import replace
+
+    cut = active.fixed_snapshot(token)
+    corrected = tuple(
+        replace(a, pose=Pose2D(x, 0.0, 0.0)) if a.anchor_id == "kf1" else a for a in cut.anchors
+    ) + (AnchorPose("kf" + str(sequence), POSE, True),)
+    active.commit(
+        token,
+        sequence,
+        "kf" + str(sequence),
+        AnchorSnapshot(MAP, "wheel_odom", corrected, GridExtent(8, 2, 0, 0)),
+        (),
+    )
+
+
+def repair_wall(active, token, identity, key, cells):
+    from senior_mapping.evidence import StableSupport
+
+    points = tuple((x * 0.5 + 0.25, y * 0.5 + 0.25) for x, y in cells)
+    return StableSupport(
+        active.allocate_support_id(token),
+        "kf1",
+        0.5,
+        points,
+        points,
+        cells,
+        key,
+        key,
+        identity,
+        "geometric",
+        "synthetic-admitted",
+        "a" * 64,
+        1,
+        1,
+    )
+
+
+def repair_apply(active, token, scan, cut, **parts):
+    from senior_mapping.evidence import FixedDelta
+
+    return active.apply_evidence(
+        token,
+        expected_graph_sequence=cut.watermark.graph_sequence,
+        expected_anchor_digest=cut.watermark.anchor_digest,
+        delta=FixedDelta(cut.watermark, scan.key, scan.key.sequence, "kf1", **parts),
+    )
+
+
+def repair_assert_materialization(active, token, cut):
+    from senior_mapping.references import decode_fixed_snapshot, encode_fixed_snapshot
+    from senior_mapping.workspace import FixedRaster
+
+    assert active.grid() is cut.grid
+    raster = FixedRaster(MAP, 0.5, cut.grid.origin, cut.grid.width, cut.grid.height, True, False)
+    raster.install(cut.anchors, cut.supports, cut.free_tiles, cut.legacy_base)
+    assert raster.grid() == cut.grid
+    assert decode_fixed_snapshot(encode_fixed_snapshot(cut)) == cut
+
+
+def test_fixed_bound_legacy_partial_free_never_revives():
+    from senior_mapping.evidence import SupportRevocation
+    from test_map_references import repair_legacy_free_base
+
+    active, token, identity, state = fixed_episode_setup(legacy_base=repair_legacy_free_base(MAP))
+    repair_graph_correction(active, token, 2, 0.25)
+    shifted = active.fixed_snapshot(token)
+    assert shifted.grid.cells[:2] == bytes([255, 255])  # Partial coverage cannot render F.
+    scan, cut = accepted_fixed_scan(active, token, state, 1)
+    wall = repair_wall(active, token, identity, scan.key, ((0, 0),))
+    occupied = repair_apply(active, token, scan, cut, upsert_supports=(wall,))
+    assert occupied.legacy_base.live_mask == b"\xfe\xff"
+    assert occupied.grid.cells[:2] == bytes([100, 100])
+    repair_assert_materialization(active, token, occupied)
+    scan, cut = accepted_fixed_scan(active, token, state, 2)
+    cleared = repair_apply(
+        active,
+        token,
+        scan,
+        cut,
+        revocations=(SupportRevocation(wall.support_id, 1, "motion_evidenced", scan.key, "kf1"),),
+    )
+    assert cleared.grid.cells[:2] == bytes([255, 255])
+    repair_graph_correction(active, token, 3, 0.0)
+    end = active.fixed_snapshot(token)
+    assert end.legacy_base.live_mask == b"\xfe\xff"
+    assert end.grid.cells[:2] == bytes([255, 255])
+    repair_assert_materialization(active, token, end)
+
+
+def test_fixed_unbound_legacy_offset_clears_all_overlaps():
+    from test_map_references import repair_legacy_free_base
+
+    active, token, identity, state = fixed_episode_setup(
+        legacy_base=repair_legacy_free_base(MAP, offset=True),
+    )
+    assert active.grid().cells[:8] == bytes([255, 0, 0, 0, 0, 0, 0, 0])
+    scan, cut = accepted_fixed_scan(active, token, state, 1)
+    wall = repair_wall(active, token, identity, scan.key, ((2, 0),))
+    result = repair_apply(active, token, scan, cut, upsert_supports=(wall,))
+    assert result.legacy_base.live_mask == b"\xf9\xff"
+    assert result.grid.cells[:8] == bytes([255, 255, 100, 255, 0, 0, 0, 0])
+    repair_assert_materialization(active, token, result)
+
+
+def test_fixed_legacy_quad_caller_mutation_cannot_change_cut():
+    from senior_mapping.references import encode_fixed_snapshot, fixed_payload_size
+    from test_map_references import repair_legacy_free_base
+
+    quad = [0.0, 0.0, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5]
+    base = repair_legacy_free_base(MAP, mutable_quad=quad)
+    active, token, _, _ = fixed_episode_setup(legacy_base=base)
+    cut = active.fixed_snapshot(token)
+    cache = {}
+    before, size = encode_fixed_snapshot(cut), fixed_payload_size(cut, cache)
+    quad[0] = 100.0
+    assert active.fixed_snapshot(token) is cut
+    assert cut.legacy_base.anchor_bindings[0].local_quads[0] == (
+        0.0,
+        0.0,
+        0.5,
+        0.0,
+        0.5,
+        0.5,
+        0.0,
+        0.5,
+    )
+    assert encode_fixed_snapshot(cut) == before
+    assert fixed_payload_size(cut, cache) == size == len(before)
+    # V1 CellEvidence remains permissive; the new C3 legacy boundary rejects its list alias.
+    with pytest.raises(ValueError, match="immutable"):
+        repair_legacy_free_base(MAP, mutable_cell=[0, 0])
+
+
+def test_fixed_three_cell_dirty_union_is_per_projection(monkeypatch):
+    from dataclasses import replace
+
+    class Counted(frozenset):
+        calls = 0
+        copied = 0
+
+        def __or__(self, other):
+            Counted.calls += 1
+            Counted.copied += len(self) + len(other)
+            return super().__or__(other)
+
+    active, token, identity, state = fixed_episode_setup()
+    raster = active._store._fixed_raster
+    project = raster.support_projection
+
+    def counted(support, pose):
+        result = project(support, pose)
+        return replace(result, occupied=Counted(result.occupied))
+
+    monkeypatch.setattr(raster, "support_projection", counted)
+    scan, cut = accepted_fixed_scan(active, token, state, 1)
+    wall = repair_wall(active, token, identity, scan.key, ((1, 0), (3, 0), (4, 0)))
+    result = repair_apply(active, token, scan, cut, upsert_supports=(wall,))
+    assert result.grid.cells[:8] == bytes([255, 100, 255, 100, 100, 255, 255, 255])
+    first_calls, first_members = Counted.calls, Counted.copied
+
+    class Contributors:
+        copies = 0
+
+        def __init__(self, members):
+            self.members = members
+
+        def __iter__(self):
+            Contributors.copies += 1
+            return iter(self.members)
+
+    # Two contributors touch the same three cells in one real stage. Reuse the
+    # wall geometry; copying the original reverse set is needed only once/cell.
+    monkeypatch.setattr(
+        raster, "reverse", {cell: Contributors(members) for cell, members in raster.reverse.items()}
+    )
+    scan, cut = accepted_fixed_scan(active, token, state, 2)
+    refreshed = replace(wall, last_key=scan.key, updated_evidence_revision=2)
+    independent = replace(
+        repair_wall(active, token, identity, scan.key, ((1, 0), (3, 0), (4, 0))),
+        created_evidence_revision=2,
+        updated_evidence_revision=2,
+    )
+    result = repair_apply(active, token, scan, cut, upsert_supports=(refreshed, independent))
+    assert result.grid is cut.grid
+    print(
+        f"three-cell union: {first_calls} calls, {first_members} members; "
+        f"overlapping stage reverse copies: {Contributors.copies}"
+    )
+    assert Contributors.copies == 3
+    assert first_calls <= 3
+    assert first_members <= 9

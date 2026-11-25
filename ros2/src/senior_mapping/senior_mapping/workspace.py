@@ -341,15 +341,15 @@ class FixedRaster:
             else set()
         )
 
-    def overlapping_free(self, occupied, updates):
+    def overlapping_free(self, occupied, updates, *, kind="f"):
         found = {}
         changed = set(updates)
         for cell in occupied:
             for key, local in self.bit_reverse.get(cell, ()):
-                if key not in changed:
+                if key[0] == kind and key not in changed:
                     found.setdefault(key[1], set()).add(local)
         for key, projection in updates.items():
-            if projection is not None:
+            if key[0] == kind and projection is not None:
                 for cell, local in projection.free_bits:
                     if cell in occupied:
                         found.setdefault(key[1], set()).add(local)
@@ -378,9 +378,7 @@ class FixedRaster:
             if not base.live_mask[index // 8] & (1 << (index % 8)):
                 result[key] = None
                 continue
-            anchor, quad = self.legacy_bound[index]
-            poly = tuple(_transform((quad[i], quad[i + 1]), poses[anchor]) for i in range(0, 8, 2))
-            covered = list(self._candidates(poly))
+            covered = list(self.legacy_coverage(index, base, poses))
             value = base.grid.cells[index]
             result[key] = _Projection(
                 occupied=frozenset(c for c, a in covered) if value == 100 else frozenset(),
@@ -389,8 +387,20 @@ class FixedRaster:
                 )
                 if value == 0
                 else frozenset(),
+                free_bits=tuple((c, index) for c, _area in covered) if value == 0 else (),
             )
         return result
+
+    def legacy_coverage(self, index, base, poses=None):
+        """Positive-area target overlap for either bound or frozen base geometry."""
+        if index in self.legacy_bound:
+            anchor, quad = self.legacy_bound[index]
+            poly = tuple(_transform((quad[i], quad[i + 1]), poses[anchor]) for i in range(0, 8, 2))
+        else:
+            poly = _quad(
+                (index % base.grid.width, index // base.grid.width), self.r, base.grid.origin
+            )
+        return self._candidates(poly)
 
     def legacy_indices(self, cell, legacy):
         # Frozen unbound base is axis aligned but need not share a lattice origin.
@@ -441,23 +451,27 @@ class FixedRaster:
         reverse, bit_reverse, dirty = {}, {}, set(legacy_dirty)
         for key, new in updates.items():
             old = self.records.get(key, _Projection())
-            for cell in (
-                old.occupied | old.free | (frozenset() if new is None else new.occupied | new.free)
-            ):
-                reverse.setdefault(cell, set(self.reverse.get(cell, ())))
+            new_cells = frozenset() if new is None else new.occupied | new.free
+            for cell in old.occupied | old.free | new_cells:
+                if cell not in reverse:
+                    reverse[cell] = set(self.reverse.get(cell, ()))
                 reverse[cell].discard(key)
-                if new is not None and cell in new.occupied | new.free:
+                if cell in new_cells:
                     reverse[cell].add(key)
                 dirty.add(cell)
             for cell, local in old.free_bits:
-                bit_reverse.setdefault(cell, set(self.bit_reverse.get(cell, ()))).discard(
-                    (key, local)
-                )
+                if cell not in bit_reverse:
+                    bit_reverse[cell] = set(self.bit_reverse.get(cell, ()))
+                bit_reverse[cell].discard((key, local))
+                if key[0] == "l":
+                    dirty.add(cell)
             if new is not None:
                 for cell, local in new.free_bits:
-                    bit_reverse.setdefault(cell, set(self.bit_reverse.get(cell, ()))).add(
-                        (key, local)
-                    )
+                    if cell not in bit_reverse:
+                        bit_reverse[cell] = set(self.bit_reverse.get(cell, ()))
+                    bit_reverse[cell].add((key, local))
+                    if key[0] == "l":
+                        dirty.add(cell)
         old_grid = self._grid
         changed_extent = extent != self.extent or old_grid is None
         base = self.legacy if legacy is None else legacy

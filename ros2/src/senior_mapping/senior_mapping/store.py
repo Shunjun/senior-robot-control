@@ -1122,9 +1122,12 @@ class MapReferenceStore:
             lo = raster._cell(bounds[:2])
             hi = raster._cell(bounds[2:])
             x0, y0, x1, y1 = min(x0, lo[0]), min(y0, lo[1]), max(x1, hi[0] + 1), max(y1, hi[1] + 1)
-        for projection in (updates or {}).values():
+        for key, projection in (updates or {}).items():
             if projection is not None:
-                for x, y in projection.occupied | projection.free:
+                covered = projection.occupied | projection.free
+                if key[0] == "l":
+                    covered = covered.union(cell for cell, _index in projection.free_bits)
+                for x, y in covered:
                     x0, y0, x1, y1 = min(x0, x), min(y0, y), max(x1, x + 1), max(y1, y + 1)
         return x0, y0, x1, y1
 
@@ -1474,11 +1477,8 @@ class MapReferenceStore:
                     raise ValueError("legacy expected value mismatch")
                 cleared.add(i)
         raster = self._fixed_raster
-        updated_free = {}
-        for (kind, index), projection in updates.items():
-            if kind == "l" and projection is not None and base.grid.cells[index] == 0:
-                for cell in projection.free:
-                    updated_free.setdefault(cell, set()).add(index)
+        for indices in raster.overlapping_free(occupied, updates, kind="l").values():
+            cleared.update(indices)
         for cell in occupied:
             for i in raster.legacy_indices(cell, base):
                 if (
@@ -1487,10 +1487,6 @@ class MapReferenceStore:
                     and mask[i // 8] & (1 << (i % 8))
                 ):
                     cleared.add(i)
-            for key in raster.reverse.get(cell, ()):
-                if key[0] == "l" and base.grid.cells[key[1]] == 0:
-                    cleared.add(key[1])
-            cleared.update(updated_free.get(cell, ()))
         for i in cleared:
             mask[i // 8] &= ~(1 << (i % 8))
         new = replace(base, live_mask=bytes(mask)) if cleared else base
@@ -1500,14 +1496,7 @@ class MapReferenceStore:
             if i in raster.legacy_bound:
                 bound.append(i)
             else:
-                dirty.add(
-                    raster._cell(
-                        (
-                            base.grid.origin.x + (i % base.grid.width + 0.5) * self.cell_size_m,
-                            base.grid.origin.y + (i // base.grid.width + 0.5) * self.cell_size_m,
-                        )
-                    )
-                )
+                dirty.update(cell for cell, _area in raster.legacy_coverage(i, base))
         updates.update(
             raster.legacy_projections(new, self._known_anchors if poses is None else poses, bound)
         )

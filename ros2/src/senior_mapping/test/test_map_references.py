@@ -792,3 +792,37 @@ def assert_fixed_episode_codec(cut):
         decode_fixed_snapshot(json.dumps(body).encode())
     with pytest.raises(ValueError):
         SlamSnapshot.from_json(payload)  # actual retained V1 parser rejects V2
+
+
+def repair_legacy_free_base(map_ref, *, mutable_quad=None, mutable_cell=None, offset=False):
+    """Admitted synthetic legacy input; no V1 writer or migration is exercised."""
+    from senior_mapping.references import LegacyAnchorBinding, LegacyBase
+    from senior_mapping.workspace import WorkspaceGrid, fixed_grid_id
+
+    origin = Pose2D(0.25 if offset else 0.0, 0.0, 0.0)
+    cells = bytes(([0] * 8 if offset else [0] + [255] * 7) + [255] * 8)
+    gid = fixed_grid_id(map_ref, 8, 2, 0.5, origin, cells)
+    grid = WorkspaceGrid(map_ref, gid, 8, 2, 0.5, origin, cells, True, False)
+    bindings = ()
+    if not offset:
+        pose = Pose2D(0.0, 0.0, 0.0)
+        original = CellBinding(
+            CellEvidence(
+                (0, 0) if mutable_cell is None else mutable_cell,
+                "kf1",
+                0,
+                3,
+                1.0,
+                0.0,
+                "observed_free_space",
+            ),
+            0.25,
+            0.25,
+            pose,
+            False,
+        )
+        quad = (0.0, 0.0, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5) if mutable_quad is None else mutable_quad
+        bindings = (LegacyAnchorBinding("kf1", pose, (0,), (quad,), (original,)),)
+    return LegacyBase(
+        gid, grid, "legacy-derived", "b" * 64, "synthetic-legacy", b"\xff\xff", bindings
+    )
