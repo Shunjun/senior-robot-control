@@ -57,21 +57,6 @@
 .table {
   font-size: 12px
 }
-.table table {
-  border-collapse: collapse;
-  min-width: 540px;
-  width: 100%;
-  text-align: left
-}
-.table th,.table td {
-  border-bottom: 1px solid var(--line-soft);
-  padding: 12px 8px;
-  vertical-align: top
-}
-.table th {
-  color: var(--ink-dim);
-  font-weight: 400
-}
 .table small {
   display: block;
   font-size: 10px;
@@ -81,7 +66,7 @@
 .table pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  max-width: 540px;
+
   font: 11px var(--font-data)
 }
 .card .gap {
@@ -101,3 +86,5 @@
     max-width: 140px
   }
 }
+
+.stream { font-family:var(--font-data);font-size:13px;line-height:1.8;overflow-wrap:anywhere }.entry { display:flex;flex-wrap:wrap;align-items:baseline;gap:5px 12px;padding:10px;border-bottom:1px solid var(--line-soft) }.entry time { color:var(--ink-dim);font-size:11px }.entry time small { display:block }.level { color:#c5b8a8;font-size:11px;font-weight:600 }.module { color:#b0a9d3 }.message { white-space:pre-wrap;flex:1;min-width:140px }.entry[data-level=WARNING] .level,.entry[data-level=ERROR] .level,.entry[data-level=CRITICAL] .level { color:#ffb16b }.entry[data-level=ERROR] .message,.entry[data-level=CRITICAL] .message { font-weight:700 }.entry details { width:100% }.entry pre { white-space:pre-wrap;overflow-wrap:anywhere }.correlation { width:100%;color:var(--ink-dim) }

@@ -461,7 +461,7 @@ def verify_workspace_domain(*, compatible: bool = False) -> None:
         for name in methods:
             assert getattr(value, name) is getattr(base, name)
     migrations = domain_bindings.DOMAIN_MIGRATIONS
-    assert tuple(m.version for m in migrations) == (1, 2, 3)
+    assert tuple(m.version for m in migrations) == (1, 2, 3, 4)
     assert migrations[0].statements is OPERATION_JOURNAL_STATEMENTS
     assert (
         migrations[1].statements is WAYPOINT_STATEMENTS
@@ -486,7 +486,7 @@ def verify_workspace_domain(*, compatible: bool = False) -> None:
             assert points._ports.waypoint is domain_bindings.Waypoint
             assert points._ports.stored is domain_bindings.StoredWaypoint
             for query, expected in (
-                ("PRAGMA user_version", 3),
+                ("PRAGMA user_version", 4),
                 ("SELECT version FROM core_schema_version WHERE id=1", len(CORE_MIGRATIONS)),
             ):
                 async with connection.execute(query) as cursor:

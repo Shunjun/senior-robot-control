@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import type { RobotLink } from '../../api/client';
 import type { RobotSnapshot } from '../../api/protocol';
-import { useVehicleView } from '../devices/useVehicleView';
-import { Joystick, type ReleaseReason } from './Joystick';
+import { useMeasuredSpeed, useVehicleView } from '../devices/useVehicleView';
+import type { ReleaseReason } from './Joystick';
+import { DriveJoystick } from './DriveJoystick';
 import { ManualController, type ManualPhase } from './ManualController';
+import { displaySpeed, useSpeedUnit } from '../../display/speedUnits';
 import styles from './Drive.module.css';
 export interface DriveViewProps {
   robotId: string;
@@ -13,6 +15,7 @@ export interface DriveViewProps {
   compact?: boolean;
 }
 export function DriveView({ robotId, link, active = true, compact = false }: DriveViewProps): ReactElement {
+  const unit = useSpeedUnit();
   const view = useVehicleView(link.vehicle);
   const [phase, setPhase] = useState<ManualPhase>('none');
   const [error, setError] = useState<string | null>(null);
@@ -23,6 +26,7 @@ export function DriveView({ robotId, link, active = true, compact = false }: Dri
     setPhase(next);
     if (issue) setError(issue);
   }) : null, [link, robotId]);
+  const measured = useMeasuredSpeed(view);
   const enabled = active && view.manual_connected;
   useEffect(() => {
     if (!enabled) {
@@ -62,20 +66,14 @@ export function DriveView({ robotId, link, active = true, compact = false }: Dri
       reset(n => n + 1);
     }
   }, [phase]);
-  function change(axis: 'linear' | 'turn', value: number): void {
-    values.current[axis] = value;
-    const { linear, turn } = values.current;
-    controller?.update(linear, turn, gear);
+  function change(linear: number, turn: number): void {
+    values.current = {linear,turn};controller?.update(linear,turn,gear);
   }
-  function press(axis: 'linear' | 'turn', value: number): boolean {
-    const next = { ...values.current, [axis]: value };
-    if (controller?.phase === 'prepared') {
-      if (!controller.begin(next.linear, next.turn, gear)) return false;
-    } else if (controller?.phase === 'active') {
-      controller.update(next.linear, next.turn, gear);
-    } else return false;
-    values.current = next;
-    return true;
+  function press(linear: number, turn: number): boolean {
+    if (controller?.phase === 'prepared') { if(!controller.begin(linear,turn,gear)) return false; }
+    else if(controller?.phase === 'active') controller.update(linear,turn,gear);
+    else return false;
+    values.current={linear,turn};return true;
   }
   function stopGesture(reason: ReleaseReason): void {
     if (reason === 'blur' || reason === 'hidden') {
@@ -102,6 +100,7 @@ export function DriveView({ robotId, link, active = true, compact = false }: Dri
         stopping: '正在停车 · 保留控制权'
       })[phase]}</span>
     </header>
+    <p className={styles.measurement}>{measured === null ? "不可用" : displaySpeed(measured, unit).toFixed(2)} <small>{unit} · 真实测量</small></p>
     <div className={styles.leaseGroup}>
       <button className={styles.primary} disabled={!enabled || phase !== 'none'} onClick={() => {
         setError(null);
@@ -112,11 +111,8 @@ export function DriveView({ robotId, link, active = true, compact = false }: Dri
     <div className={styles.leaseGroup} role="group" aria-label="档位">{(['low', 'high'] as const).map(value => <button key={value} className={gear === value ? styles.primary : styles.ghost} aria-pressed={gear === value} onClick={() => {
       setGear(value);
       controller?.update(values.current.linear, values.current.turn, value);
-    }}>{value === 'low' ? '低档' : '高档'}</button>)}</div>
-    <div className={styles.pads}>
-      <Joystick label="前进后退摇杆" axis="vertical" hint="按住前进 / 后退，松开归零" disabled={!enabled || !['prepared', 'active'].includes(phase)} resetToken={resetToken} onPress={value => press('linear', value)} onChange={value => change('linear', value)} onRelease={stopGesture} />
-      <Joystick label="左转右转摇杆" axis="horizontal" hint="按住转向，松开归零" disabled={!enabled || !['prepared', 'active'].includes(phase)} resetToken={resetToken} onPress={value => press('turn', value)} onChange={value => change('turn', value)} onRelease={stopGesture} />
-    </div>
+    }}>{value === 'low' ? '低速' : '高速'}</button>)}</div>
+    <DriveJoystick disabled={!enabled || !['prepared','active'].includes(phase)} resetToken={resetToken} onPress={press} onChange={change} onRelease={stopGesture} />
     <p className={styles.quiet}>两档只表达方向与力度。松杆停车并保留控制权，再次按压即可继续驾驶。</p>
     {error && <p role="alert" className={styles.failure}>{error}</p>}
   </section>;

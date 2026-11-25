@@ -25,6 +25,8 @@ class TaskSummary:
     task_id: str
     revision: int
     enabled: bool
+    # //Compatible: old snapshot producers omit name.
+    name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -152,8 +154,14 @@ def snapshot_envelope(
             stale=stale,
             last_synced_at=last_synced_at,
             tasks=[
-                TaskSummaryPayload(
-                    task_id=item.task_id, revision=item.revision, enabled=item.enabled
+                TaskSummaryPayload.model_validate(
+                    {
+                        "task_id": item.task_id,
+                        "revision": item.revision,
+                        "enabled": item.enabled,
+                        # //Compatible: internal summaries may omit display metadata.
+                        **({"name": item.name} if item.name is not None else {}),
+                    }
                 )
                 for item in snapshot.tasks
             ],
@@ -210,7 +218,8 @@ def snapshot_from_envelope(
         collected_at=payload.collected_at,
         runnable_task_ids=tuple(payload.runnable_task_ids),
         tasks=tuple(
-            TaskSummary(item.task_id, item.revision, item.enabled) for item in payload.tasks
+            TaskSummary(item.task_id, item.revision, item.enabled, item.name)
+            for item in payload.tasks
         ),
         home_revision=payload.home_revision,
         map_generation=payload.map_generation,

@@ -39,13 +39,14 @@ from agent_fakes import (
 )
 from cloud.snapshots import SnapshotCache
 from pydantic import ValidationError
-from senior_contracts.wire import SnapshotEnvelope
+from senior_contracts.wire import SnapshotEnvelope, TaskSummaryPayload
 from vehicle_manager.agent.dispatcher import Deadlines
 from vehicle_manager.agent.production_bindings import AgentJournal
-from vehicle_manager.agent.request_bindings import StoreTaskPort
+from vehicle_manager.agent.request_bindings import Dispatcher, StoreTaskPort
 from vehicle_manager.agent.runtime_bindings import Agent
 from vehicle_manager.agent.snapshot_decode import snapshot_from_envelope
 from vehicle_manager.agent.snapshots import RobotSnapshot, TaskSummary, snapshot_envelope
+from vehicle_manager.observability import Metrics
 from vehicle_manager.storage.bindings import Database
 from vehicle_manager.storage.domain_bindings import TaskStore
 from vehicle_manager.tasks.models import TaskDefinition
@@ -706,7 +707,7 @@ async def test_snapshot_keeps_revision_and_tombstones_from_one_task_cut(
     before = await pending
     assert before.execution_status == ("idle" if available else "unavailable")
     assert before.task_revision == 1
-    assert before.tasks == (TaskSummary("patrol", 1, True),)
+    assert before.tasks == (TaskSummary("patrol", 1, True, "patrol"),)
 
     monkeypatch.setattr(store_rig.state, "collect", production.collect)
     after = await agent.publish_snapshot(ROBOT)
@@ -1536,3 +1537,108 @@ async def test_grid_id_round_trips_and_pushes_only_when_changed(snapshot_polls):
     await runtime.tick()
     assert len(runtime.link.snapshots) == 4
     assert '"map_grid_id"' not in cache_frame(runtime.link.snapshots[-1]).model_dump_json()
+
+
+def test_named_summaries_roundtrip_through_cloud_cache() -> None:
+    """N6: the existing strict envelope/cache path preserves Unicode and revisions."""
+    from vehicle_manager.agent.snapshots import snapshot_from_envelope
+
+    from vehicle_core.values import MapRef
+
+    cache = SnapshotCache()
+    snapshot = RobotSnapshot(
+        robot_id=ROBOT,
+        connected=True,
+        localized=False,
+        map_ref=MAP,
+        home=None,
+        task_revision=1,
+        execution_status="idle",
+        collected_at=time.time(),
+        tasks=(TaskSummary("route-01", 1, True, name="东区巡检"),),
+    )
+    current = replace(
+        snapshot,
+        task_revision=2,
+        tasks=(TaskSummary("route-01", 2, True, name="夜班巡检"),),
+    )
+    wire = cache_frame(current)
+    decoded = SnapshotEnvelope.model_validate_json(wire.model_dump_json())
+    cache.store(decoded)
+    cached = cache.get(ROBOT)
+    assert cached is not None
+    restored = snapshot_from_envelope(
+        decoded.model_copy(update={"payload": cached.snapshot}), map_reference=MapRef
+    )
+    assert restored.tasks == current.tasks
+    raw = cache_frame(snapshot).model_dump()
+    del raw["payload"]["tasks"][0]["name"]
+    legacy = snapshot_from_envelope(SnapshotEnvelope.model_validate(raw), map_reference=MapRef)
+    assert legacy.tasks[0].name is None
+    assert "name" not in SnapshotEnvelope.model_validate(raw).model_dump()["payload"]["tasks"][0]
+
+
+async def test_task_name_boundary_whitespace_store_to_wire(tmp_path: Path) -> None:
+    """R1: persisted API output and strict wire share the frontend name boundary."""
+    async with Database(tmp_path / "names.db") as database:
+        store = TaskStore(database, robot_id=ROBOT)
+        await store.prepare()
+        port = StoreTaskPort(store, robot_id=ROBOT)
+        with pytest.raises(DomainError) as rejected:
+            await port.create({**task_body("blank"), "name": "\ufeff"})
+        assert rejected.value.code is ErrorCode.VALIDATION
+        assert await store.get("blank") is None
+
+        await port.create({**task_body(), "name": "\u0085巡 检\u0085"})
+        saved = await store.get("patrol")
+        assert saved is not None and saved.name == "巡 检"
+        summary = TaskSummaryPayload(
+            task_id=saved.task_id,
+            name=saved.name,
+            revision=saved.revision,
+            enabled=saved.enabled,
+        )
+        assert TaskSummaryPayload.model_validate_json(summary.model_dump_json()).name == "巡 检"
+        raw = summary.model_dump()
+        for invalid in ("\ufeff",):
+            with pytest.raises(ValidationError):
+                TaskSummaryPayload.model_validate({**raw, "name": invalid})
+        assert (
+            TaskSummaryPayload.model_validate({**raw, "name": "\u0085巡 检\u0085"}).name == "巡 检"
+        )
+
+
+async def test_missing_update_task_id_is_failed_validation(tmp_path: Path) -> None:
+    """R2: an omitted name must not turn a deterministic rejection into unknown."""
+    async with Database(tmp_path / "invalid-update.db") as database:
+        store = TaskStore(database, robot_id=ROBOT)
+        await store.prepare()
+        journal = AgentJournal(database, robot_id=ROBOT)
+        await journal.prepare()
+        dispatcher = Dispatcher(
+            ROBOT,
+            journal=journal,
+            tasks=StoreTaskPort(store, robot_id=ROBOT),
+            home=FakeHome(),
+            maps=FakeMaps(),
+            deadlines=Deadlines(),
+            metrics=Metrics(),
+            map_root=tmp_path,
+            admit=lambda _: None,
+        )
+        body = task_body()
+        del body["task_id"]
+        request = operation("task.update", "invalid-update", body, expected_revision=1)
+        with pytest.raises(DomainError) as rejected:
+            await dispatcher.run(request)
+        assert rejected.value.code is ErrorCode.VALIDATION
+        entry = await journal.get("invalid-update")
+        assert entry is not None and entry.status is OperationStatus.FAILED
+        assert entry.error is ErrorCode.VALIDATION
+        assert await store.list_tasks() == ()
+        with pytest.raises(DomainError) as replayed:
+            await dispatcher.run(request)
+        assert replayed.value.code is ErrorCode.VALIDATION
+        assert replayed.value.status is OperationStatus.FAILED
+        assert await journal.get("invalid-update") == entry
+        assert await store.list_tasks() == ()

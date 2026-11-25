@@ -1,6 +1,5 @@
 /* Map surface, pose picker and Home controls. Tokens come from theme.css. */
 
-.mapPanel,
 .picker,
 .home {
   position: relative;
@@ -17,10 +16,6 @@
     var(--chamfer) 100%,
     0 calc(100% - var(--chamfer))
   );
-}
-
-.mapPanel[data-stale="true"] {
-  border-color: var(--amber-deep);
 }
 
 /* ------------------------------------------------------------ shared atoms */
@@ -89,7 +84,13 @@
   color: var(--graphite-950);
   background: var(--amber);
   border: 0;
-  clip-path: polygon(0 0, calc(100% - var(--chamfer)) 0, 100% var(--chamfer), 100% 100%, 0 100%);
+  clip-path: polygon(
+    0 0,
+    calc(100% - var(--chamfer)) 0,
+    100% var(--chamfer),
+    100% 100%,
+    0 100%
+  );
 }
 
 .primary:hover:not(:disabled) {
@@ -123,14 +124,6 @@
 
 /* ------------------------------------------------------------ map */
 
-.toolbar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: var(--space-3);
-}
-
 .layers,
 .modes {
   display: flex;
@@ -155,15 +148,9 @@
   accent-color: var(--amber);
 }
 
-.zoomGroup {
-  display: flex;
-  gap: var(--space-2);
-}
-
 .surface {
   position: relative;
   width: 100%;
-  max-height: 70dvh;
   overflow: hidden;
   background: var(--graphite-950);
   border: 1px solid var(--line);
@@ -377,7 +364,6 @@
 /* ------------------------------------------------------------ landscape phones */
 
 @media (orientation: landscape) and (max-height: 520px) {
-  .mapPanel,
   .picker,
   .home {
     padding: var(--space-3);
@@ -385,7 +371,6 @@
   }
 
   .surface {
-    max-height: 60dvh;
   }
 
   .fields {
@@ -398,32 +383,36 @@
     grid-template-columns: 1fr;
   }
 }
-
-.mapPanel[data-compact="true"] {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  clip-path: none;
-  gap: 4px;
-  padding: 4px;
+.waypointMarker circle {
+  fill: var(--graphite-900);
+  stroke: var(--teal);
+  stroke-width: 2;
 }
-.mapPanel[data-compact="true"] .surface {
-  flex: 1;
-  min-height: 0;
+.waypointMarker[data-selectable="true"] {
+  pointer-events: auto;
+  cursor: pointer;
 }
-.mapPanel[data-compact="true"] .tool { min-height: 32px; padding-inline: 6px; }
-.mapPanel[data-compact="true"] .hint { margin: 0; }
-.waypointMarker circle { fill: var(--graphite-900); stroke: var(--teal); stroke-width: 2; }
-.waypointMarker[data-selectable="true"] { pointer-events: auto; cursor: pointer; }
 .waypointMarker[data-highlighted="true"] circle,
-.waypointMarker:focus-visible circle { fill: var(--amber); stroke: var(--ink); }
-.taskRoute { stroke: var(--teal); stroke-width: 2; stroke-dasharray: 4 3; fill: none; }
-.routeNumber { fill: var(--ink); paint-order: stroke; stroke: var(--graphite-950); stroke-width: 3; }
+.waypointMarker:focus-visible circle {
+  fill: var(--amber);
+  stroke: var(--ink);
+}
+.taskRoute {
+  stroke: var(--teal);
+  stroke-width: 2;
+  stroke-dasharray: 4 3;
+  fill: none;
+}
+.routeNumber {
+  fill: var(--ink);
+  paint-order: stroke;
+  stroke: var(--graphite-950);
+  stroke-width: 3;
+}
 
 .scanHits {
-  fill: #a78bfa;
-  stroke: #eee7ff;
+  fill: #ff7532;
+  stroke: #ffb27a;
   stroke-width: 0.8;
   pointer-events: none;
 }
@@ -435,6 +424,176 @@
 }
 
 .scanLegend::before {
-  content: "●";
+  content: "";
   margin-right: 0.5em;
+}
+
+.mapPanel {
+  display: block;
+  clip-path: none;
+  border: 0;
+  padding: 0;
+  border-radius: 0;
+  background: #424449;
+  overflow: hidden;
+  min-height: 200px;
+}
+.mapPanel .surface {
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  aspect-ratio: auto;
+  background: #424449;
+}
+.toolbar {
+  position: absolute;
+  z-index: 6;
+  bottom: 12px;
+  left: 16px;
+  display: flex;
+  align-items: end;
+  padding: 0;
+  gap: 4px;
+  max-width: calc(50% - 270px);
+}
+.zoomGroup {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  background: #29292cf5;
+  border-radius: 9px;
+  padding: 4px;
+}
+.tool {
+  min-height: 44px;
+  min-width: 38px;
+  display: grid;
+  place-items: center;
+  padding: 6px;
+  border: 0;
+  color: var(--ink);
+  border-radius: 6px;
+}
+.layers {
+  position: absolute;
+  bottom: 64px;
+  left: 0;
+  background: #29292cf0;
+  padding: 8px;
+  border-radius: 9px;
+  min-width: 240px;
+}
+.mapPanel > .hint,
+.scanLegend,
+.mapPanel > .diagnostics {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+.staleBanner {
+  position: absolute;
+  top: 70px;
+  left: 16px;
+  right: 16px;
+  z-index: 2;
+}
+.scaleHtml {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font: 11px var(--font-data);
+  white-space: nowrap;
+  padding: 4px;
+}
+.scaleHtml i {
+  display: block;
+  min-width: 10px;
+  height: 7px;
+  border: 1px solid currentColor;
+  border-top: 0;
+}
+@container (max-width:350px) {
+  .toolbar {
+    left: 8px;
+    bottom: 8px;
+    max-width: none;
+  }
+  .layers {
+    display: none;
+  }
+  .zoomGroup {
+    gap: 0;
+  }
+  .tool {
+    min-width: 36px;
+  }
+}
+@media (max-width: 760px) {
+  .toolbar {
+    left: 12px;
+    bottom: 12px;
+    max-width: none;
+  }
+  .layers {
+    bottom: 58px;
+    min-width: 200px;
+  }
+  .tool {
+    min-width: 44px;
+  }
+}
+
+.geometryNote {
+  pointer-events: none;
+  position: absolute;
+  top: 70px;
+  right: 16px;
+  z-index: 2;
+  background: #29292ce8;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--ink-dim);
+}
+.marker_robot .robotArrow {
+  fill: #ff7532;
+  stroke: #fff7e9;
+  stroke-width: 1.6;
+}
+
+.mapPanel[data-mini="true"] .toolbar {
+  left: 8px;
+  bottom: 8px;
+  max-width: none;
+}
+.mapPanel[data-mini="true"] .layers,
+.mapPanel[data-mini="true"] .geometryNote {
+  display: none;
+}
+
+.waypointName {
+  fill: var(--ink);
+  font-size: 10px;
+  font-family: var(--font-data);
+  pointer-events: none;
+}
+
+/* The primary map's existing toolbar can be placed in the workspace footer. */
+.toolbar[data-docked="true"] {
+  position: relative;
+  left: auto;
+  bottom: auto;
+  max-width: none;
+}
+
+@media (max-width: 760px) {
+  .toolbar[data-docked="true"] .zoomGroup {
+    flex-wrap: wrap;
+  }
+
+  .toolbar[data-docked="true"] .scaleHtml {
+    flex-basis: 100%;
+  }
 }

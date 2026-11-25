@@ -291,3 +291,74 @@ async def test_simulation_waypoint_create_fences_grid_and_never_overwrites(tmp_p
         assert duplicate.value.code is ErrorCode.CONFLICT
         saved = await waypoints.waypoint("new")
         assert saved is not None and saved.waypoint.pose.x == 0.25
+
+
+async def test_task_names_persist_and_legacy_mutations_preserve_them(tmp_path: Path) -> None:
+    """N2/N4: real StoreTaskPort, SQLite reopen, get and summary projection."""
+    from vehicle_manager.agent.local_adapters import IpcState
+    from vehicle_manager.agent.production import SnapshotState
+
+    path = tmp_path / "named.db"
+    created = datetime(2026, 11, 25, tzinfo=timezone.utc)
+    body = {
+        "task_id": "route-01",
+        "map_id": REF.map_id,
+        "reference_revision": REF.reference_revision,
+        "waypoint_ids": ["p1", "p2"],
+        "schedule": {"kind": "interval", "every_seconds": 90},
+        "timezone": "UTC",
+        "enabled": True,
+        "created_at": created.isoformat(),
+    }
+    async with Database(path) as database:
+        tasks = TaskStore(database, robot_id="r1")
+        await tasks.prepare()
+        port = StoreTaskPort(tasks, robot_id="r1")
+        assert await port.create({**body, "name": "  东区巡检  "}) == 1
+        assert await port.create({**body, "task_id": "old-api"}) == 1
+        assert (await tasks.get("old-api")).name == "old-api"
+        assert await port.update({**body, "task_id": "old-api", "name": "夜班巡检"}, 1) == 2
+        assert await port.update({**body, "task_id": "old-api"}, 2) == 3
+        assert await port.set_enabled("old-api", False, 3) == 4
+        assert (await tasks.get("old-api")).name == "夜班巡检"
+    async with Database(path) as database:
+        tasks = TaskStore(database, robot_id="r1")
+        await tasks.prepare()
+        waypoints = WaypointStore(database, robot_id="r1")
+        await waypoints.prepare()
+        grid = WorkspaceGrid(REF, "grid", 1, 1, 0.1, Pose2D(0, 0, 0), (0,))
+        reader = WorkspaceReader("r1", tasks, waypoints, LoopbackMap(WorkspaceMap(lambda: grid)))
+        detail = await reader.read(command("task.get", task_id="route-01"))
+        assert detail["name"] == "东区巡检"
+        assert detail["waypoint_ids"] == ["p1", "p2"]
+        assert detail["created_at"] == created.isoformat()
+        assert detail["schedule"] == body["schedule"]
+        assert detail["revision"] == 1 and detail["enabled"] is True
+
+        class Unavailable:
+            async def request(self, kind: str, **fields: object) -> dict:
+                raise OSError("safe fixture")
+
+        snapshot = await SnapshotState(IpcState(Unavailable()), tasks, waypoints).collect()
+        assert {item.task_id: item.name for item in snapshot.tasks} == {
+            "route-01": "东区巡检",
+            "old-api": "夜班巡检",
+        }
+        assert "task.names.v1" in snapshot.vehicle_ui["capabilities"]
+
+
+async def test_task_names_reject_explicit_null_or_blank_without_writing(tmp_path: Path) -> None:
+    from test_agent import task_body
+
+    async with Database(tmp_path / "invalid.db") as database:
+        tasks = TaskStore(database, robot_id="r1")
+        await tasks.prepare()
+        port = StoreTaskPort(tasks, robot_id="r1")
+        for invalid in (None, "   "):
+            with pytest.raises(DomainError) as caught:
+                await port.create({**task_body(), "name": invalid})
+            assert caught.value.code is ErrorCode.VALIDATION
+        assert await tasks.list_tasks() == ()
+        await port.create({**task_body("one"), "name": "  夜班  巡检  "})
+        await port.create({**task_body("two"), "name": "夜班  巡检"})
+        assert [item.name for item in await tasks.list_tasks()] == ["夜班  巡检"] * 2

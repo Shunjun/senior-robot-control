@@ -277,6 +277,8 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                 state_a = await service.store.load("execution")
                 assert frame_task == {
                     "task_id": "execution",
+                    "name": "definition",
+                    "definition_task_id": "definition",
                     "version": state_a.version,
                     "phase": "running",
                     "completed": 0,
@@ -311,6 +313,8 @@ async def test_task_port_waits_do_not_starve_fresh_manual_intents(
                 assert fallback.vehicle_ui is not None
                 assert fallback.vehicle_ui["task"] == {
                     "task_id": "execution-B",
+                    "name": "definition-B",
+                    "definition_task_id": "definition-B",
                     "version": completed_state.version,
                     "phase": "succeeded",
                     "completed": 1,

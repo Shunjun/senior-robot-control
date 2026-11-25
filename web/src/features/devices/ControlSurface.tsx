@@ -1,14 +1,35 @@
-import { useLayoutEffect, useMemo, useRef, useState, type ReactElement } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactElement,
+} from "react";
 
-import { CommandError, describeCommandError, type RobotLink } from "../../api/client";
+import {
+  CommandError,
+  describeCommandError,
+  type RobotLink,
+} from "../../api/client";
 import type { ResponsePayload, RobotSnapshot } from "../../api/protocol";
 import { readMappingCatalog, sendMapCommand } from "../../api/mapping";
 import { DriveView } from "../drive/DriveView";
 import { HomeControls } from "../map/HomeControls";
-import { MapCanvas, type OccupancySnapshot, type Pose } from "../map/MapCanvas";
+import { type OccupancySnapshot, type Pose } from "../map/MapCanvas";
 import { useWorkspaceMap } from "../map/useWorkspaceMap";
 import { PosePicker, type MapGoal, type PoseHint } from "../map/PosePicker";
-import { PerformancePanel } from "./PerformancePanel";
+import { TaskExecutionControls } from "./VehicleStateView";
+import { StatusOverlay } from "./StatusOverlay";
+import { Switch } from "../../components/ui/Switch";
+import { IconButton } from "../../components/ui/IconButton";
+import {
+  ArrowLeftRight,
+  Gamepad2,
+  Navigation,
+  ListOrdered,
+  Map as MapIcon,
+} from "lucide-react";
 import { MapManager } from "../mapping/MapManager";
 import { TaskList } from "../tasks/TaskList";
 import { VideoPanel } from "../video/VideoPanel";
@@ -18,6 +39,8 @@ export interface ControlSurfaceProps {
   robotId: string;
   link: RobotLink;
   snapshot: RobotSnapshot;
+  active?: boolean;
+  statusOpen?: boolean;
 }
 
 export type WorkspaceMode = "manual" | "navigation" | "tasks" | "mapping";
@@ -38,46 +61,89 @@ function describePose(pose: Pose | null): string {
   return `X ${pose.x.toFixed(2)} m, Y ${pose.y.toFixed(2)} m, 朝向 ${((pose.yaw * 180) / Math.PI).toFixed(1)}°`;
 }
 
-function navigationUnavailableMessage(reason: string | null | undefined): string {
+function navigationUnavailableMessage(
+  reason: string | null | undefined,
+): string {
   //Compatible: legacy snapshots have no concrete navigation diagnostic.
-  if (reason == null) return "车端未报告已验证的导航能力，无法开始、继续或返航。";
+  if (reason == null)
+    return "车端未报告已验证的导航能力，无法开始、继续或返航。";
   const explanations: Record<string, string> = {
-    "map or localization generation changed": "地图或定位代次已变化，请等待重新定位。",
+    "map or localization generation changed":
+      "地图或定位代次已变化，请等待重新定位。",
     "map or localization unavailable": "当前地图或定位尚未就绪。",
     "planner state unavailable": "路径规划器或运动控制器尚未就绪。",
-    "heartbeat or control authority unavailable": "车辆心跳或控制权限尚未就绪。",
+    "heartbeat or control authority unavailable":
+      "车辆心跳或控制权限尚未就绪。",
     "navigation unavailable": "车端导航尚未就绪。",
   };
   const sensorPrefix = "safety status unavailable (";
-  const explanation = reason.startsWith(sensorPrefix) && reason.endsWith(")")
-    ? `传感器安全检查尚未通过：${reason.slice(sensorPrefix.length, -1)}。`
-    : explanations[reason] ?? `车端导航尚未就绪：${reason}。`;
+  const explanation =
+    reason.startsWith(sensorPrefix) && reason.endsWith(")")
+      ? `传感器安全检查尚未通过：${reason.slice(sensorPrefix.length, -1)}。`
+      : (explanations[reason] ?? `车端导航尚未就绪：${reason}。`);
   return `无法导航：${explanation}`;
 }
 
 /** Drive and map controls for the selected vehicle and its current map reference. */
-export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps): ReactElement {
+export function ControlSurface({
+  robotId,
+  link,
+  snapshot,
+  active = true,
+  statusOpen = false,
+}: ControlSurfaceProps): ReactElement {
   const [mapLoad, setMapLoad] = useState(0);
   const [mode, setMode] = useState<WorkspaceMode>("manual");
-  const [manualView, setManualView] = useState<PrimaryView>("map");
-  const [navigationView, setNavigationView] = useState<PrimaryView>("map");
-  const view = mode === "manual" ? manualView : mode === "navigation" ? navigationView : "map";
-  const setView = mode === "manual" ? setManualView : setNavigationView;
-  const { map: occupancy, gridId, waypoints, message, displayOnly, waypointWrites, navigationReady } =
-    useWorkspaceMap(link, snapshot, { enabled: view === "map" || mode === "navigation", catalog: mode === "tasks", refresh: mapLoad });
+  const [view, setView] = useState<PrimaryView>("map");
+  const [performanceExpired, setPerformanceExpired] = useState(false);
+  useEffect(() => {
+    setPerformanceExpired(false);
+    const timer = setTimeout(() => setPerformanceExpired(true), 3500);
+    return () => clearTimeout(timer);
+  }, [snapshot.performance?.sequence]);
+  const [statusTab, setStatusTab] = useState<"motion" | "performance">(
+    "motion",
+  );
+  const [cameraOn, setCameraOn] = useState(false);
+  const {
+    map: occupancy,
+    gridId,
+    waypoints,
+    message,
+    displayOnly,
+    waypointWrites,
+    navigationReady,
+  } = useWorkspaceMap(link, snapshot, {
+    enabled: true,
+    catalog: mode === "tasks",
+    refresh: mapLoad,
+  });
   //Compatible: legacy interactions keep their original per-grid scope.
-  const referenceVersion = snapshot.map_grid_id === undefined ? gridId : snapshot.map_generation;
+  const referenceVersion =
+    snapshot.map_grid_id === undefined ? gridId : snapshot.map_generation;
   const refKey = JSON.stringify([snapshot.map_ref, referenceVersion]);
-  const [selection, setSelection] = useState<{ refKey: string; pose: Pose | null }>({ refKey, pose: null });
-  const [feedback, setFeedback] = useState<{ refKey: string; note: string } | null>(null);
+  const [selection, setSelection] = useState<{
+    refKey: string;
+    pose: Pose | null;
+  }>({ refKey, pose: null });
+  const [feedback, setFeedback] = useState<{
+    refKey: string;
+    note: string;
+  } | null>(null);
   useLayoutEffect(() => {
     setSelection({ refKey, pose: null });
   }, [refKey]);
   const draft = selection.refKey === refKey ? selection.pose : null;
   const note = feedback?.refKey === refKey ? feedback.note : null;
-  const workspace = occupancy !== undefined && gridId !== undefined && waypoints !== undefined
-    ? { map: occupancy, grid_id: gridId, waypoints, waypointWrites: waypointWrites === true }
-    : undefined;
+  const workspace =
+    occupancy !== undefined && gridId !== undefined && waypoints !== undefined
+      ? {
+          map: occupancy,
+          grid_id: gridId,
+          waypoints,
+          waypointWrites: waypointWrites === true,
+        }
+      : undefined;
 
   function setDraft(pose: Pose | null): void {
     setSelection({ refKey, pose });
@@ -98,43 +164,77 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
   const activeMap = occupancy !== undefined && displayOnly !== true;
   const mappingEdits = snapshot.mapping_protocol_version === 2;
   const pickMap = activeMap || mappingEdits ? map : { ...map, map_ref: null };
-  const liveMapTelemetry = activeMap && snapshot.connected && !snapshot.stale && snapshot.localized
-    && snapshot.map_generation !== undefined && snapshot.map_generation === referenceVersion
-    && snapshot.map_ref !== null && map.map_ref !== null
-    && snapshot.map_ref.map_id === map.map_ref.map_id
-    && snapshot.map_ref.reference_revision === map.map_ref.reference_revision;
+  const liveMapTelemetry =
+    activeMap &&
+    snapshot.connected &&
+    !snapshot.stale &&
+    snapshot.localized &&
+    snapshot.map_generation !== undefined &&
+    snapshot.map_generation === referenceVersion &&
+    snapshot.map_ref !== null &&
+    map.map_ref !== null &&
+    snapshot.map_ref.map_id === map.map_ref.map_id &&
+    snapshot.map_ref.reference_revision === map.map_ref.reference_revision;
 
   //Compatible: older vehicles advertise navigation eligibility only in the map manifest.
-  const directNavigation = activeMap && (snapshot.navigation_ready ?? navigationReady) === true;
+  const directNavigation =
+    activeMap && (snapshot.navigation_ready ?? navigationReady) === true;
   const route = snapshot.route_progress;
-  const routeActive = activeMap && route !== undefined && route.map_generation === referenceVersion
-    && (route.status === "starting" || route.status === "running" || route.status === "cancel_pending");
+  const routeActive =
+    activeMap &&
+    route !== undefined &&
+    route.map_generation === referenceVersion &&
+    (route.status === "starting" ||
+      route.status === "running" ||
+      route.status === "cancel_pending");
   const [navigationBusy, setNavigationBusy] = useState(false);
   const navigationScope = useRef(0);
   useLayoutEffect(() => {
     navigationScope.current += 1;
     setNavigationBusy(false);
     setFeedback(null);
-    return () => { navigationScope.current += 1; };
+    return () => {
+      navigationScope.current += 1;
+    };
   }, [robotId, link, refKey, snapshot.connected, snapshot.stale, mode]);
 
-  async function runNavigation(action: "goal" | "return_home", pose?: Pose): Promise<void> {
-    if (!directNavigation || gridId === undefined || !snapshot.localized || snapshot.map_ref === null || navigationBusy || routeActive) return;
+  async function runNavigation(
+    action: "goal" | "return_home",
+    pose?: Pose,
+  ): Promise<void> {
+    if (
+      !directNavigation ||
+      gridId === undefined ||
+      !snapshot.localized ||
+      snapshot.map_ref === null ||
+      navigationBusy ||
+      routeActive
+    )
+      return;
     const scope = navigationScope.current;
     const label = action === "goal" ? "目标" : "返航";
     setNavigationBusy(true);
     setFeedback({ refKey, note: `等待车端确认${label}…` });
     try {
-      const response = await link.request<ResponsePayload>(`navigation.${action}`, {
-        operation_id: crypto.randomUUID(),
-        body: { ...snapshot.map_ref, grid_id: gridId, ...pose },
-      });
+      const response = await link.request<ResponsePayload>(
+        `navigation.${action}`,
+        {
+          operation_id: crypto.randomUUID(),
+          body: { ...snapshot.map_ref, grid_id: gridId, ...pose },
+        },
+      );
       if (scope === navigationScope.current) {
-        setFeedback({ refKey, note: response.ok ? `车端已受理${label}。` : `车端未确认${label}。` });
+        setFeedback({
+          refKey,
+          note: response.ok ? `车端已受理${label}。` : `车端未确认${label}。`,
+        });
       }
     } catch (error) {
       if (scope === navigationScope.current) {
-        const reason = error instanceof CommandError ? describeCommandError(error.code) : "无法发送";
+        const reason =
+          error instanceof CommandError
+            ? describeCommandError(error.code)
+            : "无法发送";
         setFeedback({ refKey, note: `${label}未确认：${reason}。` });
       }
     } finally {
@@ -147,13 +247,27 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
       void runNavigation("goal", goal.pose);
     } else {
       //Compatible: older vehicles only support a local goal preview.
-      setFeedback({ refKey, note: `目标已设定（${describePose(goal.pose)}），未发送：车端未开放目标指令。` });
+      setFeedback({
+        refKey,
+        note: `目标已设定（${describePose(goal.pose)}），未发送：车端未开放目标指令。`,
+      });
     }
   }
 
-  async function editMappingPose(kind: "map.calibrate" | "map.home", hint: MapGoal): Promise<void> {
-    if (!mappingEdits || hint.pose === null || snapshot.map_ref === null || !snapshot.connected
-      || snapshot.stale || navigationBusy || routeActive) return;
+  async function editMappingPose(
+    kind: "map.calibrate" | "map.home",
+    hint: MapGoal,
+  ): Promise<void> {
+    if (
+      !mappingEdits ||
+      hint.pose === null ||
+      snapshot.map_ref === null ||
+      !snapshot.connected ||
+      snapshot.stale ||
+      navigationBusy ||
+      routeActive
+    )
+      return;
     const owner = navigationScope.current;
     const id = crypto.randomUUID();
     const label = kind === "map.home" ? "Home 坐标更新" : "车辆局部匹配";
@@ -163,133 +277,305 @@ export function ControlSurface({ robotId, link, snapshot }: ControlSurfaceProps)
       const catalog = await readMappingCatalog(link, robotId);
       if (owner !== navigationScope.current) return;
       const selected = catalog.selection.map_ref;
-      if (selected?.map_id !== hint.map_ref.map_id || selected.reference_revision !== hint.map_ref.reference_revision) {
+      if (
+        selected?.map_id !== hint.map_ref.map_id ||
+        selected.reference_revision !== hint.map_ref.reference_revision
+      ) {
         throw new CommandError("conflict", "地图选择已变化");
       }
       let status: ResponsePayload["status"] = "running";
       try {
         const reply = await sendMapCommand(link, kind, id, {
-          ...hint.map_ref, ...hint.pose, expected_generation: catalog.selection.generation,
-          ...(kind === "map.home" ? { expected_home_revision: snapshot.home_revision } : {}),
+          ...hint.map_ref,
+          ...hint.pose,
+          expected_generation: catalog.selection.generation,
+          ...(kind === "map.home"
+            ? { expected_home_revision: snapshot.home_revision }
+            : {}),
         });
         status = reply.status;
       } catch (reason) {
-        if (!(reason instanceof CommandError) || (reason.code !== "timeout" && reason.code !== "operation_unknown")) throw reason;
+        if (
+          !(reason instanceof CommandError) ||
+          (reason.code !== "timeout" && reason.code !== "operation_unknown")
+        )
+          throw reason;
       }
-      while (owner === navigationScope.current && !["succeeded", "failed", "needs_review"].includes(status ?? "")) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
+      while (
+        owner === navigationScope.current &&
+        !["succeeded", "failed", "needs_review"].includes(status ?? "")
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
         if (owner !== navigationScope.current) return;
-        const reply = await link.request<ResponsePayload>("operation.query", { operation_id: id, body: {} });
-        if (!reply.ok || reply.operation_id !== id || reply.status == null) throw new CommandError("operation_unknown", "匹配结果未确认");
+        const reply = await link.request<ResponsePayload>("operation.query", {
+          operation_id: id,
+          body: {},
+        });
+        if (!reply.ok || reply.operation_id !== id || reply.status == null)
+          throw new CommandError("operation_unknown", "匹配结果未确认");
         status = reply.status;
       }
       if (owner === navigationScope.current) {
-        setFeedback({ refKey, note: status === "succeeded" ? `${label}已完成。` : `${label}未完成，请检查车辆状态后重试。` });
-        setMapLoad(value => value + 1);
+        setFeedback({
+          refKey,
+          note:
+            status === "succeeded"
+              ? `${label}已完成。`
+              : `${label}未完成，请检查车辆状态后重试。`,
+        });
+        setMapLoad((value) => value + 1);
       }
     } catch (reason) {
-      if (owner === navigationScope.current) setFeedback({ refKey,
-        note: `${label}未完成：${reason instanceof CommandError ? describeCommandError(reason.code) : "连接未确认"}。` });
+      if (owner === navigationScope.current)
+        setFeedback({
+          refKey,
+          note: `${label}未完成：${reason instanceof CommandError ? describeCommandError(reason.code) : "连接未确认"}。`,
+        });
     } finally {
       if (owner === navigationScope.current) setNavigationBusy(false);
     }
   }
 
   function onHint(hint: PoseHint): void {
-    if (mappingEdits && hint.pose !== null) { void editMappingPose("map.calibrate", { map_ref: hint.map_ref, pose: hint.pose }); return; }
+    if (mappingEdits && hint.pose !== null) {
+      void editMappingPose("map.calibrate", {
+        map_ref: hint.map_ref,
+        pose: hint.pose,
+      });
+      return;
+    }
     //Compatible: original mapping protocol has no manual calibration operation.
-    setFeedback({ refKey, note: `定位提示已设定（${describePose(hint.pose)}），未发送：车端未开放定位提示指令。` });
+    setFeedback({
+      refKey,
+      note: `定位提示已设定（${describePose(hint.pose)}），未发送：车端未开放定位提示指令。`,
+    });
   }
 
+  const [legendOpen, setLegendOpen] = useState(false);
+  const [toolbarTarget, setToolbarTarget] = useState<HTMLDivElement | null>(
+    null,
+  );
+  const icons = {
+    manual: Gamepad2,
+    navigation: Navigation,
+    tasks: ListOrdered,
+    mapping: MapIcon,
+  };
   return (
-    <>
-    <PerformancePanel reading={snapshot.performance} live={snapshot.connected && !snapshot.stale} />
-    <div className={styles.workspace} data-mode={mode}>
-      <div className={styles.toolbar}>
-        <nav className={styles.switches} aria-label="车辆场景">
-          {MODES.map(([value, label]) => (
-            <button key={value} type="button" aria-pressed={mode === value} onClick={() => setMode(value)}>
-              {label}
-            </button>
-          ))}
-        </nav>
-        {view === "map" && mode !== "manual" && (
-          <div className={styles.switches}>
-            <button type="button" onClick={() => setMapLoad((previous) => previous + 1)}>刷新地图</button>
-          </div>
-        )}
-        {(mode === "manual" || mode === "navigation") && (
-          <div className={styles.switches} role="group" aria-label="主视图">
-            <button type="button" aria-pressed={view === "video"} onClick={() => setView("video")}>视频</button>
-            <button type="button" aria-pressed={view === "map"} onClick={() => setView("map")}>地图</button>
-          </div>
-        )}
-      </div>
-      {mode === "tasks" && <TaskList snapshot={snapshot} link={link}
-        workspace={workspace} map={occupancy} unavailable={message} />}
-      <div className={styles.stage} data-tasks={mode === "tasks"}>
-        {mode !== "tasks" && <div className={styles.primary}>
-          {view === "video" ? (
-            <VideoPanel link={link} live={snapshot.connected && !snapshot.stale} compact />
-          ) : (
-            <>
-              {message !== undefined && <p className={styles.quiet}>{message}</p>}
-              {(occupancy !== undefined || mode === "navigation") && (
-                <>
-                  <MapCanvas
-                    key={snapshot.map_grid_id === undefined ? gridId ?? "unavailable" : refKey}
-                    map={map}
-                    compact={occupancy !== undefined}
-                    robot={liveMapTelemetry ? snapshot.robot_pose ?? null : null}
-                    scanPoints={liveMapTelemetry ? snapshot.scan_points ?? [] : []}
-                    stale={snapshot.stale || !snapshot.connected}
-                    pickEnabled={mode === "navigation" && activeMap}
-                    draft={mode === "navigation" ? draft : null}
-                    onPick={setDraft}
-                  />
-                  {(!liveMapTelemetry || snapshot.robot_pose == null) && <p className={styles.quiet}>车辆位置暂不可用</p>}
-                </>
-              )}
-            </>
-          )}
-        </div>}
-        <div className={styles.operations} data-manual={mode === "manual"}>
-          <DriveView robotId={robotId} link={link} snapshot={snapshot} active={mode === "manual"} compact />
-          {mode === "navigation" && (
-            <>
-              <HomeControls
-                key={`home:${refKey}`}
-                snapshot={snapshot}
-                link={link}
-                homeMapAvailable={activeMap && waypointWrites === true}
-                {...(directNavigation
-                  ? { directNavigation: { onReturnHome: () => void runNavigation("return_home"), pending: navigationBusy || routeActive } }
-                  : { navigationUnavailable: navigationUnavailableMessage(snapshot.navigation_block_reason) })}
-              />
-              {routeActive && <p className={styles.quiet}>当前路线仍在执行，可以取消导航。</p>}
-              <p className={styles.quiet}>
-                {mappingEdits ? "定位提示将交给车端进行局部匹配，请先停车，再设置车辆的位置和朝向。"
-                  : directNavigation ? "定位提示保存在当前页面，车端尚不接收。"
-                    : "目标与定位提示为本地预览，车端尚不接收。"}
+    <TaskList
+      snapshot={snapshot}
+      link={link}
+      workspace={workspace}
+      map={map}
+      unavailable={message}
+      mapCanvasProps={
+        mode === "tasks"
+          ? { mini: cameraOn && view === "video", toolbarTarget }
+          : {
+              toolbarTarget,
+              mini: cameraOn && view === "video",
+              map,
+              robot: liveMapTelemetry ? (snapshot.robot_pose ?? null) : null,
+              scanPoints: liveMapTelemetry ? (snapshot.scan_points ?? []) : [],
+              pickEnabled: mode === "navigation" && activeMap,
+              draft: mode === "navigation" ? draft : null,
+              onPick: setDraft,
+              taskRoute: [],
+              waypointMarkers: [],
+              onAddWaypoint: () => {},
+            }
+      }
+      renderWorkspace={(mapView, taskPanel) => (
+        <div
+          className={styles.workspace}
+          data-mode={mode}
+          data-primary={cameraOn ? view : "map"}
+        >
+          <div className={styles.previewHead}>
+            <span>{cameraOn && view === "video" ? "摄像头" : "实时地图"}</span>
+            {occupancy === undefined && message && (
+              <p className={styles.mapMessage} role="status">
+                {message}
               </p>
-              <PosePicker
-                key={`pose:${refKey}`}
-                snapshot={snapshot}
-                map={pickMap}
-                draft={snapshot.map_grid_id === undefined && !activeMap ? null : draft}
-                onDraftChange={setDraft}
-                pending={navigationBusy || routeActive}
-                onGoal={onGoal}
-                onHint={onHint}
-                {...(mappingEdits ? { onHome: (goal: MapGoal) => void editMappingPose("map.home", goal) } : {})}
+            )}
+            <Switch
+              label="摄像头"
+              checked={cameraOn}
+              onChange={(next) => {
+                setCameraOn(next);
+                if (!next) setView("map");
+              }}
+            />
+          </div>
+          <div className={styles.mapViewport}>
+            {mapView}
+            {cameraOn && view === "video" && (
+              <div className={styles.swap}>
+                <IconButton label="交换主次画面" onClick={() => setView("map")}>
+                  <ArrowLeftRight />
+                </IconButton>
+              </div>
+            )}
+          </div>
+          {cameraOn && (
+            <div className={styles.videoViewport}>
+              <VideoPanel
+                link={link}
+                live={active && snapshot.connected && !snapshot.stale}
+                compact
               />
-              {note !== null && <p className={styles.quiet} role="status">{note}</p>}
-            </>
+              {view === "map" && (
+                <div className={styles.swap}>
+                  <IconButton
+                    label="交换主次画面"
+                    onClick={() => setView("video")}
+                  >
+                    <ArrowLeftRight />
+                  </IconButton>
+                </div>
+              )}
+            </div>
           )}
-          {mode === "mapping" && <MapManager robotId={robotId} snapshot={snapshot} link={link} />}
+          <div className={styles.status} hidden={!statusOpen}>
+            <StatusOverlay
+              snapshot={snapshot}
+              port={link.vehicle}
+              tab={statusTab}
+              onTabChange={setStatusTab}
+              performanceExpired={performanceExpired}
+              visible={active && statusOpen}
+            />
+          </div>
+          <div className={styles.operations} data-manual={mode === "manual"}>
+            <div hidden={mode !== "manual"}>
+              <DriveView
+                robotId={robotId}
+                link={link}
+                snapshot={snapshot}
+                active={active && mode === "manual"}
+                compact
+              />
+            </div>
+            <div hidden={mode !== "tasks"}>
+              {taskPanel}
+              <TaskExecutionControls port={link.vehicle} />
+            </div>
+            {mode === "navigation" && (
+              <>
+                <HomeControls
+                  key={`home:${refKey}`}
+                  snapshot={snapshot}
+                  link={link}
+                  homeMapAvailable={activeMap && waypointWrites === true}
+                  {...(directNavigation
+                    ? {
+                        directNavigation: {
+                          onReturnHome: () => void runNavigation("return_home"),
+                          pending: navigationBusy || routeActive,
+                        },
+                      }
+                    : {
+                        navigationUnavailable: navigationUnavailableMessage(
+                          snapshot.navigation_block_reason,
+                        ),
+                      })}
+                />
+                <button type="button" onClick={() => setMapLoad((n) => n + 1)}>
+                  刷新地图
+                </button>
+                <PosePicker
+                  key={`pose:${refKey}`}
+                  snapshot={snapshot}
+                  map={pickMap}
+                  draft={
+                    snapshot.map_grid_id === undefined && !activeMap
+                      ? null
+                      : draft
+                  }
+                  onDraftChange={setDraft}
+                  pending={navigationBusy || routeActive}
+                  onGoal={onGoal}
+                  onHint={onHint}
+                  {...(mappingEdits
+                    ? {
+                        onHome: (goal: MapGoal) =>
+                          void editMappingPose("map.home", goal),
+                      }
+                    : {})}
+                />
+                {note && <p role="status">{note}</p>}
+              </>
+            )}
+            {mode === "mapping" && (
+              <MapManager robotId={robotId} snapshot={snapshot} link={link} />
+            )}
+          </div>
+          <section className={styles.bottomBar} aria-label="视图底部工具">
+            <div className={styles.mapTools} ref={setToolbarTarget} />
+            <nav className={styles.dock} aria-label="车辆场景">
+              {MODES.map(([value, label]) => {
+                const Icon = icons[value];
+                return (
+                  <button
+                    type="button"
+                    key={value}
+                    aria-label={label}
+                    aria-pressed={mode === value}
+                    onClick={() => setMode(value)}
+                  >
+                    <Icon size={18} />
+                    <span>{label}</span>
+                  </button>
+                );
+              })}
+            </nav>
+            <div className={styles.legend} aria-label="地图图例">
+              <button
+                type="button"
+                className={styles.legendToggle}
+                aria-expanded={legendOpen}
+                onClick={() => setLegendOpen((open) => !open)}
+              >
+                地图图例
+              </button>
+              <div className={styles.legendItems} data-open={legendOpen}>
+                <span>
+                  <i data-kind="stable" />
+                  稳定结构
+                </span>
+                <span>
+                  <i data-kind="free" />
+                  确认空闲
+                </span>
+                <span>
+                  <i data-kind="unknown" />
+                  未知
+                </span>
+                <span>
+                  <i data-kind="scan" />
+                  实时扫描
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setFeedback({
+                      refKey,
+                      note: "暂未实现：独立候选层 / 空闲证据层 / 线段拟合",
+                    })
+                  }
+                >
+                  更多图层
+                </button>
+              </div>
+            </div>
+          </section>
+          {note?.startsWith("暂未实现") && (
+            <p className={styles.toast} role="status">
+              {note}
+            </p>
+          )}
         </div>
-      </div>
-    </div>
-    </>
+      )}
+    />
   );
 }

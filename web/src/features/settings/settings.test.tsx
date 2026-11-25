@@ -1,8 +1,14 @@
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render as testingRender, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it } from 'vitest';
 import { testPort, settingsFixture } from '../../api/vehicleState.testUtils';
 import type { SettingsRequest } from '../../api/vehicleState';
 import { VehicleSettings } from './VehicleSettings';
+import type { ReactElement } from 'react';
+import { SpeedUnitContext } from '../../display/speedUnits';
+const render = (element: ReactElement) => {
+  const page=testingRender(<SpeedUnitContext.Provider value="km/h">{element}</SpeedUnitContext.Provider>);
+  return {...page,rerender:(next:ReactElement)=>page.rerender(<SpeedUnitContext.Provider value="km/h">{next}</SpeedUnitContext.Provider>)};
+};
 afterEach(cleanup);
 it('converts only displayed km/h to SI, submits one group and reads effective values', async () => {
   let current = structuredClone(settingsFixture);
@@ -106,4 +112,22 @@ it('can restore defaults even while a draft field is empty', async () => {
   fireEvent.change(field, { target: { value: '' } });
   fireEvent.click(screen.getByRole('button', { name: '恢复驾驶默认值' }));
   await waitFor(() => expect(submitted[0]).toMatchObject({ restore_defaults: true, values: settingsFixture.capabilities.driving_defaults }));
+});
+
+it('keeps the same SI draft across a unit roundtrip before saving', async () => {
+  const sent: SettingsRequest[]=[];
+  const port=testPort(async(type,payload)=>{
+    if(type==='settings.get') return settingsFixture;
+    const request=payload as SettingsRequest;sent.push(request);
+    return {request_id:request.request_id,group:request.group,reason:'applied',snapshot:settingsFixture.snapshot,capabilities:settingsFixture.capabilities};
+  });
+  const page=testingRender(<SpeedUnitContext.Provider value="m/s"><VehicleSettings port={port} enabled /></SpeedUnitContext.Provider>);
+  fireEvent.change(await screen.findByLabelText('低档线速度上限'),{target:{value:'0.5'}});
+  page.rerender(<SpeedUnitContext.Provider value="km/h"><VehicleSettings port={port} enabled /></SpeedUnitContext.Provider>);
+  expect((screen.getByLabelText('低档线速度上限') as HTMLInputElement).value).toBe('1.8');
+  page.rerender(<SpeedUnitContext.Provider value="m/s"><VehicleSettings port={port} enabled /></SpeedUnitContext.Provider>);
+  expect((screen.getByLabelText('低档线速度上限') as HTMLInputElement).value).toBe('0.5');
+  fireEvent.click(screen.getByRole('button',{name:'保存驾驶设置'}));
+  await waitFor(()=>expect(sent).toHaveLength(1));
+  expect(sent[0]?.values).toMatchObject({low_linear_mps:.5,high_angular_rps:1});
 });

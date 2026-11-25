@@ -103,6 +103,7 @@ class SnapshotState:
         )
         capabilities = ui["capabilities"]
         assert isinstance(capabilities, list)
+        capabilities.append("task.names.v1")
         if self._settings_enabled:
             capabilities.append("settings.v1")
         if self._logs_enabled():
@@ -112,7 +113,9 @@ class SnapshotState:
     async def collect(self) -> LiveState:
         tasks, deleted_task_ids = await self._tasks.snapshot_tasks()
         home = await self._waypoints.home()
-        summaries = tuple(TaskSummary(task.task_id, task.revision, task.enabled) for task in tasks)
+        summaries = tuple(
+            TaskSummary(task.task_id, task.revision, task.enabled, task.name) for task in tasks
+        )
         task_revision = sum(task.revision for task in tasks)
         try:
             state = await self._state.read()
@@ -147,6 +150,22 @@ class SnapshotState:
             if current is not None:
                 try:
                     task_view = await self._navigation.execution_view(current.execution_id)
+                    definition = next(
+                        (
+                            task
+                            for task in tasks
+                            if task.task_id == current.task_id
+                            and task.task_id not in deleted_task_ids
+                        ),
+                        None,
+                    )
+                    if definition is not None:
+                        task_view = {
+                            **task_view,
+                            "name": definition.name,
+                            "definition_task_id": definition.task_id,
+                        }
+                    # //Compatible: hidden direct-navigation tasks have no catalog metadata.
                 except KeyError:
                     pass  # //Compatible: unmigrated execution has no lifecycle projection.
         ui = self._ports.frame(
@@ -164,6 +183,7 @@ class SnapshotState:
         )
         capabilities = ui["capabilities"]
         assert isinstance(capabilities, list)
+        capabilities.append("task.names.v1")
         if self._settings_enabled:
             capabilities.append("settings.v1")
         if self._logs_enabled():

@@ -1,6 +1,7 @@
 import { memo, useEffect, useRef, useState, type ReactElement } from 'react';
 import { validateSettingsRequest } from '../../api/vehicleState';
 import type { DrivingSettings, LoggingSettings, SettingsData, SettingsGroup, SettingsRequest, VehiclePort } from '../../api/vehicleState';
+import { useSpeedUnit, speedScale } from '../../display/speedUnits';
 import styles from './Settings.module.css';
 export interface VehicleSettingsProps {
   port?: VehiclePort;
@@ -52,14 +53,16 @@ interface FormProps {
   submit: (group: SettingsGroup, values: DrivingSettings | LoggingSettings, restore: boolean) => void;
 }
 function DrivingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
-  const [draft, setDraft] = useState(() => Object.fromEntries(FIELDS.map(f => [f.key, String(Number((data.snapshot.driving[f.key] * f.scale).toFixed(6)))])) as Record<keyof DrivingSettings, string>);
+  const unit = useSpeedUnit();
+  const fields = FIELDS.map(f => f.unit === "km/h" ? { ...f, scale: speedScale(unit), unit } : f);
+  const [draft, setDraft] = useState(() => Object.fromEntries(FIELDS.map(f => [f.key, String(data.snapshot.driving[f.key])])) as Record<keyof DrivingSettings, string>);
   const [validation, setValidation] = useState<string | null>(null);
   function save(restore: boolean): void {
     if (restore) {
       submit('driving', data.capabilities.driving_defaults, true);
       return;
     }
-    const values = Object.fromEntries(FIELDS.map(f => [f.key, Number(draft[f.key]) / f.scale])) as unknown as DrivingSettings;
+    const values = Object.fromEntries(FIELDS.map(f => [f.key, Number(draft[f.key])])) as unknown as DrivingSettings;
     if (FIELDS.some(f => draft[f.key].trim() === '' || !Number.isFinite(values[f.key]))) {
       setValidation('请填写完整的有限数值；尚未提交');
       return;
@@ -69,7 +72,7 @@ function DrivingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
   }
   return <fieldset disabled={!enabled || busy}>
     <legend>驾驶设置 · 生效版本 {data.snapshot.driving_version}</legend>
-    <div className={styles.fields}>{FIELDS.map(f => <label key={f.key}>{f.label}（{f.unit}）<input aria-label={f.label} type="number" step="any" min={data.capabilities.driving_minimum[f.key] * f.scale} max={data.capabilities.driving_maximum[f.key] * f.scale} value={draft[f.key]} onChange={e => setDraft({ ...draft, [f.key]: e.target.value })} />
+    <div className={styles.fields}>{fields.map(f => <label key={f.key}>{f.label}（{f.unit}）<input aria-label={f.label} type="number" step="any" min={data.capabilities.driving_minimum[f.key] * f.scale} max={data.capabilities.driving_maximum[f.key] * f.scale} value={draft[f.key] === "" ? "" : Number((Number(draft[f.key]) * f.scale).toPrecision(12))} onChange={e => setDraft({ ...draft, [f.key]: e.target.value === "" ? "" : String(Number(e.target.value) / f.scale) })} />
       <small>已保存上限 {(data.snapshot.driving[f.key] * f.scale).toFixed(2)} · 默认 {(data.capabilities.driving_defaults[f.key] * f.scale).toFixed(2)} · 范围 {(data.capabilities.driving_minimum[f.key] * f.scale).toFixed(2)}–{(data.capabilities.driving_maximum[f.key] * f.scale).toFixed(2)}</small>
     </label>)}</div>
     <p>手动退化模式按摇杆百分比映射已保存上限；实际满杆速度仍受当前档位、倒车和正常车体/轮能力约束，遇障碍会进一步限速。</p>

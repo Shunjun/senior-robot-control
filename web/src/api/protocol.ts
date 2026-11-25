@@ -1,4 +1,4 @@
-import { decodeLearningStart, decodeLearningStatus, decodeVehicleFrame, VEHICLE_REQUEST_TYPES, type VehicleFrame, type VehicleRequestType } from "./vehicleState";
+import { isTaskName, decodeLearningStart, decodeLearningStatus, decodeVehicleFrame, VEHICLE_REQUEST_TYPES, type VehicleFrame, type VehicleRequestType } from "./vehicleState";
 // Mirror of src/senior_control/protocol.py and src/senior_control/errors.py (wire format v1).
 // The lists below are hand-mirrored; devices.test.tsx parses the Python sources and fails when
 // a request type, error code, envelope field or snapshot field drifts apart.
@@ -177,6 +177,7 @@ export interface HomeSummary {
  * `stale` and `last_synced_at` from its cache; the console never substitutes its own clock.
  */
 export interface TaskSummary {
+  name?: string;
   task_id: string;
   revision: number;
   enabled: boolean;
@@ -462,7 +463,9 @@ function parseTasks(value: unknown): TaskSummary[] | null {
   for (const item of value) {
     if (!isRecord(item) || !isText(item["task_id"], 128) || !isCount(item["revision"])) return null;
     if (typeof item["enabled"] !== "boolean") return null;
-    tasks.push({ task_id: item["task_id"], revision: item["revision"], enabled: item["enabled"] });
+    //Compatible: legacy summaries omit name and display their stable ID.
+    if ('name' in item && !isTaskName(item['name'])) return null;
+    tasks.push({ ...('name' in item ? { name: item['name'] as string } : {}), task_id: item["task_id"], revision: item["revision"], enabled: item["enabled"] });
   }
   return tasks;
 }

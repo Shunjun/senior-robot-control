@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactElement } from "react";
 
 import type { RobotLink } from "../../api/client";
 import type { RobotSnapshot, RobotSummary } from "../../api/protocol";
-import { EmergencyStop } from "../drive/EmergencyStop";
+import type { WorkspacePage } from "./useWorkspaceView";
 import { VehicleStateView } from "./VehicleStateView";
 import { VehicleTools } from "./VehicleTools";
 import { ControlSurface } from "./ControlSurface";
@@ -13,13 +13,16 @@ export interface RobotPanelProps {
   link: RobotLink;
   /** The control socket closed. The app re-checks the session, since a 401 ends it. */
   onLinkLost: () => void;
+  page?: WorkspacePage;
+  onPageChange?: (page: WorkspacePage) => void;
+  statusOpen?: boolean;
 }
 
 type LinkState = "connecting" | "open" | "closed";
 
 // ---------------------------------------------------------------- panel
 
-export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactElement {
+export function RobotPanel({ robot, link, onLinkLost, page = "control", onPageChange, statusOpen = false }: RobotPanelProps): ReactElement {
   const [snapshot, setSnapshot] = useState<RobotSnapshot | null>(null);
   const [linkState, setLinkState] = useState<LinkState>("connecting");
   const [closeCode, setCloseCode] = useState<number | null>(null);
@@ -75,7 +78,7 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
         >
           {presence === "unknown" ? "状态未知" : presence === "online" ? "在线" : "离线"}
         </span>
-        <EmergencyStop key={`${robot.id}:${attempt}`} link={link} compact />
+
       </header>
 
       {linkState === "connecting" && (
@@ -106,12 +109,12 @@ export function RobotPanel({ robot, link, onLinkLost }: RobotPanelProps): ReactE
       ) : (
         <>
           <p className={styles.quiet}>
-            <span>{snapshot.stale ? "缓存快照 · 非实时" : "实时快照"}</span> · 最后同步 {new Date(snapshot.last_synced_at * 1000).toLocaleTimeString("zh-CN", { hour12: false })}</p>
-          <VehicleStateView key={`state-${robot.id}`} {...(link.vehicle ? { port: link.vehicle } : {})} />
-          <ControlSurface robotId={robot.id} link={link} snapshot={snapshot} />
+            <span>{presence === "online" ? "在线" : presence === "offline" ? "离线" : "状态未知"}</span> · <span>{snapshot.stale ? "缓存快照 · 非实时" : "实时快照"}</span> · 最后同步 {new Date(snapshot.last_synced_at * 1000).toLocaleTimeString("zh-CN", { hour12: false })}</p>
+          <details hidden={page !== "control"} className={styles.diagnostics}><summary>车辆诊断与执行操作</summary><VehicleStateView showTaskControls={false} key={`state-${robot.id}`} {...(link.vehicle ? { port: link.vehicle } : {})} /></details>
+          <div hidden={page !== "control"}><ControlSurface robotId={robot.id} link={link} snapshot={snapshot} active={page === "control"} statusOpen={statusOpen} /></div>
         </>
       )}
-      <VehicleTools key={`tools-${robot.id}`} {...(link.vehicle ? { port: link.vehicle } : {})} />
+      <VehicleTools key={`tools-${robot.id}`} {...(link.vehicle ? { port: link.vehicle } : {})} page={page} onBack={() => onPageChange?.("control")} />
     </article>
   );
 }

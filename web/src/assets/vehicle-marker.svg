@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-26 -30 52 60" fill="none" role="img" aria-labelledby="title desc">
+  <title id="title">车辆位置标记</title>
+  <desc id="desc">浅橙色斜角车身，包含四个外凸轮胎，中央箭头朝向车头。尺寸为演示比例，实际绘制尺寸由地图组件确定。</desc>
+<g id="vehicleFootprint" transform="scale(.74)"><path d="M-12-27H12L16-23V-21H23V-7H16V7H23V21H16V23L12 27H-12L-16 23V21H-23V7H-16V-7H-23V-21H-16V-23Z" fill="#ffb27a" fill-opacity=".43" stroke="#e98c53" stroke-width="1.5" stroke-linejoin="round"/><path d="M-12-27H12L16-23V23L12 27H-12L-16 23V-23Z" fill="#ffc498" fill-opacity=".25" stroke="#ed9d69" stroke-width="1"/><g fill="#eda46f" fill-opacity=".55" stroke="#d88750" stroke-width=".8"><rect x="-23" y="-21" width="7" height="14" rx="1.4"/><rect x="16" y="-21" width="7" height="14" rx="1.4"/><rect x="-23" y="7" width="7" height="14" rx="1.4"/><rect x="16" y="7" width="7" height="14" rx="1.4"/></g><g stroke="#f8d1ad" stroke-width=".7" opacity=".6"><path d="M-22-17H-17M-22-12H-17M17-17H22M17-12H22M-22 11H-17M-22 16H-17M17 11H22M17 16H22"/></g></g><path d="M0-13L10 11L0 6L-10 11Z" fill="#ff7532" stroke="#fff7e9" stroke-width="1.6"/>
+</svg>

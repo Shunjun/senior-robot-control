@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type ReactElement } from 'react';
 import type { LearningStatus, TaskAction, VehiclePort } from '../../api/vehicleState';
 import { useVehicleView } from './useVehicleView';
+import { useSpeedUnit, displaySpeed } from '../../display/speedUnits';
 import styles from './VehicleStateView.module.css';
 export interface VehicleStateViewProps {
   port?: VehiclePort;
+  showTaskControls?: boolean;
 }
 const MODES = {
   unknown: '运行状态不可用',
@@ -37,7 +39,8 @@ const ACTIONS: Record<TaskAction, string> = {
   cancel: '取消当前任务',
   takeover: '请求手动接管'
 };
-export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement {
+export function VehicleStateView({ port, showTaskControls = true }: VehicleStateViewProps): ReactElement {
+  const unit = useSpeedUnit();
   const view = useVehicleView(port), frame = view.frame;
   const [learning, setLearning] = useState<LearningStatus | null>(null);
   const [learningNote, setLearningNote] = useState('');
@@ -97,39 +100,18 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
     const timer = setInterval(() => setNow(performance.now()), 1000);
     return () => clearInterval(timer);
   }, []);
-  const [note, setNote] = useState<string | null>(null), [busy, setBusy] = useState(false);
   if (!frame) return <section className={styles.card}>
     <h3>车端运行状态尚未接通</h3>
     <p>等待车辆报告当前状态与可用操作。</p>
     <p>连接 RTT：{view.rtt_ms === null ? '—' : `${Math.round(view.rtt_ms)} ms`}</p>
   </section>;
-  const body = frame.body_reference, wheel = frame.wheel_linear_mps, task = frame.task;
+  const body = frame.body_reference, wheel = frame.wheel_linear_mps;
   const speedBody = body && (!body.stale || wheel === null) ? body : null;
   const speed = speedBody ? speedBody.average.vx : wheel;
   const lastMeasurement = !view.connected || !view.available || speedBody?.stale;
   const source = speedBody
     ? `${speedBody.source} · ${(speedBody.age_seconds + Math.max(0, now - (view.received_at_ms ?? now)) / 1000).toFixed(2)} 秒前`
     : wheel !== null ? '轮速里程计' : '实际速度测量不可用';
-  async function command(action: TaskAction): Promise<void> {
-    if (!port || !task) return;
-    const current = port.getSnapshot().frame?.task;
-    if (current?.task_id !== task.task_id || current.version !== task.version) {
-      setNote('任务状态已变化，请核对最新状态');
-      return;
-    }
-    setBusy(true);
-    setNote('等待车端回执…');
-    try {
-      await port.taskCommand(action);
-      setNote('车端已应答，执行状态以车端后续更新为准');
-    }
-    catch (error) {
-      setNote(`操作未完成：${String(error)}`);
-    }
-    finally {
-      setBusy(false);
-    }
-  }
   return <section className={styles.card} aria-label="车辆运行状态">
     <header className={styles.head}>
       <h3>{MODES[frame.mode]}</h3>
@@ -140,14 +122,14 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
     <p>{frame.observation && frame.mode === 'unknown' ? AVAILABILITY[frame.observation.status] : frame.reason}</p>
     {frame.observation && <p>最后有效观测：{frame.observation.age_seconds === null ? '尚无' : `${(frame.observation.age_seconds + Math.max(0, now - (view.received_at_ms ?? now)) / 1000).toFixed(2)} 秒前`} · 急停状态{frame.confirmed_estop_status === 'unknown' ? '未知' : '已报告'}</p>}
     <div className={styles.speed}>
-      <strong>{speed === null ? '—' : (speed * 3.6).toFixed(2)}</strong>
-      <span>km/h · {speedBody ? '车体纵向区间平均' : '纵向测量速度'}</span>
+      <strong>{speed === null ? '—' : displaySpeed(speed, unit).toFixed(2)}</strong>
+      <span>{unit} · {speedBody ? '车体纵向区间平均' : '纵向测量速度'}</span>
     </div>
     <p className={styles.source}>{source}{speed !== null && lastMeasurement ? ' · 已过期 / 最后测量' : ''}</p>
     <p className={styles.connection}>连接 RTT：{view.rtt_ms === null ? '—' : `${Math.round(view.rtt_ms)} ms`} · 仅作连接诊断</p>
     <section className={styles.task} aria-label="固定回波校准">
       <header className={styles.head}><h4>固定回波校准</h4><span>{learningSupported ? '车端状态' : '当前未接通校准能力'}</span></header>
-      <p>停稳且无任务时，将以 0.05 m/s 前进 3 秒并停车；可随时手动接管。</p>
+      <p>停稳且无任务时，将以 {displaySpeed(0.05, unit).toFixed(2)} {unit} 前进 3 秒并停车；可随时手动接管。</p>
       <p className={styles.source}>{learning?.active_model
         ? `当前生效：${learning.active_model.point_count} 个真实参考点`
         : learning ? '当前尚无生效模型' : '等待车端报告生效模型'}</p>
@@ -168,16 +150,45 @@ export function VehicleStateView({ port }: VehicleStateViewProps): ReactElement 
       {(learningNote || learningUnknown) && <p role="status">{learningNote}</p>}
       {learning && !learning.can_start && <p>{learning.cannot_start_reason === 'learning_busy' ? '当前校准仍忙，新请求不排队。' : '请先停稳并结束当前任务，再显式开始校准。'}</p>}
     </section>
-    {task && <div className={styles.task}>
-      <h4>当前任务 {task.task_id} · {TASKS[task.phase]}</h4>
-      <p>已完成动作 {task.completed} / {task.total}{task.stopped_for ? ` · ${task.stopped_for}` : ''}</p>
-      <div className={styles.actions}>{task.allowed_actions.map(action => <button key={action} disabled={!view.connected || !view.available || busy || !frame.capabilities.includes('task.execution.v1')} onClick={() => void command(action)}>{ACTIONS[action]}</button>)}</div>
-    </div>}
-    {note && <p role="status">{note}</p>}
+    {showTaskControls && <TaskExecutionControls port={port} />}
     <details>
       <summary>测量与安全诊断</summary>
-      <p>轮速参考：{frame.wheel_linear_mps === null ? '—' : `${frame.wheel_linear_mps.toFixed(2)} m/s`}（轮速里程计）</p>
+      <p>轮速参考：{frame.wheel_linear_mps === null ? '—' : `${displaySpeed(frame.wheel_linear_mps, unit).toFixed(2)} ${unit}`}（轮速里程计）</p>
       <p>急停版本 {frame.estop_revision} · 故障版本 {frame.fault_revision}</p>
     </details>
+  </section>;
+}
+
+/** Existing execution IDs, versions and capability guards stay in VehiclePort.taskCommand. */
+export function TaskExecutionControls({ port }: { port: VehiclePort | undefined }): ReactElement | null {
+  const view=useVehicleView(port),frame=view.frame,task=frame?.task;
+  const [note,setNote]=useState<string|null>(null),[busy,setBusy]=useState(false);
+  async function command(action: TaskAction): Promise<void> {
+    if (!port || !task) return;
+    const current = port.getSnapshot().frame?.task;
+    if (current?.task_id !== task.task_id || current.version !== task.version) {
+      setNote('任务状态已变化，请核对最新状态');
+      return;
+    }
+    setBusy(true);
+    setNote('等待车端回执…');
+    try {
+      await port.taskCommand(action);
+      setNote('车端已应答，执行状态以车端后续更新为准');
+    }
+    catch (error) {
+      setNote(`操作未完成：${String(error)}`);
+    }
+    finally {
+      setBusy(false);
+    }
+  }
+  if(!frame || !task) return null;
+  return <section className={styles.task} aria-label="当前执行实例操作">
+    <h4>当前任务 {frame.capabilities.includes('task.names.v1') ? task.name ?? task.task_id : task.task_id} · {TASKS[task.phase]}</h4>
+    <p className={styles.source}>内部编号 {task.definition_task_id ?? task.task_id} · 执行实例 {task.task_id}</p>
+    <p>已完成动作 {task.completed} / {task.total}{task.stopped_for ? ` · ${task.stopped_for}` : ''}</p>
+    <div className={styles.actions}>{task.allowed_actions.map(action => <button key={action} disabled={!view.connected || !view.available || busy || !frame.capabilities.includes('task.execution.v1')} onClick={() => void command(action)}>{ACTIONS[action]}</button>)}</div>
+    {note && <p role="status">{note}</p>}
   </section>;
 }
