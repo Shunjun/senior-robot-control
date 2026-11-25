@@ -96,6 +96,8 @@ class HomeStateReading(Protocol):
 
 class NavigationStateReading(HomeStateReading, Protocol):
     @property
+    def map_grid_id(self) -> str | None: ...
+    @property
     def navigation_ready(self) -> bool: ...
     @property
     def manual_driving(self) -> bool: ...
@@ -155,6 +157,10 @@ class HomeReader(Protocol[_PoseCo]):
 
 class WorkspaceTargetPort(Protocol[_MapContra, _PoseContra]):
     async def verify_free_target(
+        self, ref: _MapContra, grid_id: str, pose: _PoseContra
+    ) -> None: ...
+
+    async def verify_navigation_target(
         self, ref: _MapContra, grid_id: str, pose: _PoseContra
     ) -> None: ...
 

@@ -383,13 +383,14 @@ async def test_dispatcher_acceptance_and_query_share_task_transaction(tmp_path: 
                 robot_pose=RobotPosePayload(x=0.0, y=0.0, yaw=0.0),
                 task_lifecycle_version=2,
                 task_evidence_ready=True,
+                map_grid_id="current-grid",
             )
 
         async def free(*args: Any) -> None:
             pass
 
         state = cast(IpcState, SimpleNamespace(read=read))
-        workspace = cast(WorkspaceReader, SimpleNamespace(verify_free_target=free))
+        workspace = cast(WorkspaceReader, SimpleNamespace(verify_navigation_target=free))
         waypoints = WaypointStore(database, robot_id="robot")
         await waypoints.prepare()
         journal = AgentJournal(database, robot_id="robot")
@@ -414,7 +415,7 @@ async def test_dispatcher_acceptance_and_query_share_task_transaction(tmp_path: 
             {
                 "map_id": "map",
                 "reference_revision": 1,
-                "grid_id": "map",
+                "grid_id": "current-grid",
                 "x": 1.0,
                 "y": 2.0,
                 "yaw": 0.0,
