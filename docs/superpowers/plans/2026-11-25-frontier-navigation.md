@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python ≥3.10、asyncio、现有WorkspaceGrid/MapRef/Pose2D、ROS2 Humble、Nav2 SmacPlannerLattice/MPPI、pytest/pytest-asyncio；不新增第三方库、服务、进程或线上DTO。
 
-**Spec:** [2026-11-25-frontier-navigation-design.md](../specs/2026-11-25-frontier-navigation-design.md)，执行者必须同时读设计，包括最后“共用层同比率限速”覆盖节。
+**Spec:** [2026-11-25-frontier-navigation-design.md](../specs/2026-11-25-frontier-navigation-design.md)，执行者必须同时读设计，包括最后“共用比例过渡与硬限制”覆盖节。
 
 ## Global Constraints
 
@@ -20,7 +20,7 @@
 - 生产False接纳保持；True兼容语义不改。子goal不完成原action，不更换task epoch，不调用整路线退休；未知取消不发替代。
 - 同参考可有raster_sequence≠anchor_cut_sequence；无Nav2 native-cut ACK，不新建ACK服务；当前图整车保守复核＋真实planner不叫同cut原子证明。
 - 所选HardwareMotionProfile居中包络是几何唯一输入，候选/launch/DedicatedController用同份派生身份；不凭UI扩几何、不预先扩profile、不重复叠sensor_error。
-- 新用户决定及纠正：共用层先 `u_smooth=u_prev+alpha*(u_target-u_prev)`，再 `u_out=k*u_smooth,0<=k<=1`；手动与导航共用，alpha/k必须分清。换向按profile.accel朝反向目标连续越零、不设中间零/等待；补充验证候选待负责人选择，不以伪冲突阻塞设计。
+- 新用户决定及纠正：共用层先 `u_smooth=u_prev+alpha*(u_target-u_prev)`，再 `u_out=k*u_smooth,0<=k<=1`；手动与导航共用，alpha/k必须分清。用户最终原话“我是说直接输出反向目标速度”：反向分支alpha=1直接采用目标(v,w)，跳过软件ramp，再施共同硬k；不设中间零/静止确认/等待。五项比例验证已选，替换原S03/S06/S14/S18/S20，不扩大20项矩阵。
 - 不重写碰撞模型，不声称前后净距或比例保持提供完整转弯扫掠安全。已有来源租期、离线、接管、急停、取消、重启与终端释放断言不能削弱。
 
 ## Review Focus
@@ -43,10 +43,10 @@
 |---|---|---|---|
 | A 可信输入/准入 | Task 1，输入owner | 修代次bug、导航专用目标校验、snapshot/结构占据证据 | 接口冻结后与B/C并行；不写agent_adapter |
 | B 相关前沿 | Task 2，候选owner | 无业务owner的拓扑/候选/分页；消费A DTO、C几何 | 可用冻结夹具与C并行；只写frontier及其新测试 |
-| C 车型与共用运动 | Task 3a，参数owner；Task 3b，运动owner | 同profile派生参数；同alpha过渡＋共同k硬限制 | 3a可与A/B并行；3b在负责人选补充场景后解锁，不与其共用测试文件并写 |
+| C 车型与共用运动 | Task 3a，参数owner；Task 3b，运动owner | 同profile派生参数；同alpha过渡＋共同k硬限制 | 3a可与A/B并行；3b按已选五项验证，待整体实施授权后解锁，不与其共用测试文件并写 |
 | D 查询/编排/接线 | Task 4a查询、Task 4b编排，整合owner | A/B/C后接同planner、非终结暂停与原action执行；最后离线/安装回归 | 4a可先用DTO开发；4b独占navigation_adapter、agent_adapter与现有navigation测试 |
 
-建议派单粒度为下面6项（1、2、3a、3b、4a、4b），其中3b单独审阅；产品整合顺序1→3a/2→4a→4b，3b在补充场景选定后与整合合版。若需仅交付前沿部分而不合新比例行为，必须由负责人明确调整交付范围，实施者不能自行遗漏用户新决定。
+建议派单粒度为下面6项（1、2、3a、3b、4a、4b），其中3b单独审阅；产品整合顺序1→3a/2→4a→4b，3b按已选范围与整合合版。若需仅交付前沿部分而不合新比例行为，必须由负责人明确调整交付范围，实施者不能自行遗漏用户新决定。
 
 ### 文件地图（路径为仓库相对路径）
 
@@ -234,8 +234,8 @@ class GoalNavigatorFactory(Protocol):
 - [ ] 写真实bug定向回归 `test_direct_goal_separates_grid_id_from_reference_generation`：请求grid="grid-A"、live.map_grid_id="grid-A"、map_generation=localization_generation="ref-7"；应接纳且start_poses generation="ref-7"，不是grid-A。另保持过时grid拒绝的原断言。该项是**已发现bug回归，单列于20场景之外，尚未运行**。
 - [ ] 运行 `.venv/bin/pytest senior_control/tests/test_direct_navigation.py -q`；预期上述用例在旧实现因CONFLICT失败，记录红灯原因，不把环境失败当行为复现。
 - [ ] 修DirectNavigation两种代次比较/下发，补NavigationStateReading.map_grid_id；不重新合并两者。
-- [ ] 按冻结端口写导航unknown准入用例，并复用workspace非法值/过时/航点free-only断言；场景3图外仅写文档待批准，不先写放行实现。
-- [ ] 按场景13/14写snapshot身份测试：同参考raster=4、anchor=7合法；旧generation/boot/source结果无权推进，同参考grid增长不改epoch；复用mapping_production真实reference刷新夹具。
+- [ ] 按冻结端口写导航unknown准入用例，并复用workspace非法值/过时/航点free-only断言；图外接纳仅保留独立冻结推荐，不占S03、不先写放行实现。
+- [ ] 按场景13及既有snapshot回归保护写身份断言：同参考raster=4、anchor=7合法；旧generation/boot/source结果无权推进，同参考grid增长不改epoch；复用mapping_production真实reference刷新夹具。
 - [ ] 实现reference.snapshot与bridge/install水位；native_session用已有稳定快照生成有界structural字段，未知/缺证据时保持None。读取无await，未复制百万格cells。
 - [ ] 运行 `.venv/bin/pytest senior_control/tests/test_direct_navigation.py senior_control/tests/test_workspace_data.py senior_control/tests/test_mapping_production.py ros2/tests/test_navigation_reference.py -q`；预期全部通过，原非法输入与参考资格断言不削弱。
 - [ ] 仅提交本Task明确的7个产品文件及4个测试文件，建议提交信息 `fix: separate navigation grid and reference identities`；不要 `git add .`。
@@ -246,7 +246,7 @@ class GoalNavigatorFactory(Protocol):
 
 **Interfaces:** 消费A NavigationSnapshot、C footprint；产出frontier_page/坐标转换/path_is_known_free，供4a/4b调用。仅不可变输入与显式checkpoint，不依赖ROS/任务store。
 
-- [ ] 在`ros2/tests/test_frontier.py`按下表S01/S02/S05/S06/S17各写一个独立输入测试，命名固定为`test_s01_relevant_frontiers`等；断言候选集合/closure/整车free/后页游标，不用实现函数回算预期。
+- [ ] 在`ros2/tests/test_frontier.py`按下表S01/S02/S05/S17各写一个独立输入测试，命名固定为`test_s01_relevant_frontiers`等；断言候选集合/closure/整车free/后页游标，不用实现函数回算预期。
 - [ ] 运行 `.venv/bin/pytest ros2/tests/test_frontier.py -q`，预期缺接口失败。
 - [ ] 实现坐标函数、四邻free候选、八邻聚类和符号外域的乐观连接/block-cut相关性；闭合只有稳定证据与必要几何的乐观上界不通才true，缺证据输出temporary诊断。S05只有点能过而整车不能过时无可执行pose，不能用点连通发goal。
 - [ ] 实现整路径矩形扫掠覆盖与2048操作/2ms分块checkpoint；候选每批16，按map区域确定性排序，不硬裁背离目标方向。
@@ -260,7 +260,7 @@ class GoalNavigatorFactory(Protocol):
 
 **Interfaces:** 产出NavigationParameters/derive_navigation_parameters；平台把既有RuntimeProfile.navigation_parameters派生后的路径传给launch的parameters与adapter的navigation_controller_params，几何只读值接向相同产物，不增加第二可写profile。使用config.json所选原motion_profile，不固定仓库默认文件。
 
-- [ ] 在现有参数测试写S20：选非默认L/W与cap/yaw_cap的同一个profile；候选footprint、global/local costmap footprint完全相同，planner launch与DedicatedController参数路径/内容identity相同；MPPI三上限分别为cap/-cap/yaw_cap，保持consider_footprint=true与allow_unknown=false。
+- [ ] 保留并复用现有参数/安装回归保护（不占选定S20、不删除原断言）：选非默认L/W与cap/yaw_cap的同一个profile；候选footprint、global/local costmap footprint完全相同，planner launch与DedicatedController参数路径/内容identity相同；MPPI三上限分别为cap/-cap/yaw_cap，保持consider_footprint=true与allow_unknown=false。
 - [ ] 运行 `.venv/bin/pytest tests/unit/test_motion_launch_profile.py ros2/tests/test_navigation.py -k 'profile or footprint or costmap' -q`，预期旧固定参数与所选profile不一致而失败。
 - [ ] 实现派生函数/平台产物生命周期；launch仅解析并使用产物、保留BT/lattice路径；DedicatedController也用此产物，禁止只改launch。标准仿真按其现选profile同样派生；若现入口不经platform_runtime才条件改真实入口并更新清单。
 - [ ] 复核MPPI上限是物理规划上限，保留lattice minimum_turning_radius等规划运动学；不将传感误差重复叠到footprint，不新增profile字段。
@@ -269,32 +269,22 @@ class GoalNavigatorFactory(Protocol):
 
 ## Part C / Task 3b：共用比例过渡与硬限制
 
-用户已明确同alpha平滑、同k硬限制，覆盖旧角速度独立规则；不再把降目标平滑当需用户解决的冲突。实施前仅由负责人选择下面补充验证候选，不擅自扩原20场景。
+用户已明确普通非换向请求同alpha平滑、同k硬限制，并最终纠正反向操作直接采用目标(v,w)、alpha=1，覆盖所有换向ramp提案。负责人已选S03/S06/S14/S18/S20五项比例验证，合计为保留原15＋此5，不另建R候选或参数矩阵；当前仍未实施授权。
 
 **Files:** 修改 `ros2/src/senior_motion_control/senior_motion_control/vehicle_speed.py`、`ros2/src/senior_motion_control/senior_motion_control/motion_core_output.py`；复用修改 `ros2/tests/test_motion_core_perception.py`，必要时修改 `tests/unit/test_navigation_core_output.py` 与`tests/unit/test_navigation_limits.py`受共同角过渡影响的期待。不改碰撞算法或CommandNode速度职责。
 
 **Interfaces:** 在vehicle_speed.py定义frozen `SpeedLimitDecision(velocity:Velocity, smoothed:Velocity, alpha:float, ratio:float, reasons:tuple[str,...])`；`limit_velocity_decision(requested:Velocity, previous:Velocity, measured_linear:float|None, clearance:DirectionalClearance, profile:HardwareMotionProfile, dt:float)->SpeedLimitDecision`，DirectionalClearance复用 `senior_perception.collision.DirectionalClearance`。原limit_velocity六位置参数/Velocity返回值保持；增加可选keyword-only `record:Callable[[SpeedLimitDecision],None]|None=None`（兼容旧六参数调用），calculate以实例回调记录`last_decision:SpeedLimitDecision|None`，只算一次。不用模块全局缓存；原monkeypatch包装同步接收可选record，断言仍验证原调用链，没有record的旧替身则诊断unknown。
 
-**算法决定:** 按设计末节共同插值再共同硬限制；alpha取线性及角向非零差量的允许增量比上界最小值，线性同向加速用accel、同向减速用decel、换向整段用反向accel，dt与真实measured保留事实，不能用旧reversing分支改回decel，角向用现profile.yaw_accel/yaw_decel，零差不除。**换向按最新用户决定直接以profile.accel朝有符号反向target连续推进，同alpha用于两轴，不设0中间目标、不丢越零余步、不插等待**；显式双零/撤销/急停立即停止，纯旋转不除线速，尚在平移先停止。硬k按平滑输出实际方向的净距、profile.cap、yaw_cap统一计算，不让平滑跨硬上限，不发明角加速度参数或宣称实测。
+**算法决定:** 普通非换向alpha按线性accel/decel与现profile.yaw_accel/yaw_decel的可行约束求共同值，零差不除零，不独立裁剪w；**反向分支alpha=1、直接目标(v,w)**，再按平滑/直达目标向量的方向净距、profile.cap/yaw_cap求共同硬k。双零/撤销/急停立即停止；纯旋转只用角约束。手动与导航复用现SpeedCalculation，不引入来源分流owner。真实轮速不替换为命令值；直接反向目标不证明实车即时反转或更短刹停，STM32制动效果尚未核实。
 
-补充候选**未加入原20输入，不宣称已批准或运行**：
+五项已选输入及精确预期在下表S03/S06/S14/S18/S20定义，不再保留R1–R6候选。S14按用户最终纠正直接反向目标，不再等待分段换向确认。另将设计中的实测方向净距缺口按源码定向复现纳入S20同一输入/trace检查：不得将实测正速度伪改成负命令，也不能借前方净距强行把反向请求压零或要求静止后才反向；物理制动契约仍待证据收敛。
 
-| 待选 | 独立输入建议 | 预期与复用位置 |
-|---|---|---|
-| R1 | previous=(0,0)，target=(0.4,0.6)，profile.accel=0.5，dt=0.05，净距无限 | 线性alpha上界0.0625，与现yaw增量比取min，两分量同alpha；替代`ros2/tests/test_motion_core_perception.py::test_linear_ramp_does_not_scale_the_requested_turn`旧角独立断言 |
-| R2 | 静止到纯旋转，yaw请求超过cap | 无线速除零，现yaw速率推alpha，yaw_cap共同k；复用同文件`test_in_place_turn_applies_capped_yaw_without_acceleration_at_linear_boundaries`，按新决定更新旧期待 |
-| R3（用户已明确该输入/预期） | previous=(0.01,0.01)，target=(-0.4,-0.4)，accel=0.5，dt=0.05，角增量约束不更紧、净距无限，真实measured_linear=0.01 | alpha=0.025/0.41，smoothed=(-0.015,-0.015)，k=1，不停0/等帧；真实反馈仍是0.01，不能改成命令值；复用同文件原换向输入，不扩矩阵 |
-| R4 | previous=(1,1)，target=(0.4,0.4)，无硬限制 | 共同alpha平滑下降，输出可大于target，硬k=1；不误判比例冲突；复用同文件减速用例 |
-| R5 | 平滑向量非零，yaw_cap更紧，随后净距上限零 | yaw约束同时降v，k=0立即双零，不因平滑越界；复用同文件与`tests/unit/test_navigation_core_output.py` |
-| R6 | 起止曲率不同、真实measured_linear高于平滑目标 | 同alpha/k原因可追踪，真实反馈参与制动，不宣称等于最新target曲率；复用真实core rig，手动/导航共用 |
-
-- [ ] 负责人选择补充输入并回写范围；R3输入/期望已由用户明确，不再问换向政策，不再问共同插值，不新增上游设计门。
-- [ ] 为已选输入写失败断言；只替换新决定覆盖的角独立期待，保留来源截止、真实core输出、零请求/实际制动事实；旧reversing时ramp_target=0和decel期待按新换向决定迁移，不能继续断言分段停零。
+- [ ] 为已选输入写失败断言；只替换新决定覆盖的角独立期待，保留来源截止、真实core输出、零请求/实际制动事实；旧reversing时ramp_target=0及所有反向accel/decel ramp期待均按最终直接目标规则迁移，不能继续断言停零或渐变。
 - [ ] 运行 `.venv/bin/pytest ros2/tests/test_motion_core_perception.py tests/unit/test_navigation_core_output.py tests/unit/test_navigation_limits.py -q`，预期旧角独立行为在所选输入失败并记录红灯。
 - [ ] 实现上述同alpha/同k计算与兼容入口；calculate开始清last_decision，缺record诊断unknown而不重算；无二次各轴裁剪。
 - [ ] MotionCoreOutput在现trace记录同一alpha/k/reasons，继续真实odom反馈，不新增speed_limit前馈/velocity_smoother，不重写碰撞事实。
 - [ ] 执行本Task命令与既有共用core回归，预期通过；插值/比例单测不等于真实轨迹或完整扫掠验收。
-- [ ] 仅提交已选产品/测试文件，建议 `feat: interpolate and limit shared motion intent proportionally`；补充输入未选不擅自扩验证。
+- [ ] 仅提交已选产品/测试文件，建议 `feat: interpolate and limit shared motion intent proportionally`；保持20项选定范围，不自行扩参数矩阵。
 
 ## Part D / Task 4a：同planner查询与当前图复核
 
@@ -313,22 +303,22 @@ class GoalNavigatorFactory(Protocol):
 
 **Files:** 新增 `ros2/src/senior_navigation/senior_navigation/goal_navigation.py`；修改NAV/navigation_adapter.py、MOTION/command_node.py、MOTION/arbiter.py、ROBOT/agent_adapter.py。测试修改 `ros2/tests/test_navigation.py`、`tests/unit/test_navigation_limits.py`；复用`senior_control/tests/test_home.py`旧取消断言（需要接新编排时才修改其夹具，不削弱原断言）。
 
-**Interfaces:** 消费A/B/C/4a全部冻结接口；产出既有RouteProgress原action进度与既有终端结果，不新增线上“探索成功”。C3b待选补充验证时允许其他部分离线开发，完整交付须如实列比例变更验证状态。
+**Interfaces:** 消费A/B/C/4a全部冻结接口；产出既有RouteProgress原action进度与既有终端结果，不新增线上“探索成功”。C3b按已选五项验证；observe水位等待须按设计剩余决定收敛，不能用旧snapshot立即判无收益。完整交付须如实列未验状态。
 
 - [ ] 先在现有真实CommandNode→MotionCoreOutput测试rig中写S19：已有非零held target→pause→prepared零barrier实际消费后target为idle/零、task_id/epoch仍在，旧样本不再前进；新goal真实accept前不恢复，新鲜新sequence后恢复，最终cancel仍需原退休/释放证明。
 - [ ] 执行 `.venv/bin/pytest tests/unit/test_navigation_limits.py -q`，预期缺非终结接口失败。
 - [ ] 在Arbiter加paused布尔与pause/resume，在CommandNode保留subscription/GID和task绑定，暂停清velocity/deadline并用现有prepared零barrier真实清下游target；publish_command暂停分支不调用clear/end_navigation。失资格/源换代仍走原终结撤销，禁止把资格丢失当普通等待。
-- [ ] 在`ros2/tests/test_navigation.py`按S04/S07–S12/S14–S18逐项写独立输入测试（下表精确定义），使用fake monotonic推进，禁止实际sleep30/60秒。保留原True/False接纳断言，并增加False计算前预留、True真实首goal后完成的检查（归S10生命周期输入）。
+- [ ] 在`ros2/tests/test_navigation.py`按S04/S07–S12/S15–S17逐项写独立输入测试（下表精确定义），使用fake monotonic推进，禁止实际sleep30/60秒。保留原True/False接纳断言，并增加False计算前预留、True真实首goal后完成的检查（归S10生命周期输入）。
 - [ ] 运行 `.venv/bin/pytest ros2/tests/test_navigation.py tests/unit/test_navigation_limits.py -k 'not installed_nav2_bringup' -q`，预期新行为失败而既有契约仍可定位；记录红灯。
-- [ ] 实现GoalNavigator.run单原目标循环、有关走廊账本、30秒等待/1秒重查、16项分页和观察后最新snapshot一次复核；没有15/60秒窗口。行驶中仅一个child结果task与一个0.25秒身份观察等待并存，owner循环await二者；发现T可能可达时只发一次有节流查询，确认后暂停/取消h1并等待同一child task真实终态，再发原T。普通grid增长不取消child；所有监视等待在该child退出时join/清理，不能每tick create_task堆积，也不能直接await run_child而永远不检查地图。查询故障3次间隔1秒仅限有资格query失败，实际no_path按30秒候选规则。
+- [ ] 实现GoalNavigator.run单原目标循环、有关走廊账本、30秒等待/1秒重查、16项分页和观察后水位进展等待/真实收益复核（先按设计收敛后冻结）；没有15/60秒窗口。行驶中仅一个child结果task与一个0.25秒身份观察等待并存，owner循环await二者；发现T可能可达时只发一次有节流查询，确认后暂停/取消h1并等待同一child task真实终态，再发原T。普通grid增长不取消child；所有监视等待在该child退出时join/清理，不能每tick create_task堆积，也不能直接await run_child而永远不检查地图。查询故障3次间隔1秒仅限有资格query失败，实际no_path按30秒候选规则。
 - [ ] NavigationAdapter提取child接受/终态逻辑，保持唯一_active/cancel锁；原action_completed只在GoalNavigator.run原目标True时调用一次。子goal切换pause→cancel→真实terminal→当前复核→新accept→resume，不调用整路线_revoke/clear；True/False公开接纳语义不变。
 - [ ] agent_adapter在同一RouteService实例注入reference.snapshot、同参数geometry、PlannerQuery与node pause/resume；prepare=controller.open覆盖整路线，整路线finally才退出并按原输出退休/terminal_release收口。
-- [ ] 运行 `.venv/bin/pytest ros2/tests/test_frontier.py ros2/tests/test_frontier_planner.py ros2/tests/test_navigation.py tests/unit/test_navigation_limits.py senior_control/tests/test_home.py -k 'not installed_nav2_bringup' -q`；预期所选可实施场景与旧取消通过，图外S03仍文档冻结，不用skip伪装完成。
+- [ ] 运行 `.venv/bin/pytest ros2/tests/test_frontier.py ros2/tests/test_frontier_planner.py ros2/tests/test_navigation.py tests/unit/test_navigation_limits.py senior_control/tests/test_home.py -k 'not installed_nav2_bringup' -q`；预期所选可实施场景与旧取消通过，图外接纳推荐仍文档冻结、不在选定S03内，不用skip伪装完成。
 - [ ] 运行下面“影响回归”命令；全部通过后逐文件提交 `feat: preserve original actions through frontier navigation`，记录已运行证据/未验层级。不推送、不PR，留负责人审阅。
 
 ## 已选20个独立输入场景：精确断言、归属与复用
 
-以下正好是派单选择的20项，不另造矩阵、不把参数组合计作多个场景。S03尚未获批，保持单项文档冻结；R候选与真实bug回归分别列，不冒充本表已选项。新测试复用现有真实owner/fake执行器，不另写一套模拟任务生命周期。
+以下正好是负责人选择的20项：保留原15项，原S03/S06/S14/S18/S20替换为已选5项比例验证；不另造矩阵、不把参数组合计作多个场景。图外接纳推荐未获批且不在选定实现内；真实代次bug回归单列，仍有效原有回归/安装检查继续复用。新测试复用现有真实owner/fake执行器，不另写一套模拟任务生命周期。
 
 S01共用基础切片定义：12×9，resolution=1m，origin=(0,0,0)，cell中心记(c+0.5,r+0.5)；未列格均为native occupied且同cut稳定占据，封闭外边界。free为c=1..3,r=3..5；unknown为c=4..10,r=4，以及c=2,r=6..7。S=(2.5,4.5,0)，T=(10.5,4.5,0)，profile居中0.55×0.55。横向unknown桥通向T，向上unknown支路仅经S可达free域返回，不能连接T；完整free域是S端点，不能借在S内绕一圈伪造相关性。其他场景需要不同输入时在各行明确写出，不偷偷复用变化后的状态。
 
@@ -336,10 +326,10 @@ S01共用基础切片定义：12×9，resolution=1m，origin=(0,0,0)，cell中�
 |---|---|---|---|
 | S01 `relevant_frontiers` | 上述S01切片与unknown T | 仅横桥入口观察候选（邻c=4,r=4）可选；c=2,r=5朝上死支路排除；potential_connection=true，无实际unknown goal | Task2 `ros2/tests/test_frontier.py`；复用`senior_control/tests/test_workspace_data.py`、`ros2/src/senior_mapping/test/test_active_map.py`网格构造 |
 | S02 `closed_target` | S01输入，将c=6全列置同cut稳定occupied，T格改free，外边界仍封闭 | 乐观上界S/T断开，有separator依据；closure_proven=true，结果“无法到达”，探索goal计数0 | Task2同新文件；复用`ros2/tests/test_navigation.py` fake executor以断言无start |
-| S03 `outside_target_proposal` | 12×9图右边开unknown出口，S有free观察位，T=(14.5,4.5,0)，客户端cut当前且坐标有限 | **待负责人确认后才实施/测试**：原T接纳为意图、接外域、实际goal整车在图内free；当前未批准不得放行outside。边界不当墙，不创建到T的无限数组 | Task1后续`senior_control/tests/test_direct_navigation.py`单场景；复用`test_direct_goal_requires_current_free_map_and_matching_generation`夹具，不能用旧断言掩盖新代次bug |
+| S03 `curve_common_k` | previous=target=(0.4,0.6)，cap=0.16、yaw_cap=1.0、净距无限（其余字段复用合法profile）使共同硬k=0.4 | alpha=1，smoothed=(0.4,0.6)，out=(0.16,0.24)，两分量同比，不独立裁剪w | Task3b `ros2/tests/test_motion_core_perception.py`；替换旧角独立断言，保留硬上限保护 |
 | S04 `known_target_unknown_detour` | S01切片T改free，直接已知路径planner no_path，相关unknown横桥仍连S/T，观察点planner reachable | 进入观察子goal，保留known-free T与原action；不能因T已知而直接失败 | Task4b `ros2/tests/test_navigation.py`；复用同文件QualifiedRoute/RouteService fake |
 | S05 `narrow_gap` | 0.1m栅格，0.4m净宽free开口后唯一unknown前沿，车体0.55×0.55，点路径存在；同一开口的query fake返回稀疏点路径，顶点在宽区域free、段经过窄口 | 不生成穿口可执行观察goal；仅点/路径顶点free不足，整段包络复核拒绝；不以保守筛选自动宣称永久闭合 | Task2 `test_frontier.py`与4a `test_frontier_planner.py`分别承担候选/路径断言；复用`ros2/tests/test_navigation_collision_qualification.py`几何及现Nav fake |
-| S06 `rotated_origin` | origin=(10,-2,pi/2)，resolution=0.5，cell(c=2,r=1) | center=(9.25,-0.75)，逆变换回(2,1)；接近边界负局部坐标用floor不截零 | Task2 `test_frontier.py`；复用`test_workspace_data.py`坐标夹具 |
+| S06 `pure_rotation` | previous=(0,0)，target=(0,0.6)，dt=0.05，已有yaw_accel=1.0、yaw_cap=0.04，无其他更紧约束 | alpha=1/12，smoothed=(0,0.05)，k=0.8，out=(0,0.04)；纯角约束、无线速除零；配置仅为fixture非实测 | Task3b同文件；复用纯旋转旧用例并按共同过渡更新期待 |
 | S07 `wait_29_9` | 当前通路A于monotonic=100收到可信临时no_path，仍qualified，clock推进129.9，无相关通路恢复 | 保留A的等待，deadline=130，不终结、不提前换B；允许受节流重查，不发无验证goal | Task4b `ros2/tests/test_navigation.py`注入clock；复用同文件route状态夹具 |
 | S08 `wait_30_select_other` | 独立初始化A于100受阻，B尚未尝试且planner reachable；clock到130 | 结束A本次等待并查询/执行B，原任务不failed，A不因重算重新得到30秒 | Task4b同文件；复用`senior_control/tests/test_home.py::test_rejected_cancel_does_not_start_replacement`的替代goal计数方式 |
 | S09 `all_temporarily_blocked` | 独立A/B两候选均可信临时no_path，各自一次30秒已满，分页完成，无新相关证据 | 原action未completed，路线failed诊断“暂时无法到达”，正常退休/释放后收口；不轮回A继续等，不报永久墙 | Task4b同文件；复用`tests/unit/test_task_terminal_release.py`真实收口屏障 |
@@ -347,13 +337,18 @@ S01共用基础切片定义：12×9，resolution=1m，origin=(0,0,0)，cell中�
 | S11 `growth_returns_original` | 观察handle h1正在行驶；同参考grid A→B使T free且planner reachable；h1 cancel先接受后terminal，最终原goal成功 | terminal前不发T，之后发原T一次；仅原goal成功完成a1一次；中间原任务绑定不释放 | Task4b同文件；复用`senior_control/tests/test_mapping_production.py::test_native_reference_refresh_preserves_a_fresh_pose_within_the_same_generation` |
 | S12 `cancel_unknown` | h1取消返回FAILED/未知终态，T此时已可达 | 不发替代，不释放原身份，不完成原action，保持pending与零输出，迟到结果只按h1处理 | Task4b同文件；复用`senior_control/tests/test_home.py::test_rejected_cancel_does_not_start_replacement`及`tests/unit/test_task_terminal_release.py` |
 | S13 `reference_changed` | 在generation g1启动分析、planner查询与h1；切到g2后依次让三种旧结果返回 | 三旧结果均不能安装/发新goal/完成当前action；沿原失格撤销，不重盖当前generation；新任务不被旧结果影响 | Task1 reference、Task4a planner及4b route各负责自己边界；复用`ros2/tests/test_navigation_reference.py`和`tests/unit/test_navigation_limits.py`来源换代 |
-| S14 `same_reference_growth` | 同MapRef/generation，raster seq4/gridA配anchor cut7，后普通增长gridB，观察h1路径当前仍free且在行驶 | 原task_epoch不变，raster≠anchor合法，h1不无条件取消重启；未使用候选/查询在当前图复核 | Task1 reference＋Task4b route；复用上述mapping_production真实刷新用例 |
+| S14 `reverse_direct_target` | previous=(0.01,0.01)，target=(-0.4,-0.4)，dt=0.05，measured_linear=0.01，profile/净距无更紧硬约束 | 用户最终直接目标：alpha=1，smoothed=out=(-0.4,-0.4)，k=1，无中间零/静止确认/ramp；实测仍0.01，不宣称车辆已反转 | Task3b同文件换向用例；覆盖此前-0.015/-0.01875期待，不再等待旧分段语义确认 |
 | S15 `dynamic_clears_same_grid` | native grid_id固定gridA，当前候选planner先因实时障碍no_path，等待内障碍消失后同planner reachable | 不依赖native更新解除失败记录；按1秒节流重查恢复通道，旧30秒deadline不重建 | Task4a planner/4b route；复用`ros2/tests/test_navigation.py`与`test_navigation_collision_qualification.py` |
 | S16 `unrelated_update_no_reset` | A从100等至129.9，无关角落gridA→B更新，相关走廊未变；clock到130 | deadline仍130，改选/收口规则照常，无关图变化不能再等30秒 | Task4b同文件，沿S07 clock fixture但独立初始化输入 |
 | S17 `later_page_candidate` | 确定性候选域17项，第一页16项已尝试失败，第17项在后页且planner reachable；重复同cut并模拟新计算取消 | 游标继续后页找到第17项，不前16失败就exhausted；已尝试覆盖不因缓存淘汰重游；取消在checkpoint退出、无后台堆积 | Task2分页与Task4b账本，`test_frontier.py`/`test_navigation.py`；复用审计现`test_navigation.py`新增前沿断言位置 |
-| S18 `long_known_travel` | 原known-free T goal已接受，qualified持续，monotonic推进到61秒，地图/信息无增长，goal尚未终态 | 仍运行、不因无图失败、不切探索；最终真实成功才完成action | Task4b同文件；复用QualifiedRoute现有顺序运行用例 |
+| S18 `lower_target_transition` | previous=(1,1)，target=(0.4,0.4)，dt=0.05，decel=yaw_decel=0.8，cap/yaw_cap及净距不更紧 | 普通同向减速alpha=1/15，smoothed=out=(0.96,0.96)，输出大于新目标但k=1且始终<=1，无比例伪冲突 | Task3b同文件减速用例；同alpha平滑过渡、共同k原因可追踪 |
 | S19 `pause_clears_held_target` | 真实core rig已有导航非零target；进入等图/切goal，pause；旧样本/未accept新goal；最后真实accept并送新鲜样本 | 下游消费prepared零barrier后held target真实零/idle，保留task_id/epoch/subscription/GID，不封epoch；accept前不恢复，后新鲜样本恢复；整路线最终仍需原退休证明 | Task4b `tests/unit/test_navigation_limits.py`；复用`tests/unit/test_navigation_core_output.py`和`tests/unit/test_task_terminal_release.py`真实core rig |
-| S20 `one_profile_everywhere` | 选profile length=0.8,width=0.6,cap=0.9,yaw_cap=1.2，替换默认profile；所有装配消费同content identity | 四顶点±0.4/±0.3；候选、global/local、planner launch及DedicatedController一致；MPPI上限0.9/-0.9/1.2，最终层仍用同profile限速 | Task3a `tests/unit/test_motion_launch_profile.py`与`ros2/tests/test_navigation.py`现参数测试；profile其他必填值复用真实fixture，勿造缺字段假profile |
+| S20 `zero_pair_measured_trace` | previous=(0.01,0.01)，target=(-0.4,-0.4)，measured_linear=0.2仍前进，front=0、rear=0，其余profile合法且证据新鲜 | alpha=1、smoothed为反向目标；rear硬上限给k=0，out成对零，trace保留measured=0.2、前/后净距及原因；源码缺实测方向独立制动检查须定向回归，不伪报已复现/实际停车，不把front=0单独当阻止反向依据 | Task3b同文件与 `tests/unit/test_navigation_core_output.py`真实core rig；同一输入检查测量/原因，不扩异常矩阵 |
+
+
+被替换编号的有效保护继续复用，不增加选定独立输入：原S06旋转origin/floor断言由Task2坐标函数与现有workspace坐标回归承担；原S14同参考增长/raster≠anchor由Task1 reference和mapping_production回归、Task4b当前图复核承担；原S18长已知路线无60秒信息超时由Task4b现有顺序运行/生命周期回归保留；原S20同profile装配由Task3a原参数测试和后续安装验证保留。原S03图外放行未批准，不实现、不混入S03；既有非法/过时grid/outside拒绝保护保留。
+
+观察等图复用S10子goal成功同一输入：成功时仍拿到旧raster不得完成原action、耗尽前沿或记永久无收益；随后安装覆盖新commit的raster才作收益判断。Task1在原reference install/withdraw加进展revision/单等待者唤醒，建议接口`wait_for_progress(revision, *, max_wait_s=1.0)`返回当前revision，单次有界且取消清理；Task4b及agent_adapter接此等待，缺进展不忙循环。该接口是待审核推荐、不是已冻结源码契约；到达后观测关联、无commit与总驻留/收口策略先按设计收敛，不能拿1秒await边界冒充用户任务超时。以上落既列reference/bridge/native_session/goal_navigation/agent_adapter与现有测试owner，无新增文件/服务；未决定前不实施observe终结策略。
 
 ## 影响回归、安装与分层验证
 
@@ -363,7 +358,7 @@ S01共用基础切片定义：12×9，resolution=1m，origin=(0,0,0)，cell中�
 .venv/bin/pytest senior_control/tests/test_direct_navigation.py senior_control/tests/test_workspace_data.py senior_control/tests/test_home.py senior_control/tests/test_mapping_production.py ros2/tests/test_navigation.py ros2/tests/test_navigation_reference.py ros2/tests/test_navigation_collision_qualification.py tests/unit/test_navigation_limits.py tests/unit/test_navigation_core_output.py tests/unit/test_motion_launch_profile.py tests/unit/test_arbiter.py tests/unit/test_navigation_completion_handoff.py tests/unit/test_task_terminal_release.py tests/unit/test_software_estop_owner.py tests/integration/test_task_ownership.py tests/unit/test_ros_package_ownership.py -k 'not installed_nav2_bringup' -q
 ```
 
-预期全部通过；仍有效任务离线/接管/急停/重启/来源租期/取消/终端释放/安装归属按影响复用，不放宽时间或删除断言。`test_task_ownership.py`重点保留offline same identity、takeover waits output ack、restart no automatic plan；navigation_limits重点保留原始样本截止/GID/private run；home重点保留cancel未知、迟到accept不发替代。比例新决定覆盖的旧角独立与分段换向断言在Task3b显式列改动理由，其他安全断言不减。
+预期全部通过；仍有效任务离线/接管/急停/重启/来源租期/取消/终端释放/安装归属按影响复用，不放宽时间或删除断言。`test_task_ownership.py`重点保留offline same identity、takeover waits output ack、restart no automatic plan；navigation_limits重点保留原始样本截止/GID/private run；home重点保留cancel未知、迟到accept不发替代。比例新决定覆盖的旧角独立与全部换向ramp断言在Task3b显式列改动理由，其他安全断言不减。
 
 ```bash
 .venv/bin/pytest ros2/tests/test_motion_core_perception.py tests/unit/test_navigation_core_output.py tests/unit/test_navigation_limits.py -q
@@ -387,19 +382,19 @@ Ruff若发现既有无关错误先区分基线，不顺带重构；新增模块�
 | 产品 | 5 | 14–16 | 0 | 新snapshot/frontier/planner/goal_navigation/navigation_parameters；必改direct_navigation、waypoints/ports、agent/workspace、live_mapping_reference、navigation_bridge、native_session、navigation_adapter、dedicated_controller、platform_runtime、agent_adapter、command_node、arbiter、vehicle_speed、motion_core_output；条件real_runtime、senior_sim/launch/simulation.launch.py |
 | 测试 | 2 | 9–11 | 0 | 新test_frontier/test_frontier_planner；必改test_direct_navigation、test_workspace_data、test_mapping_production、test_navigation_reference、test_navigation、test_navigation_limits、test_motion_launch_profile、test_motion_core_perception、test_navigation_core_output；条件test_home夹具、test_startup_learning_chain的原limit_velocity包装签名（原断言保留） |
 | 配置/构建 | 0 | 2–3 | 0 | navigation.launch.py、nav2.yaml；仅证实真实安装/依赖差异才条件修改1个package.xml或CMakeLists.txt；当前已知无需改nav2_msgs依赖 |
-| 工具/文档 | 2 | 1–2 | 0 | 本次这2份文档；后续ros2/src/senior_navigation/README.md更新（已核对存在）；可选更新docs/operations/navigation-monotonic-overlay.md。无新增工具脚本 |
-| 合计 | **9** | **26–32** | **0** | **35–41文件**；本轮实际仅新增2文档 |
+| 工具/文档 | 0 | 3–4 | 0 | 本轮修改已有2份文档；后续ros2/src/senior_navigation/README.md更新（已核对存在）；可选更新docs/operations/navigation-monotonic-overlay.md。无新增工具脚本 |
+| 合计 | **7** | **28–34** | **0** | **35–41文件**；本轮实际新增0、修改2、删除0 |
 
-预计产品净新增/修改约1,000–1,650行（含新比例owner局部约60–120行），测试约450–750行；未来文档更新约60–120行，配置约20–50行。行数是评估量级非交付指标，不预写函数体充计划；原内部直接go循环会被最小替换，无必需整文件删除。角色拆分建议为A输入、B候选、C参数、C运动、D查询、D整合六个可审任务；不可并写的现有测试及装配文件按上述owner串行合版。
+预计产品净新增/修改约1,050–1,750行（含新比例owner局部约60–120行及进展通知/等待约50–100行，最终依等图策略收敛），测试约450–750行；未来文档更新约60–120行，配置约20–50行。行数是评估量级非交付指标，不预写函数体充计划；原内部直接go循环会被最小替换，无必需整文件删除。角色拆分建议为A输入、B候选、C参数、C运动、D查询、D整合六个可审任务；不可并写的现有测试及装配文件按上述owner串行合版。
 
 ## 计划自审与交接
 
-- **需求覆盖：** 用户最新未知绕路、相关性/闭合/临时30秒、原任务与取消、snapshot水位、无ACK复核、有界计算、同profile、共用alpha/k均有设计和Task owner；旧15/60秒与True pending已删。S03明确待确认，R候选待选，当前没有隐藏实施授权。
+- **需求覆盖：** 用户最新未知绕路、相关性/闭合/临时30秒、原任务与取消、snapshot水位、无ACK复核、有界计算、同profile、共用alpha/k均有设计和Task owner；旧15/60秒与True pending已删。图外接纳独立冻结，五项比例验证已替换选定编号，观察等图收口待收敛，当前没有隐藏实施授权。
 - **接口一致性：** MapRef/Pose2D/WorkspaceGrid/SampleTime复用原类，snapshot独立值模块避免workspace↔references循环；所有消费者用同一CutIdentity/geometry_id。未增加线上DTO、未知cancel替代或第二地图/速度owner。
 - **步骤可执行：** 每任务列文件、精确接口、红灯输入、命令、实现决定、绿灯与提交；命令是待运行，当前未装/未测。旧安装/ROS测试可能启服务已明确隔离；不能未经授权照全文件跑服务。
 - **Review Focus：** 五项分别落Task1/2/4a/4b及原回归，不以20项之外新矩阵扩大范围。真实grid/reference bug单列先复现修复，未假装已经复现运行。
-- **比例复审：** 已按用户纠正区分共同插值alpha与硬缩放k，删除伪冲突门与上游重构建议；纯旋转、反向accel连续越零/零请求、实际反馈和更紧yaw上限在原owner内明确，补充输入等负责人选择。未宣称每帧与新目标同曲率或完整SE2安全。
+- **比例复审：** 已按用户纠正区分共同插值alpha与硬缩放k，删除伪冲突门与上游重构建议；纯旋转、反向直接目标alpha=1/零请求、实际反馈和更紧yaw上限在原owner内明确，五项输入已选；实测方向净距缺口待定向复现及制动契约收敛。未宣称每帧与新目标同曲率或完整SE2安全。
 - **证据限制：** 闭合依赖同参考可信结构证据；缺数据诚实temporary/unknown。外域和乐观图是上界近似，Nav2无cut ACK；当前图整车复核不等于原子同图证明。性能、安装、真实ROS与实车均未验。
 - **比例与体量：** 计划约为设计的接口/任务展开，代码块只冻结值/签名，无产品函数体。无额外工具、框架或测试实现。本轮仅两文档，可正常本地文档提交，交负责人亲阅后另派实施。
 
-待亲阅只剩两类产品/验证边界：S03图外接纳推荐是否批准，以及共用比例过渡的R1–R6补充输入选择；不把已有技术事实当用户投票，也不自行开下一阶段。负责人收敛后按任务依赖另行派发，当前执行到此结束。
+待亲阅/收敛项：图外接纳推荐是否批准（当前冻结且不在选定实现内）；观察到达后scan/commit关联及缺进展时驻留/收口规则；实测仍前进而命令已反向时的有效物理制动契约。用户反向直接目标已明确，五项比例验证已选，不再把旧提案或输入选择当确认门；当前不自行开下一阶段。负责人收敛后按任务依赖另行派发，当前执行到此结束。
