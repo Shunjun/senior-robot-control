@@ -62,7 +62,7 @@ class WorkspaceReader:
         manifest = await self._manifest(ref)
         if not manifest.waypoint_writes:
             raise self._ports.error(ErrorCode.UNAVAILABLE, "this map cannot create waypoints")
-        await self._verify_free_target(ref, point.grid_id, pose, manifest)
+        await self._verify_target(ref, point.grid_id, pose, manifest)
         await self._waypoints.save_waypoint(
             waypoint_id=point.waypoint_id,
             pose=pose,
@@ -80,10 +80,22 @@ class WorkspaceReader:
         self, map_ref: MapReference, grid_id: str, pose: PoseReading
     ) -> None:
         ref = MapRefPayload(map_id=map_ref.map_id, reference_revision=map_ref.reference_revision)
-        await self._verify_free_target(ref, grid_id, pose, await self._manifest(ref))
+        await self._verify_target(ref, grid_id, pose, await self._manifest(ref))
 
-    async def _verify_free_target(
-        self, ref: MapRefPayload, grid_id: str, pose: PoseReading, manifest: Any
+    async def verify_navigation_target(
+        self, map_ref: MapReference, grid_id: str, pose: PoseReading
+    ) -> None:
+        ref = MapRefPayload(map_id=map_ref.map_id, reference_revision=map_ref.reference_revision)
+        await self._verify_target(ref, grid_id, pose, await self._manifest(ref), allow_unknown=True)
+
+    async def _verify_target(
+        self,
+        ref: MapRefPayload,
+        grid_id: str,
+        pose: PoseReading,
+        manifest: Any,
+        *,
+        allow_unknown: bool = False,
     ) -> None:
         if manifest.grid_id != grid_id:
             raise self._ports.error(ErrorCode.CONFLICT, "map changed before accepting the target")
@@ -104,9 +116,16 @@ class WorkspaceReader:
             (tile.grid_id, tile.tile_x, tile.tile_y) != (grid_id, tx, ty)
             or len(tile.cells) != tile.width * tile.height
             or not (ix < tile.width and iy < tile.height)
-            or tile.cells[iy * tile.width + ix] != 0
         ):
             raise self._ports.error(ErrorCode.CONFLICT, "target must be on current free space")
+        cell = tile.cells[iy * tile.width + ix]
+        if cell != 0 and not (allow_unknown and cell == -1):
+            message = (
+                "target must be on current free or unknown space"
+                if allow_unknown
+                else "target must be on current free space"
+            )
+            raise self._ports.error(ErrorCode.CONFLICT, message)
         await self._require_grid(ref, grid_id)
 
     async def verify_task_edit(self, task: TaskDefinition, grid_id: str) -> None:

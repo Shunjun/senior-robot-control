@@ -150,7 +150,7 @@ planner_server:
     costmap_update_timeout: 1.0
     GridBased:
       plugin: "nav2_smac_planner/SmacPlannerLattice"
-      allow_unknown: false
+      allow_unknown: true
       tolerance: 0.25
       max_iterations: 1000000
       max_on_approach_iterations: 1000

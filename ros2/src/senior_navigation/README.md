@@ -114,3 +114,25 @@ Nav2/Humble private速度通道/定位断链/真进程恢复、厂商/设备与L
 原 `NAV2_TEST_INSTALLED_LAUNCH=1` 与 `SENIOR_LAUNCH_RECOVERY_LIVE=1` 探针未启用；
 它们需要Linux、localhost-only和隔离空ROS域。原live夹具的临时MPPI1.1.9参数不代表生产评分验证。
 没有启动开发、实车/仿真服务，没有部署或推送。
+
+
+## 2026-11-26：图内 unknown 准入（仓库实现，未部署）
+
+管理端导航目标现在独立校验真实当前栅格：仅准入有限栅格内的 free（0）和 unknown（-1），
+occupied、图外、旧 G/MapRef、不可用或仅供显示的历史图仍拒绝；航点创建继续仅准入 free。
+栅格身份 G 使用 state.map_grid_id，定位参考代次 R 使用 state.map_generation；定位匹配、
+就绪、安全/手动权限及 Home adopted/confirmed/map 检查保持，缺 G/R 不得用另一身份替代。
+导航仍经原持久任务接纳、effect 和 IPC 下传 R，不由管理端直接发送 Nav2 goal。
+
+canonical nav2.yaml 的 planner_server / GridBased（SmacPlannerLattice）启用 allow_unknown=true。
+navigation.launch.py 通过 parameters/RewrittenYaml 将该文件交 planner；模拟 planner 也使用该
+canonical 默认文件，模拟 controller 使用其原 overlay。硬件显式 navigation_parameters 会交给
+planner 和 DedicatedController，必须核对实际选中文件及安装态参数；此仓库修改不证明部署已消费。
+两 costmap 的 track_unknown_space、原 footprint/padding、MPPI 及静态/live 装配未在本段修改。
+目标点准入不证明整个足迹或路径安全，也不授权任意图外导航。
+
+本段离线验证只覆盖管理 reader 和原 SQLite task→IPC 调用链（S10/S11 的管理部分）；IPC 接收端
+为观察替身，未启动 ROS/Nav2。全量 Q 插件、真实 global/local 旧格及膨胀撤销、固定墙保留、同版
+Smac/MPPI 的 unknown 通道和 unknown/lethal 混合足迹，以及插件安装态 S12–S14 均未验。
+精确部署版/ABI 与实际物理 profile 证据尚缺；整个 unknown 导航功能交付继续阻塞，不能仅凭此
+配置和准入通过宣布 Nav2 已安全交付。未实现自研 frontier、临时等待、通道 ban 或第二运动规则。

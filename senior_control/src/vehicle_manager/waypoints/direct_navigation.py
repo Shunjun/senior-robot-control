@@ -74,13 +74,17 @@ class DirectNavigation(Generic[MapT, PoseT]):
                 raise self._values.error(ErrorCode.CONFLICT, "no confirmed Home on the current map")
             pose = home.waypoint.pose
 
-        await self._workspace.verify_free_target(map_ref, target.grid_id, pose)
+        await self._workspace.verify_navigation_target(map_ref, target.grid_id, pose)
         live = await self._state.read()
-        if live.map_ref != map_ref or live.map_generation != target.grid_id:
+        if live.map_ref != map_ref or live.map_grid_id != target.grid_id:
             raise self._values.error(
                 ErrorCode.CONFLICT, "navigation target belongs to an older map"
             )
-        if not live.localized or live.localization_generation != live.map_generation:
+        if (
+            not live.map_generation
+            or not live.localized
+            or live.localization_generation != live.map_generation
+        ):
             raise self._values.error(
                 ErrorCode.LOCALIZATION_UNAVAILABLE, "live localization unavailable"
             )
@@ -90,4 +94,4 @@ class DirectNavigation(Generic[MapT, PoseT]):
             raise self._values.error(ErrorCode.SAFETY_REJECTED, "navigation is not safe to start")
 
         # The ROS-side receiver checks the same generation again before accepting the goal.
-        await self._navigation.start_poses(execution_id, map_ref, target.grid_id, (pose,))
+        await self._navigation.start_poses(execution_id, map_ref, live.map_generation, (pose,))
