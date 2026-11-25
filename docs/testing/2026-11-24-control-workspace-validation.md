@@ -440,3 +440,15 @@ V1/V2、V4/V6、V7 在 `/dev/shm` 只读 baseline 副本的当前回归入口上
 验证：受影响 13 个 Vitest 入口 187 passed；最终地图/任务补验 38 passed；`npm run typecheck` 与 `npm run build` 通过，保留原 Vite chunk-size 提示。三尺寸生产客户端安全 fixture `control.spec.ts` 分别以1440×1000、390×844、844×390执行；最终命令与结果以交付报告为准，浏览器截图不是实车证明。登录/控制/配对/地图/视频均仅安全静态 fixture，非 API fetch 一律拒绝、WebSocket全替换、路由仅静态资源放行。
 
 真实能力差异：摄像头默认关闭且与设置共用 owner；无真实视频帧、无实车认证/配对验证；无校准几何仍箭头/尺寸不可用；roll/pitch/缺样本明确不可用；立即执行/FIFO/缺图层/画质采样写入仍暂未实现且零请求。390为44px热区使用184px dock、图例入口和更高底部避让，小图仍浮于驾驶卡上方；844允许冻结稿 min-height 产生滚动。负责人仍须亲阅实际 diff 和全部视图，本文不替代最终视觉验收。
+
+### PR41 负责人亲阅后五项定向收尾（2026-11-25）
+
+8cf7de6 的视觉交付仍有五项遗漏，旧版本不视为最终验收：设备菜单关闭/刷新相交约6px且配对入口非主色、390任务编辑卡宽315而非340、复制码仍为原生按钮、设置仍称高档/低档、桌面更多图层入口被隐藏。本次只修上述内容：菜单 actions 使用共享 Button/IconButton 的真实槽位，配对用 primary；配对页交互统一共享控件；桌面315px规则限定在461px及以上；设置文案改低速/高速；更多图层恢复可点击并沿原本地提示。
+
+范围为7个现有产品文件、2个现有测试文件及本文，共10路径，新增/删除0，全部在原44路径内。App.tsx 是菜单关闭 owner 和配对 primary variant 的必要依赖，实施前已向负责人报告。Compatible：DeviceList 的 onClose 可选，独立使用不强制出现关闭；code/command/expiry、请求链、协议 key/SI值、任务 owner/调度、原底部三组同底线保持。
+
+本次复用：devices/settings/tasks 共120条原有效回归通过，包含配对取消/过期/认证、配置SI/冲突/未知同ID、原任务恢复与调度；文案定位迁移，没有新增重复业务场景或CSS镜像单测。定向浏览器检查复用三尺寸安全fixture，在原生产客户端流程增加菜单真实bounds无相交及中心命中、配对复制及焦点环、390编辑卡左右12px/宽340及滚动重排/保存命中/可见按钮无相交、三尺寸图层入口命中与原提示/零新增请求；只豁免独立GET /api/robots轮询，所有其他HTTP与socket调用完整比较。
+
+`npm --prefix web run typecheck`、`npm --prefix web run build`通过（原chunk-size警告保留）；`TMPDIR=/dev/shm PLAYWRIGHT_BASE_URL=http://127.0.0.1:4148 PLAYWRIGHT_CHANNEL=chrome npm --prefix web run test:e2e -- control.spec.ts --output=/dev/shm/control-pr41-followup/e2e-results`三尺寸3 passed。新增的按钮相交探针曾把闭合details中的未绘制按钮算入，三尺寸失败；修正为真实checkVisibility后通过，失败日志单独保留，不冒称产品失败。后端不变未重跑，没有实车/ROS/真实配对/业务服务连接；4148仅本地dist静态资源，fetch/WS由安全fixture全部替换。
+
+修复前bounds、最终新原图、命中/请求计数、精确命令日志和小diff见 `/tmp/control-workspace-pr41-followup-2026-11-25/`；旧 `/tmp/control-workspace-visual-repair-2026-11-25/` 原图保持归档，不替换。844保留原min-height滚动，另附实际viewport图避免fullPage的sticky合成位置误读。PR41继续Draft，最终视觉验收仍待负责人亲阅。

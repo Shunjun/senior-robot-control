@@ -84,11 +84,6 @@
   box-shadow: 0 16px 48px #0006;
   padding: 18px;
 }
-.menuClose {
-  position: absolute;
-  right: 10px;
-  top: 7px;
-}
 .menuActions,
 .emptyActions {
   display: flex;

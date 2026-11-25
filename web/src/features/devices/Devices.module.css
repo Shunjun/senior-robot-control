@@ -123,7 +123,11 @@
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 12px;
-  padding-right: 30px;
+}
+.listActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 .listTitle {
   margin: 0;
@@ -277,10 +281,6 @@
   min-width:44px;  min-height: 44px;
   border-radius: 9px;
   clip-path: none;
-}
-.pairingPanel .primary {
-  width: 100%;
-  letter-spacing: 0;
 }
 .robot {
   position: relative;

@@ -14,7 +14,7 @@ import {
   useParams,
 } from "react-router-dom";
 
-import { ChevronDown, Activity, ArrowLeftRight, Car, X } from "lucide-react";
+import { ChevronDown, Activity, ArrowLeftRight, Car } from "lucide-react";
 import { Button } from "./components/ui/Button";
 import { SegmentedControl } from "./components/ui/SegmentedControl";
 import { EmergencyStop } from "./features/drive/EmergencyStop";
@@ -250,22 +250,16 @@ function Shell({
         )}
         {devicesOpen && (
           <aside ref={menu} id="device-switcher" className={styles.side}>
-            <Button
-              className={styles.menuClose}
-              aria-label="关闭设备列表"
-              onClick={() => {
-                closeDevices();
-                trigger.current?.querySelector("button")?.focus();
-              }}
-            >
-              <X size={16} />
-            </Button>
             <DeviceList
               list={list}
               selectedId={robotId ?? null}
               onRefresh={onRefresh}
               pairing={null}
               onSelect={closeDevices}
+              onClose={() => {
+                closeDevices();
+                trigger.current?.querySelector("button")?.focus();
+              }}
               onRevoke={
                 onRevoke === null
                   ? null
@@ -279,6 +273,7 @@ function Shell({
             <div className={styles.menuActions}>
               {pairing && (
                 <Button
+                  variant="primary"
                   onClick={() => {
                     closeDevices();
                     setPairOpen(true);

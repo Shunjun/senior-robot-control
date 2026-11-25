@@ -26,25 +26,25 @@ const FIELDS: ReadonlyArray<{
 }> = [
   {
     key: "low_linear_mps",
-    label: "低档线速度上限",
+    label: "低速线速度上限",
     scale: 3.6,
     unit: "km/h",
   },
   {
     key: "high_linear_mps",
-    label: "高档线速度上限",
+    label: "高速线速度上限",
     scale: 3.6,
     unit: "km/h",
   },
   {
     key: "low_angular_rps",
-    label: "低档角速度请求上限",
+    label: "低速角速度请求上限",
     scale: 1,
     unit: "rad/s",
   },
   {
     key: "high_angular_rps",
-    label: "高档角速度请求上限",
+    label: "高速角速度请求上限",
     scale: 1,
     unit: "rad/s",
   },
@@ -367,7 +367,7 @@ export const VehicleSettings = memo(function VehicleSettings({
     try {
       validateSettingsRequest(request);
     } catch {
-      setMessage("请核对完整数值、低高档组合和日志时长范围；尚未提交");
+      setMessage("请核对完整数值、低速/高速组合和日志时长范围；尚未提交");
       return;
     }
     void send(request);

@@ -1,6 +1,10 @@
 import { useRef, useState, type CSSProperties, type ReactElement } from "react";
 import { NavLink } from "react-router-dom";
 
+import { X } from "lucide-react";
+import { Button } from "../../components/ui/Button";
+import { IconButton } from "../../components/ui/IconButton";
+
 import type { RobotSummary } from "../../api/protocol";
 import { PairingPanel, type PairingPanelProps } from "./PairingPanel";
 import styles from "./Devices.module.css";
@@ -14,6 +18,7 @@ export interface RobotListState {
 
 export interface DeviceListProps {
   onSelect?: () => void;
+  onClose?: () => void;
   list: RobotListState;
   selectedId: string | null;
   onRefresh: () => void;
@@ -56,6 +61,7 @@ export function DeviceList({
   pairing,
   onRevoke,
   onSelect,
+  onClose,
 }: DeviceListProps): ReactElement {
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -88,9 +94,14 @@ export function DeviceList({
             {String(list.robots.length).padStart(2, "0")}
           </span>
         </h2>
-        <button type="button" className={styles.ghost} onClick={onRefresh}>
-          刷新设备
-        </button>
+        <div className={styles.listActions}>
+          <Button onClick={onRefresh}>刷新设备</Button>
+          {onClose && (
+            <IconButton label="关闭设备列表" onClick={onClose}>
+              <X size={16} />
+            </IconButton>
+          )}
+        </div>
       </div>
       {pairing !== null && <PairingPanel {...pairing} />}
       {list.failed && (

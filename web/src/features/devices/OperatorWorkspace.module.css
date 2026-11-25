@@ -179,7 +179,9 @@
   display: none;
 }
 .legendItems > button {
-  display: none;
+  display: block;
+  min-height: 44px;
+  white-space: nowrap;
 }
 .swap {
   position: absolute;
@@ -215,9 +217,12 @@
   pointer-events: none;
 }
 
-.workspace[data-mode="tasks"]
-  .operations:has([data-task-stage="editor"]:not([hidden])) {
-  width: 315px;
+/* The desktop editor width must not compete with the mobile inset layout. */
+@media (min-width: 461px) {
+  .workspace[data-mode="tasks"]
+    .operations:has([data-task-stage="editor"]:not([hidden])) {
+    width: 315px;
+  }
 }
 .workspace[data-task-picking="true"] .operations {
   visibility: hidden;

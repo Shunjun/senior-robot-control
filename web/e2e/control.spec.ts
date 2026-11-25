@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 
 const baseURL = process.env.PLAYWRIGHT_BASE_URL;
@@ -24,6 +25,22 @@ for (const viewport of [
     test(`safe production-client workspace at ${viewport.width}px`, async ({
       page,
     }, testInfo) => {
+      const followup: Record<string, unknown> = {};
+      async function boundsAndHit(locator: ReturnType<typeof page.locator>) {
+        await locator.scrollIntoViewIfNeeded();
+        const result = await locator.evaluate((element) => {
+          const r = element.getBoundingClientRect();
+          return {
+            x: r.x, y: r.y, width: r.width, height: r.height,
+            hit: element.contains(document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2)),
+          };
+        });
+        expect(result.hit).toBe(true);
+        return result;
+      }
+      async function capture(name: string) {
+        await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
+      }
       await page.setViewportSize(viewport);
       await page.route("**/*", (route) => {
         const url = new URL(route.request().url());
@@ -50,6 +67,16 @@ for (const viewport of [
         .getByRole("button", { name: "选择车辆", exact: true })
         .first()
         .click();
+      const refresh = page.getByRole("button", { name: "刷新设备", exact: true });
+      const closeMenu = page.getByRole("button", { name: "关闭设备列表", exact: true });
+      const refreshBox = await boundsAndHit(refresh);
+      const closeBox = await boundsAndHit(closeMenu);
+      expect(refreshBox.x + refreshBox.width).toBeLessThanOrEqual(closeBox.x);
+      expect(refreshBox.height).toBeGreaterThanOrEqual(44);
+      expect(closeBox.width).toBeGreaterThanOrEqual(44);
+      followup.menu = { refresh: refreshBox, close: closeBox };
+      await refresh.click();
+      await capture("followup-menu-empty");
       await page.mouse.click(2, 2);
       await expect(
         page.getByRole("navigation", { name: "设备列表" }),
@@ -70,6 +97,24 @@ for (const viewport of [
       await expect(
         page.getByRole("navigation", { name: "设备列表" }),
       ).toHaveCount(0);
+      await page.getByRole("button", { name: "切换车辆", exact: true }).click();
+      await capture("followup-menu");
+      await page.getByRole("button", { name: "配对新车", exact: true }).click();
+      await page.getByRole("button", { name: "生成配对码", exact: true }).click();
+      await expect(page.getByLabel("配对码", { exact: true })).toHaveText("ABCD234567");
+      const copyCode = page.getByRole("button", { name: "复制配对码", exact: true });
+      followup.copy = await boundsAndHit(copyCode);
+      await capture("followup-pair-code");
+      followup.copyStyle = await copyCode.evaluate(element => {
+        const style = getComputedStyle(element);
+        return { background: style.backgroundColor, radius: style.borderRadius, color: style.color };
+      });
+      await page.getByRole("button", { name: "复制命令", exact: true }).focus();
+      await page.keyboard.press("Tab");
+      await expect(page.getByRole("button", { name: "关闭配对", exact: true })).toBeFocused();
+      await copyCode.click();
+      await expect(page.getByRole("status")).toHaveText(/已复制|无法自动复制/);
+      await page.getByRole("button", { name: "关闭配对", exact: true }).click();
       const map = page.getByRole("application", { name: "地图" });
       const stick = page.getByRole("group", { name: "驾驶摇杆" });
       await expect(map).toBeVisible();
@@ -199,6 +244,32 @@ for (const viewport of [
           1,
         );
       }
+      if (viewport.width === 390) await page.getByRole("button", { name: "地图图例", exact: true }).click();
+      const moreLayers = page.getByRole("button", { name: "更多图层", exact: true });
+      followup.layers = await boundsAndHit(moreLayers);
+      await capture("followup-layers");
+      const layerCallsBefore = await page.evaluate(() =>
+        (window as unknown as { __wheelFixture: { calls: unknown[] } }).__wheelFixture.calls,
+      );
+      await moreLayers.click();
+      await expect(page.getByText("暂未实现：独立候选层 / 空闲证据层 / 线段拟合", { exact: true })).toBeVisible();
+      const layerCallsAfter = await page.evaluate(() =>
+        (window as unknown as { __wheelFixture: { calls: unknown[] } }).__wheelFixture.calls,
+      );
+      // Only the independent periodic GET /api/robots may race with this local action.
+      const withoutPolls = (calls: unknown[]) => calls.filter(call => {
+        const entry = call as { http?: string; method?: string };
+        return entry.http !== "/api/robots" || entry.method !== "GET";
+      });
+      expect(withoutPolls(layerCallsAfter)).toEqual(withoutPolls(layerCallsBefore));
+      followup.layerRequests = { before: withoutPolls(layerCallsBefore).length, after: withoutPolls(layerCallsAfter).length };
+      await capture("followup-layers-feedback");
+      if (viewport.width === 844) {
+        await page.screenshot({ path: testInfo.outputPath("followup-layers-viewport.png") });
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.screenshot({ path: testInfo.outputPath("followup-layers-feedback-viewport.png") });
+      }
+      if (viewport.width === 390) await page.getByRole("button", { name: "地图图例", exact: true }).click();
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.screenshot({
         path: testInfo.outputPath("drive.png"),
@@ -231,8 +302,10 @@ for (const viewport of [
       await expect(page.locator("img")).toHaveCount(0);
       await expect(page.getByText(/安全 fixture：逐行日志/)).toBeVisible();
       await page.getByRole("button", { name: "设置", exact: true }).click();
-      await expect(page.getByLabel("低档线速度上限")).toHaveValue("1.8");
-      await page.getByLabel("低档线速度上限").fill("2.16");
+      await expect(page.getByLabel("低速线速度上限")).toHaveValue("1.8");
+      await expect(page.getByLabel("高速角速度请求上限")).toBeVisible();
+      await capture("followup-settings-labels");
+      await page.getByLabel("低速线速度上限").fill("2.16");
       await page
         .getByRole("button", { name: "摄像头预览", exact: true })
         .click();
@@ -248,9 +321,9 @@ for (const viewport of [
       await page.getByRole("button", { name: "日志配置", exact: true }).click();
       await expect(page.getByLabel(/^保留时间（小时）/)).toBeVisible();
       await page.getByRole("button", { name: "驾驶操控", exact: true }).click();
-      await expect(page.getByLabel("低档线速度上限")).toHaveValue("2.16");
+      await expect(page.getByLabel("低速线速度上限")).toHaveValue("2.16");
       await page.getByRole("button", { name: "切换速度单位" }).click();
-      await expect(page.getByLabel("低档线速度上限")).toHaveValue("0.6");
+      await expect(page.getByLabel("低速线速度上限")).toHaveValue("0.6");
       await page.getByRole("button", { name: "保存驾驶设置" }).click();
       await expect(page.getByText(/车端已确认配置生效/)).toBeVisible();
       await page.getByRole("button", { name: "控制", exact: true }).click();
@@ -261,10 +334,40 @@ for (const viewport of [
         .getByRole("button", { name: "编辑 fixture-route", exact: true })
         .click();
       await expect(page.getByLabel("任务名称")).toHaveValue("定时巡检");
+      const editorGeometry = await page.locator("[data-mode=tasks]").evaluate((workspace) => {
+        const card = workspace.querySelector("[data-task-stage=editor]")!.parentElement!.parentElement!;
+        const r = card.getBoundingClientRect(), w = workspace.getBoundingClientRect();
+        return { x: r.x, width: r.width, left: r.left - w.left, right: w.right - r.right };
+      });
+      followup.editor = editorGeometry;
+      if (viewport.width === 390) {
+        expect(editorGeometry.width).toBe(340);
+        expect(editorGeometry.left).toBe(12);
+        expect(editorGeometry.right).toBe(12);
+      } else expect(editorGeometry.width).toBe(315);
+      await capture("followup-task-editor");
       const route = page.getByRole("list", { name: "任务航点顺序" });
       await route.getByRole("button", { name: "上移 C", exact: true }).click();
       await route.getByRole("button", { name: "上移 C", exact: true }).click();
-      await page.getByRole("button", { name: "提交任务", exact: true }).click();
+      followup.reorder = await boundsAndHit(route.getByRole("button", { name: "上移 C", exact: true }));
+      const submitTask = page.getByRole("button", { name: "提交任务", exact: true });
+      followup.save = await boundsAndHit(submitTask);
+      const overlappingTargets = await page.locator("[data-task-stage=editor]").evaluate(editor => {
+        const buttons = Array.from(editor.querySelectorAll("button")).filter(button => {
+          const r = button.getBoundingClientRect();
+          // Closed details descendants can retain layout boxes without being painted.
+          return button.checkVisibility() && r.width > 0 && r.height > 0;
+        });
+        return buttons.flatMap((button, index) => buttons.slice(index + 1).flatMap(other => {
+          const a = button.getBoundingClientRect(), b = other.getBoundingClientRect();
+          return a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom
+            ? [[button.textContent, other.textContent]] : [];
+        }));
+      });
+      expect(overlappingTargets).toEqual([]);
+      followup.editorTargetOverlaps = overlappingTargets;
+      await capture("followup-task-editor-save");
+      await submitTask.click();
       await expect(page.getByText("车端已确认保存任务。")).toBeVisible();
       if (viewport.width === 1440) {
         await page
@@ -392,6 +495,7 @@ for (const viewport of [
             }
           ).__wheelFixture.calls,
       );
+      await writeFile(testInfo.outputPath("followup-bounds.json"), JSON.stringify(followup, null, 2));
       expect(calls.some((call) => call.type === "control.release")).toBe(true);
       expect(
         calls.find((call) => call.type === "task.update")?.payload,

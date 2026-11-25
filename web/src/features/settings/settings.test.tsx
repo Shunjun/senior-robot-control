@@ -54,7 +54,7 @@ it("converts only displayed km/h to SI, submits one group and reads effective va
     };
   });
   render(<VehicleSettings port={port} enabled />);
-  const field = await screen.findByLabelText("低档线速度上限");
+  const field = await screen.findByLabelText("低速线速度上限");
   expect((field as HTMLInputElement).value).toBe("2");
   const degraded = screen.getByLabelText(
     "退化模式线速度上限",
@@ -101,7 +101,7 @@ it("keeps unknown request identity through disconnect and queries instead of cre
     };
   });
   const mounted = render(<VehicleSettings port={port} enabled />);
-  await screen.findByLabelText("低档线速度上限");
+  await screen.findByLabelText("低速线速度上限");
   fireEvent.click(screen.getByRole("button", { name: "保存驾驶设置" }));
   await screen.findByText(/提交结果待确认/);
   mounted.rerender(<VehicleSettings port={port} enabled={false} />);
@@ -128,7 +128,7 @@ it("allows logging while driving changes are refused by the car", async () => {
     };
   });
   render(<VehicleSettings port={port} enabled />);
-  await screen.findByLabelText("低档线速度上限");
+  await screen.findByLabelText("低速线速度上限");
   expect(
     (screen.getByRole("button", { name: "保存驾驶设置" }) as HTMLButtonElement)
       .disabled,
@@ -159,7 +159,7 @@ it("can restore defaults even while a draft field is empty", async () => {
     };
   });
   render(<VehicleSettings port={port} enabled />);
-  const field = await screen.findByLabelText("低档线速度上限");
+  const field = await screen.findByLabelText("低速线速度上限");
   fireEvent.change(field, { target: { value: "" } });
   fireEvent.click(screen.getByRole("button", { name: "恢复驾驶默认值" }));
   await waitFor(() =>
@@ -189,7 +189,7 @@ it("keeps the same SI draft across a unit roundtrip before saving", async () => 
       <VehicleSettings port={port} enabled />
     </SpeedUnitContext.Provider>,
   );
-  fireEvent.change(await screen.findByLabelText("低档线速度上限"), {
+  fireEvent.change(await screen.findByLabelText("低速线速度上限"), {
     target: { value: "0.5" },
   });
   page.rerender(
@@ -198,7 +198,7 @@ it("keeps the same SI draft across a unit roundtrip before saving", async () => 
     </SpeedUnitContext.Provider>,
   );
   expect(
-    (screen.getByLabelText("低档线速度上限") as HTMLInputElement).value,
+    (screen.getByLabelText("低速线速度上限") as HTMLInputElement).value,
   ).toBe("1.8");
   page.rerender(
     <SpeedUnitContext.Provider value="m/s">
@@ -206,7 +206,7 @@ it("keeps the same SI draft across a unit roundtrip before saving", async () => 
     </SpeedUnitContext.Provider>,
   );
   expect(
-    (screen.getByLabelText("低档线速度上限") as HTMLInputElement).value,
+    (screen.getByLabelText("低速线速度上限") as HTMLInputElement).value,
   ).toBe("0.5");
   fireEvent.click(screen.getByRole("button", { name: "保存驾驶设置" }));
   await waitFor(() => expect(sent).toHaveLength(1));

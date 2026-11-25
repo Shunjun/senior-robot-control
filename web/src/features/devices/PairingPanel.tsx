@@ -7,6 +7,8 @@ import {
   type PairingCode,
 } from "../../api/client";
 import { createPortal } from "react-dom";
+import { X } from "lucide-react";
+import { IconButton } from "../../components/ui/IconButton";
 import { Button } from "../../components/ui/Button";
 import styles from "./Devices.module.css";
 
@@ -184,15 +186,15 @@ export function PairingPanel({
   return (
     <div className={styles.pairing}>
       {!initiallyOpen && (
-        <button
+        <Button
           type="button"
-          className={styles.ghost}
+          variant="outline"
           aria-expanded={open}
           aria-controls={panelId}
           onClick={toggle}
         >
           {open ? "关闭配对" : "添加设备"}
-        </button>
+        </Button>
       )}
       {open &&
         createPortal(
@@ -214,9 +216,9 @@ export function PairingPanel({
                 <h3 id={headingId} className={styles.pairingHeading}>
                   设备配对
                 </h3>
-                <Button aria-label="关闭配对" onClick={close}>
-                  ×
-                </Button>
+                <IconButton label="关闭配对" onClick={close}>
+                  <X size={16} />
+                </IconButton>
               </div>
               <div className={styles.pairSteps}>
                 <span>01 网页生成配对码</span>
@@ -239,17 +241,17 @@ export function PairingPanel({
                 </p>
               )}
               {error?.needsLogin ? (
-                <button
+                <Button
                   type="button"
-                  className={styles.primary}
+                  variant="primary"
                   onClick={onReauthenticate}
                 >
                   重新登录
-                </button>
+                </Button>
               ) : issued === null ? (
-                <button
+                <Button
                   type="button"
-                  className={styles.primary}
+                  variant="primary"
                   disabled={busy}
                   onClick={() => void generate()}
                 >
@@ -258,7 +260,7 @@ export function PairingPanel({
                     : expired
                       ? "重新生成配对码"
                       : "生成配对码"}
-                </button>
+                </Button>
               ) : (
                 <>
                   <div className={styles.pairingReceipt}>
@@ -266,12 +268,12 @@ export function PairingPanel({
                       {issued.code}
                     </code>
                     <span className={styles.quiet}>剩余 {remaining} 秒</span>
-                    <button
+                    <Button
                       type="button"
                       onClick={() => void copy(issued.code)}
                     >
                       复制配对码
-                    </button>
+                    </Button>
                   </div>
                   <p className={styles.quiet}>
                     在车端可写的目标目录运行以下命令，并在提示符中输入配对码。
