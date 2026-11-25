@@ -21,6 +21,8 @@ from senior_motion_control.source_fences import SourceEpochFence  # noqa: E402
 from sensor_msgs.msg import LaserScan  # noqa: E402
 from tf2_ros import StaticTransformBroadcaster  # noqa: E402
 
+from vehicle_core.sensor_parameters import ros_sensor_parameters  # noqa: E402
+
 
 def _room_scan():
     scan = LaserScan()
@@ -112,6 +114,11 @@ def test_unrelated_invalid_owner_cannot_revoke_active_matcher(tmp_path, monkeypa
                 str(params),
                 "-p",
                 "use_sim_time:=false",
+                *[
+                    arg
+                    for name, value in ros_sensor_parameters().items()
+                    for arg in ("-p", f"{name}:={value}")
+                ],
             ],
             stdout=log,
             stderr=subprocess.STDOUT,
@@ -210,6 +217,11 @@ def test_invalid_stream_does_not_exhaust_epochs_and_recovers(tmp_path, monkeypat
                 str(params),
                 "-p",
                 "use_sim_time:=false",
+                *[
+                    arg
+                    for name, value in ros_sensor_parameters().items()
+                    for arg in ("-p", f"{name}:={value}")
+                ],
             ],
             stdout=log,
             stderr=subprocess.STDOUT,

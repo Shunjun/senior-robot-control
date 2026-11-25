@@ -18,6 +18,8 @@ from senior_interfaces.msg import ScanMotion  # noqa: E402
 from test_scan_epoch_live import ControlledFencedScanPublisher, _room_scan  # noqa: E402
 from tf2_ros import StaticTransformBroadcaster  # noqa: E402
 
+from vehicle_core.sensor_parameters import ros_sensor_parameters  # noqa: E402
+
 
 def _ns(stamp):
     return stamp.sec * 1_000_000_000 + stamp.nanosec
@@ -42,6 +44,11 @@ def test_native_matcher_interval_start_is_exact_original_scan_header(tmp_path, m
                 str(params),
                 "-p",
                 "use_sim_time:=false",
+                *[
+                    arg
+                    for name, value in ros_sensor_parameters().items()
+                    for arg in ("-p", f"{name}:={value}")
+                ],
             ],
             stdout=log,
             stderr=subprocess.STDOUT,
