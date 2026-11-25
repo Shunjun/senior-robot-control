@@ -145,3 +145,134 @@ async def test_active_public_api_captures_home_and_resumes_without_private_store
         assert restored.map_generation != active.map_generation
         restored.update_waypoints(new_source, expected_sequence=0, changes=(home,))
         active.revoke(source)
+
+
+async def test_real_v1_checkpoint_migration_free_save_reload_never_replays_raw(tmp_path):
+    import hashlib
+    import json
+
+    import pytest
+    from senior_mapping.active import ActiveMap
+    from senior_mapping.evidence import OccupancyThresholds, SourceIdentity, VerifiedBasis
+    from senior_mapping.fixed_evidence import FixedEvidenceConsumer
+    from senior_mapping.references import (
+        AnchorPose,
+        AnchorSnapshot,
+        SlamSnapshot,
+        migrate_legacy,
+        snapshot_from_fixed,
+    )
+    from senior_mapping.shared_scan import Beam, QualifiedScan, ScanKey
+    from senior_perception.vision.raw_capture import RawCaptureHeader
+
+    from vehicle_core.errors import DomainError
+    from vehicle_core.sample_time import SampleTime
+    from vehicle_core.values import Pose2D
+
+    async with Database(tmp_path / "db") as database:
+        catalog = MapCatalog(database, robot_id="robot-a")
+        await catalog.prepare()
+        entry = await catalog.create("legacy", "legacy")
+        old_store = filled_store(entry.map_ref)
+        repository = MapCheckpoints(tmp_path / "cuts", archive_for(old_store), catalog)
+        v1 = await repository.save(old_store, home_id="home", expected=None)
+        old_dir = repository._directory(entry.map_ref, v1.checkpoint_id)
+        original = (old_dir / "occupancy.json").read_bytes()
+        original_hash = hashlib.sha256(original).hexdigest()
+        async with repository.open(v1) as loaded:
+            legacy = loaded.snapshot
+        fixed = migrate_legacy(legacy, legacy_grid=None, native_legacy_grid=None)
+        wrapper = snapshot_from_fixed(fixed, odom_owner=legacy.odom_owner, legacy_json=original)
+        source = object()
+        active = ActiveMap.resume_verified(
+            wrapper, source, backend_boot="new-boot", source_epoch="new-source"
+        )
+        origin = Pose2D(0, 0, 0)
+        active.commit(
+            source,
+            1,
+            "scan",
+            AnchorSnapshot(
+                entry.map_ref,
+                legacy.odom_owner,
+                legacy.anchors + (AnchorPose("scan", origin, True),),
+                legacy.grid,
+            ),
+            (),
+        )
+        identity = SourceIdentity("new-boot", "bridge", "new-source", 2, 1, "raw", "relay")
+        clock = {"now": 1_000_000_000}
+        active.bind_fixed_context(
+            source,
+            source_identity=identity,
+            host_boot_id="host",
+            acceptance_floor=None,
+            acceptance_floor_steady_ns=0,
+            accepting=lambda: True,
+            clock=lambda: clock["now"],
+        )
+        consumer = FixedEvidenceConsumer(
+            OccupancyThresholds(0.5, 3, 1, 3, 1, 0.1, 1, 1, 2, -1, -5, 5, 2, 0.5),
+            profile=None,
+            clock=lambda: clock["now"],
+        )
+        for sequence in range(1, 5):
+            ns = 1_000_000_000 + sequence * 600_000_000
+            clock["now"] = ns
+            capture = RawCaptureHeader(
+                SampleTime(ns, ns, ns, ns, 1),
+                "laser",
+                "raw",
+                "relay",
+                "new-source",
+                "bridge",
+                2,
+                sequence,
+                True,
+                "",
+            )
+            scan = QualifiedScan(
+                ScanKey.of("new-boot", capture),
+                capture,
+                "synthetic-admitted",
+                origin,
+                (Beam(0, (0, 0.25), (3, 0.25), "hit"),),
+                ns + 500_000_000,
+                "host",
+            )
+            cut = active.fixed_snapshot(source)
+            basis = VerifiedBasis(
+                "scan",
+                origin,
+                origin,
+                1,
+                cut.watermark.anchor_digest,
+                entry.map_ref,
+                cut.watermark.reference_generation,
+            )
+            active.accept_scan(source, scan, basis)
+            result = consumer.consume(active, source, scan, basis)
+        assert result.grid.cells[2] == 0  # actual qualified free erased legacy occupancy
+        current_store = active._store
+        repository = MapCheckpoints(tmp_path / "cuts", archive_for(current_store), catalog)
+        selected = await catalog.begin_activation(entry.map_ref, expected_generation=0)
+        await catalog.finish_activation(selected.token, localized=True)
+        v2 = await repository.save(
+            current_store, home_id="home", expected=v1.checkpoint_id, session_token=selected.token
+        )
+        directory = repository._directory(entry.map_ref, v2.checkpoint_id)
+        assert json.loads((directory / "checkpoint.json").read_bytes())["version"] == 2
+        assert (directory / "checkpoint.json").stat().st_size <= 4096
+        with pytest.raises(ValueError):
+            SlamSnapshot.read(directory)
+        async with repository.open(v2) as loaded:
+            assert loaded.snapshot.fixed.grid.cells == result.grid.cells
+            assert loaded.snapshot.legacy_json == original
+            assert loaded.snapshot.fixed.watermark.evidence_key == scan.key
+        assert (
+            hashlib.sha256((old_dir / "occupancy.json").read_bytes()).hexdigest() == original_hash
+        )
+        (directory / "pose_graph/graph.data").write_bytes(b"damaged raw graph")
+        with pytest.raises(DomainError):
+            async with repository.open(v2):
+                raise AssertionError("corrupt V2 must not fall back to V1")

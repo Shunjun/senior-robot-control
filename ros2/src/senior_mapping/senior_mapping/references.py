@@ -1,6 +1,7 @@
 """Map identity, pose-graph anchors, and the saved localization/occupancy split."""
 
 import base64
+import hashlib
 import json
 import math
 import os
@@ -56,7 +57,8 @@ def rebase_pose(pose: Pose2D, old_anchor: Pose2D, new_anchor: Pose2D) -> Pose2D:
     )
 
 
-FORMAT_VERSION = 1
+FORMAT_VERSION = 2
+LEGACY_FORMAT_VERSION = 1
 # Humble 2.6.10 graph_visualization publishes node spheres in this namespace.
 # Edge lines use slam_toolbox_edges and are not anchors.
 NODE_MARKER_NAMESPACE = "slam_toolbox"
@@ -152,11 +154,19 @@ class SlamSnapshot:
     bindings: tuple[CellBinding, ...]
     waypoint_bindings: tuple[WaypointBinding, ...]
     review_required: bool
+    fixed: "FixedSnapshot | None" = None
+    legacy_json: bytes | None = None
 
     def write(self, destination: Path) -> None:
         destination.mkdir(parents=True, exist_ok=True)
+        if self.fixed is not None:
+            payload = encode_snapshot(self)
+            temporary = destination / "occupancy.json.tmp"
+            temporary.write_bytes(payload)
+            durable_replace(temporary, destination / "occupancy.json")
+            return
         payload = {
-            "format_version": FORMAT_VERSION,
+            "format_version": LEGACY_FORMAT_VERSION,
             "map_id": self.map_ref.map_id,
             "reference_revision": self.map_ref.reference_revision,
             "odom_owner": self.odom_owner,
@@ -181,7 +191,7 @@ class SlamSnapshot:
     @classmethod
     def from_json(cls, data: bytes) -> "SlamSnapshot":
         body = _mapping(json.loads(data))
-        if _whole(body.get("format_version")) != FORMAT_VERSION:
+        if _whole(body.get("format_version")) != LEGACY_FORMAT_VERSION:
             raise ValueError("unsupported occupancy snapshot")
         bindings = tuple(_binding(_item) for _item in _sequence(body.get("bindings")))
         live = tuple(item.evidence for item in bindings if not item.removed)
@@ -453,7 +463,7 @@ def _waypoint(value: object) -> WaypointBinding:
     return WaypointBinding(waypoint, pose)
 
 
-# Explicit V2 entry points only. FORMAT_VERSION and the production V1 writer stay V1.
+# C3 V2 records; the explicit legacy parser/writer retain V1 wire compatibility.
 # //Compatible: AbsoluteGrid reuses WorkspaceGrid's geometry, flags and dense bytes.
 
 
@@ -1413,3 +1423,255 @@ def decode_fixed_delta(data: bytes) -> FixedDelta:
             items.append(kind(**item))
         b[name] = tuple(items)
     return FixedDelta(**b)
+
+
+def encode_snapshot(snapshot: SlamSnapshot) -> bytes:
+    """V2 archive envelope; the retained V1 parser deliberately rejects it."""
+    import base64
+
+    cut = snapshot.fixed
+    if cut is None:
+        raise ValueError("V2 snapshot requires authoritative fixed layers")
+    validate_fixed_snapshot(cut)
+    body = dict(
+        format_version=FORMAT_VERSION,
+        odom_owner=snapshot.odom_owner,
+        pose_graph_prefix=str(snapshot.pose_graph_prefix),
+        review_required=snapshot.review_required,
+        fixed=json.loads(encode_fixed_snapshot(cut)),
+        legacy_audit_b64=None
+        if snapshot.legacy_json is None
+        else base64.b64encode(snapshot.legacy_json).decode("ascii"),
+    )
+    body["checksum"] = hashlib.sha256(_fixed_json(body)).hexdigest()
+    return _fixed_json(body)
+
+
+def snapshot_from_fixed(
+    cut, *, odom_owner, prefix=Path("pose_graph"), review_required=False, legacy_json=None
+):
+    grid = cut.grid
+    return SlamSnapshot(
+        cut.watermark.map_ref,
+        odom_owner,
+        grid.resolution,
+        prefix,
+        OccupancySnapshot(cut.watermark.map_ref, ()),
+        (),
+        (),
+        cut.anchors,
+        GridExtent(grid.width, grid.height, grid.origin.x, grid.origin.y),
+        (),
+        cut.waypoint_bindings,
+        review_required,
+        cut,
+        legacy_json,
+    )
+
+
+def load_snapshot(data: bytes) -> SlamSnapshot:
+    """Explicit V1/V2 dispatch. Malformed V2 never tries the legacy parser."""
+    import base64
+
+    if len(data) > 64 * 1024 * 1024:
+        raise ValueError("snapshot exceeds byte budget")
+    body = _fixed_load(data, transfer=False)
+    if body.get("format_version") == LEGACY_FORMAT_VERSION:
+        from dataclasses import replace
+
+        return replace(SlamSnapshot.from_json(data), legacy_json=data)
+    fields = (
+        "format_version odom_owner pose_graph_prefix review_required "
+        "fixed legacy_audit_b64 checksum"
+    )
+    _fixed_object(body, fields)
+    if _whole(body["format_version"]) != FORMAT_VERSION:
+        raise ValueError("unsupported snapshot version")
+    checksum = body.pop("checksum")
+    if checksum != hashlib.sha256(_fixed_json(body)).hexdigest():
+        raise ValueError("snapshot checksum mismatch")
+    cut = decode_fixed_snapshot(_fixed_json(body["fixed"]))
+    legacy = body["legacy_audit_b64"]
+    legacy = None if legacy is None else base64.b64decode(legacy, validate=True)
+    if legacy is not None:
+        original = SlamSnapshot.from_json(legacy)
+        if original.map_ref != cut.watermark.map_ref:
+            raise ValueError("legacy audit belongs to another map")
+    return snapshot_from_fixed(
+        cut,
+        odom_owner=_text(body["odom_owner"]),
+        prefix=Path(_text(body["pose_graph_prefix"])),
+        review_required=_flag(body["review_required"]),
+        legacy_json=legacy,
+    )
+
+
+def migrate_legacy(
+    snapshot: SlamSnapshot, *, legacy_grid, native_legacy_grid, original_archive_digest=None
+) -> FixedSnapshot:
+    """One explicit V1 conversion; native raster is admitted only at this boundary.
+
+    Original bindings/removed/Home remain byte exact in the archive audit member.
+    Native-only geometry has legacy-derived provenance, never physical stability.
+    """
+    import tempfile
+    import uuid
+
+    from senior_mapping.workspace import (
+        FixedRaster,
+        WorkspaceGrid,
+        fixed_grid_id,
+        render_stable_grid,
+    )
+
+    if snapshot.fixed is not None:
+        raise ValueError("legacy migration accepts only an unmigrated V1 cut")
+    if (
+        len(snapshot.anchors) > 16384
+        or len(snapshot.bindings) + len(snapshot.waypoint_bindings) > FIXED_MEMBERS
+    ):
+        raise ValueError("fixed_capacity: legacy migration members")
+    with tempfile.TemporaryDirectory() as raw:
+        snapshot.write(Path(raw))
+        original = snapshot.legacy_json or (Path(raw) / "occupancy.json").read_bytes()
+    grid = (
+        native_legacy_grid
+        or legacy_grid
+        or render_stable_grid(
+            snapshot.map_ref, "migration", snapshot.grid, snapshot.cell_size_m, snapshot.occupancy
+        )
+    )
+    if grid.map_ref != snapshot.map_ref or grid.resolution != snapshot.cell_size_m:
+        raise ValueError("legacy raster identity mismatch")
+    r = grid.resolution
+    lo_x = min(snapshot.grid.origin_x, grid.origin.x, *(b.world_x for b in snapshot.bindings))
+    lo_y = min(snapshot.grid.origin_y, grid.origin.y, *(b.world_y for b in snapshot.bindings))
+    hi_x = max(
+        snapshot.grid.origin_x + snapshot.grid.width * r,
+        grid.origin.x + grid.width * r,
+        *(b.world_x + r for b in snapshot.bindings),
+    )
+    hi_y = max(
+        snapshot.grid.origin_y + snapshot.grid.height * r,
+        grid.origin.y + grid.height * r,
+        *(b.world_y + r for b in snapshot.bindings),
+    )
+    x0, y0 = math.floor((lo_x - grid.origin.x) / r), math.floor((lo_y - grid.origin.y) / r)
+    width = math.ceil((hi_x - grid.origin.x) / r) - x0
+    height = math.ceil((hi_y - grid.origin.y) / r) - y0
+    if width * height > FIXED_PIXELS:
+        raise ValueError("fixed_capacity: legacy migration extent")
+    cells = bytearray(b"\xff") * (width * height)
+    for y in range(grid.height):
+        offset = (y - y0) * width - x0
+        cells[offset : offset + grid.width] = grid.cells[y * grid.width : (y + 1) * grid.width]
+    grid = WorkspaceGrid(
+        grid.map_ref,
+        "migration-lattice",
+        width,
+        height,
+        r,
+        Pose2D(grid.origin.x + x0 * r, grid.origin.y + y0 * r, 0),
+        bytes(cells),
+        display_only=True,
+    )
+
+    def index(x, y):
+        ix, iy = (
+            math.floor((x - grid.origin.x) / grid.resolution),
+            math.floor((y - grid.origin.y) / grid.resolution),
+        )
+        if not 0 <= ix < grid.width or not 0 <= iy < grid.height:
+            raise ValueError("legacy binding is outside migration raster")
+        return iy * grid.width + ix
+
+    grouped = {}
+    for b in snapshot.bindings:
+        i = index(b.world_x, b.world_y)
+        cells[i] = 255 if b.removed else 100
+        if b.removed:
+            continue
+        x, y = (
+            grid.origin.x + (i % grid.width) * grid.resolution,
+            grid.origin.y + (i // grid.width) * grid.resolution,
+        )
+        p = b.anchor_pose
+        c, si = math.cos(p.yaw), math.sin(p.yaw)
+        quad = tuple(
+            v
+            for wx, wy in (
+                (x, y),
+                (x + grid.resolution, y),
+                (x + grid.resolution, y + grid.resolution),
+                (x, y + grid.resolution),
+            )
+            for v in (c * (wx - p.x) + si * (wy - p.y), -si * (wx - p.x) + c * (wy - p.y))
+        )
+        grouped.setdefault(b.evidence.anchor_id, []).append((i, quad, b))
+    bindings = []
+    for anchor, rows in sorted(grouped.items()):
+        rows.sort(key=lambda row: row[0])
+        bindings.append(
+            LegacyAnchorBinding(
+                anchor,
+                rows[0][2].anchor_pose,
+                tuple(row[0] for row in rows),
+                tuple(row[1] for row in rows),
+                tuple(row[2] for row in rows),
+            )
+        )
+    grid = WorkspaceGrid(
+        snapshot.map_ref,
+        fixed_grid_id(
+            snapshot.map_ref, grid.width, grid.height, grid.resolution, grid.origin, bytes(cells)
+        ),
+        grid.width,
+        grid.height,
+        grid.resolution,
+        grid.origin,
+        bytes(cells),
+        display_only=True,
+    )
+    mask = bytearray((len(cells) + 7) // 8)
+    for i, value in enumerate(cells):
+        if value != 255:
+            mask[i // 8] |= 1 << (i % 8)
+    base = LegacyBase(
+        grid.grid_id,
+        grid,
+        "legacy-derived",
+        original_archive_digest or hashlib.sha256(original).hexdigest(),
+        uuid.uuid4().hex,
+        bytes(mask),
+        tuple(bindings),
+    )
+    raster = FixedRaster(
+        grid.map_ref, grid.resolution, grid.origin, grid.width, grid.height, True, False
+    )
+    raster.install(snapshot.anchors, (), (), base)
+    watermark = FixedWatermark(
+        snapshot.map_ref,
+        uuid.uuid4().hex,
+        "legacy-migration",
+        "legacy",
+        None,
+        0,
+        anchor_digest(fixed_anchor_records(snapshot.anchors)),
+        0,
+        None,
+        0,
+        0,
+    )
+    cut = FixedSnapshot(
+        watermark,
+        raster.grid(),
+        snapshot.anchors,
+        None,
+        (),
+        (),
+        base,
+        snapshot.waypoint_bindings,
+        (),
+    )
+    validate_fixed_snapshot(cut)
+    return cut

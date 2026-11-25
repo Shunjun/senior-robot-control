@@ -125,6 +125,7 @@ def test_motion_revokes_bound_support_and_requires_new_stability_window():
     assert contour.max_residual_m <= replay.profile.stable_residual_m
     replay.tracker.bind_support(obj.local_track_id, ("object-support",))
     replay.tracker.bind_support(wall.local_track_id, ("wall-support",))
+    assert replay.tracker.bound_support_ids == frozenset(("object-support", "wall-support"))
     revoked = []
     for seq, offset in ((7, 0.2), (8, 0.4), (9, 0.6), (10, 0.8)):
         evidence = replay.step(seq, offset=offset, wall=True)

@@ -19,7 +19,7 @@ from senior_mapping.store import MapReferenceStore
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef, Pose2D
 
-BUNDLE_FORMAT_VERSION = 1
+BUNDLE_FORMAT_VERSION = 2
 BACKEND_VERSION = "slam_toolbox 2.6.10"
 ROS_VERSION = "humble"
 SLAM_VERSION = "2.6.10"
@@ -144,60 +144,80 @@ class MapArchive:
         if destination.exists():
             raise DomainError(ErrorCode.CONFLICT, "bundle destination already exists")
 
-        georeference = self._georeference or Georeference("unreferenced")
         with tempfile.TemporaryDirectory() as raw:
             staging = Path(raw)
             snapshot, graph_files = await self._capture_snapshot(store, staging / "pose_graph")
             if snapshot.map_ref != map_ref:
                 raise DomainError(ErrorCode.CONFLICT, "pose graph and occupancy revisions differ")
-            waypoints = tuple(
-                BundleWaypoint(
-                    item.waypoint.waypoint_id,
-                    "home" if item.waypoint.waypoint_id == self._home_waypoint_id else "waypoint",
-                    item.waypoint.pose,
-                    map_ref,
-                    item.waypoint.anchor_id,
-                    self._source_robot_id,
-                )
-                for item in snapshot.waypoint_bindings
-            )
-            layers = staging / "layers"
-            occupancy = layers / "occupancy"
-            snapshot.write(occupancy)
-            waypoint_bytes = _dumps({"waypoints": [_waypoint_json(item) for item in waypoints]})
-            (layers / "waypoints.json").write_bytes(waypoint_bytes)
-            payloads = {f"pose_graph/{name}": data for name, data in graph_files.items()}
-            remaining = self._max_uncompressed_bytes - sum(map(len, graph_files.values()))
-            grid_budget = remaining - (occupancy / "occupancy.json").stat().st_size
-            _write_grid(snapshot, layers / "grid", grid_budget - len(waypoint_bytes))
-            payloads.update(_file_bytes(layers, remaining))
-            digests = {
-                name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()
-            }
-            manifest = BundleManifest(
-                BUNDLE_FORMAT_VERSION,
-                tuple(sorted(digests.items())),
-                BACKEND_VERSION,
+            return await self._write_captured(snapshot, graph_files, destination, staging)
+
+    async def export_checkpoint(self, snapshot, graph_directory, destination):
+        """Export a pinned immutable cut after the original graph verifier checks it."""
+        files = await self._verified_graph_files(graph_directory, snapshot)
+        with tempfile.TemporaryDirectory() as raw:
+            return await self._write_captured(snapshot, files, destination, Path(raw))
+
+    async def _write_captured(self, snapshot, files, destination, staging):
+        work = asyncio.create_task(
+            asyncio.to_thread(self._export_captured, snapshot, files, destination, staging)
+        )
+        try:
+            return await asyncio.shield(work)
+        except asyncio.CancelledError:
+            # Keep the immutable cut, staging tree and caller's checkpoint lease
+            # alive until its single actual disk writer has settled.
+            await work
+            raise
+
+    def _export_captured(self, snapshot, graph_files, destination, staging):
+        map_ref = snapshot.map_ref
+        georeference = self._georeference or Georeference("unreferenced")
+        waypoints = tuple(
+            BundleWaypoint(
+                item.waypoint.waypoint_id,
+                "home" if item.waypoint.waypoint_id == self._home_waypoint_id else "waypoint",
+                item.waypoint.pose,
                 map_ref,
-                STABLE_LAYER,
-                snapshot.anchors,
-                georeference,
-                waypoints,
-                ROS_VERSION,
-                SLAM_VERSION,
-                COORDINATE_CONVENTION,
-                self._pose_graph.last_pose_hint(),
-                None,
+                item.waypoint.anchor_id,
                 self._source_robot_id,
-                False,
-                self._sensor_summary,
             )
-            files = dict(payloads)
-            files["manifest.json"] = _dumps(_manifest_json(manifest))
-            if len(files) > _MAX_MEMBERS or sum(map(len, files.values())) > (
-                self._max_uncompressed_bytes
-            ):
-                raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
+            for item in snapshot.waypoint_bindings
+        )
+        layers = staging / "layers"
+        occupancy = layers / "occupancy"
+        snapshot.write(occupancy)
+        waypoint_bytes = _dumps({"waypoints": [_waypoint_json(item) for item in waypoints]})
+        (layers / "waypoints.json").write_bytes(waypoint_bytes)
+        payloads = {f"pose_graph/{name}": data for name, data in graph_files.items()}
+        remaining = self._max_uncompressed_bytes - sum(map(len, graph_files.values()))
+        grid_budget = remaining - (occupancy / "occupancy.json").stat().st_size
+        _write_grid(snapshot, layers / "grid", grid_budget - len(waypoint_bytes))
+        payloads.update(_file_bytes(layers, remaining))
+        digests = {name: hashlib.sha256(payload).hexdigest() for name, payload in payloads.items()}
+        manifest = BundleManifest(
+            BUNDLE_FORMAT_VERSION if snapshot.fixed is not None else 1,
+            tuple(sorted(digests.items())),
+            BACKEND_VERSION,
+            map_ref,
+            STABLE_LAYER,
+            snapshot.anchors,
+            georeference,
+            waypoints,
+            ROS_VERSION,
+            SLAM_VERSION,
+            COORDINATE_CONVENTION,
+            self._pose_graph.last_pose_hint(),
+            None,
+            self._source_robot_id,
+            False,
+            self._sensor_summary,
+        )
+        files = dict(payloads)
+        files["manifest.json"] = _dumps(_manifest_json(manifest))
+        if len(files) > _MAX_MEMBERS or sum(map(len, files.values())) > (
+            self._max_uncompressed_bytes
+        ):
+            raise DomainError(ErrorCode.VALIDATION, "bundle exceeds the size limit")
         _write_zip(destination, files)
         return manifest
 
@@ -351,6 +371,18 @@ class MapArchive:
         if hashed_waypoints != loaded_waypoints:
             raise DomainError(ErrorCode.VALIDATION, "waypoints do not match the manifest")
         manifest = _manifest_from_json(manifest_body, hashed_waypoints)
+        from senior_mapping.references import load_snapshot
+
+        try:
+            snapshot = load_snapshot(files[STABLE_LAYER])
+            if (
+                snapshot.map_ref != manifest.map_ref
+                or snapshot.anchors != manifest.anchors
+                or (snapshot.fixed is not None) != (manifest.format_version == 2)
+            ):
+                raise ValueError("bundle mixes layer versions/identities")
+        except (ValueError, TypeError) as exc:
+            raise DomainError(ErrorCode.VALIDATION, "bundle authoritative cut is invalid") from exc
         if manifest.tasks_included:
             raise DomainError(ErrorCode.VALIDATION, "tasks are not part of a map bundle")
         for waypoint in manifest.waypoints:
@@ -617,12 +649,27 @@ def _write_grid(snapshot: SlamSnapshot, directory: Path, byte_budget: int) -> No
         py = evidence.cell[1] - origin_y
         if 0 <= px < width and 0 <= py < height:
             occupied.add((px, py))
+    if snapshot.fixed is not None:
+        authoritative = snapshot.fixed.grid
+        if (
+            authoritative.width,
+            authoritative.height,
+            authoritative.resolution,
+            authoritative.origin.x,
+            authoritative.origin.y,
+        ) != (width, height, cell, snapshot.grid.origin_x, snapshot.grid.origin_y):
+            raise DomainError(ErrorCode.CONFLICT, "export geometry differs from fixed cut")
     pixels = bytearray()
     if pixel_count:
         for row in range(height):
             py = height - 1 - row
             for x in range(width):
-                pixels.append(0 if (x, py) in occupied else 205)
+                if snapshot.fixed is None:
+                    pixels.append(0 if (x, py) in occupied else 205)
+                else:
+                    pixels.append(
+                        {100: 0, 0: 254, 255: 205}[snapshot.fixed.grid.cells[py * width + x]]
+                    )
     directory.mkdir(parents=True, exist_ok=True)
     with (directory / "map.pgm").open("wb") as stream:
         stream.write(header)
@@ -633,7 +680,7 @@ def _write_grid(snapshot: SlamSnapshot, directory: Path, byte_budget: int) -> No
 def _manifest_from_json(
     body: dict[str, object], waypoints: tuple[BundleWaypoint, ...]
 ) -> BundleManifest:
-    if _whole(body.get("format_version")) != BUNDLE_FORMAT_VERSION:
+    if _whole(body.get("format_version")) not in (1, BUNDLE_FORMAT_VERSION):
         raise DomainError(ErrorCode.VALIDATION, "unsupported bundle format")
     if body.get("tasks_included") is not False:
         raise DomainError(ErrorCode.VALIDATION, "tasks are not part of a map bundle")
@@ -642,7 +689,7 @@ def _manifest_from_json(
         raise DomainError(ErrorCode.VALIDATION, "unsupported stable layer")
     startup = body.get("startup_pose")
     return BundleManifest(
-        BUNDLE_FORMAT_VERSION,
+        _whole(body.get("format_version")),
         tuple(sorted(_hash_map(body.get("file_hashes")).items())),
         _text(body.get("backend_version")),
         _map_ref(_object(body.get("map_ref"))),

@@ -155,3 +155,48 @@ Home仍只有WaypointStore一份实时真值。Home编辑与checkpoint共享Home
 macOS完整回归2479 passed / 116原有skip，网页182项测试及构建通过；本机六个改动核心模块定向类型检查、五个重建wheel及已有core的隔离安装/源哈希检查另行记录。Parallels原生三包构建与针对性生产会话/静态安装来源测试已通过。尚未部署到树莓派，四核地图增长、视频并行、控制时延和实车路线执行未验收。
 
 最终收尾复验：本机2480 passed / 116既有skip，ROS实际栅格/静态来源/新鲜odom→Python导航参考桥通过，正常刷新保留位姿、来源撤销后停止资格。21项原生建图CTest已通过，proof断言修正后的静态来源与drift两项另行通过；160个冻结源码hash一致，测试进程清理通过。proof按所有typed字段比较，避免将不稳定CDR填充字节当作来源变化；相机退出回归的等待预算覆盖现有10秒关闭策略，未修改相机启停行为。
+
+## T3/T4 runtime 与归档接线（2026-11-26）
+
+管理侧沿原 0.05s 循环读取 start 握手给出的独立 latest-scan 槽。graph PENDING
+不阻止同 anchor 的新 scan；完整 source/boot、原 capture/deadline/floor、同一 canonical
+anchor digest 和 TF basis 合格后，才在原 ActiveMap 内 accept → GeometryTracker →
+C3 提交 → bind_support。tracker/free confidence 的有界 transient stage 也在提交成功后
+替换；容量拒绝保留旧引用和完整墙，Q 的 adapter 回调独立运行。未知 raw hit 不再走
+原 unknown_static 的固定升级旁路。旧 free 代次遇到合格 hit 会失效，不把该 hit 直接认成
+fixed occupied；有限 hit 之前的射线才可积 free，缺束/遮挡/无协议证明的无回波不清图。
+
+source/next/capture 失效、停止和已观察的参考变化使用本地 fence。旧 valid 文件不能重开
+已退休资格；新 graph basis 到达前的旧 R 批次不绑定到新图，尚未观察到的窗口仍受原
+500ms deadline 约束。恢复/跳帧后的稳定窗口只消费新的独立帧。恢复关联只查询当前局部
+持久摘要及已有空间索引；歧义、候选/查询容量饱和时不撤旧贡献、不靠分配新 ID 绕过。
+
+导航改走 `map.backend.reference` 的 owner 选择与 `map.backend.install_fixed` 私有文件
+安装。文件不超过 8MiB、同 uid、私有 regular inode、no-follow、SHA-256 验证，桥再核对
+当前 boot/MapRef/R、完整 graph/digest、floor 和 fixed/evidence 水位。owner 串行发送，
+没有无界安装队列；存盘期间 graph/fixed 冻结，入口 latest 槽只保留最新候选。桥发布唯一
+`/map` 并安装 reference 后回传原 watermark 和内容 G；owner 比较实际 ACK 后才把导航
+view 标为已安装。没有 free 格也可安装，不伪造 free。ACK 不证明 Nav2 StaticLayer 已消费
+或完成 resize；原 sole-map-owner 检查和 stock map remap 继续生效。
+
+`grid` RPC 必须显式指定 diagnostic 或 migrate_legacy；后者每个 backend boot 只允许
+一次，V2 恢复永不调用。原 1/5s native raster 刷新不再作为导航 fallback。
+`mapping_navigation.hpp` 的原三态服务仅作诊断/一次 V1 迁移。独立 scan 回调持续使用原始
+stamp 发布 TF，包括 graph gate/capture 期间，不依赖 graph 后的 pose 回调。
+
+保存先 gate/drain，捕获固定的 graph/fixed immutable cut，磁盘 I/O 不持管理 intake 锁或
+Q 锁；原 Home/save 事务统一锁顺序，也保护导出 checkpoint 租约。旧保存只确认其捕获的
+change_sequence。V2 的成员/hash、durable 发布和读取规则见 map-bundle 文档。失败 capture
+退休 fixed 资格并保留最后 catalog 指向，不把远端取消当作已停止的证明。
+
+当前生产 `NativeMappingBackend.geometry_profile` 为 None，原因是没有本 profile 的实测
+误差和协议证据；可靠 occupied 升级保持 `profile_missing`，没有部署示例物理阈值。
+测试显式注入 synthetic-admitted 的 T2 profile/轨迹，只验证接线。仍需原装配责任人提供
+原 scan/exact odom/TF 与误差来源，才能激活物理升级。无 ROS/colcon 本机不声称 native、
+Nav2 安装或实机通过；可运行 `SENIOR_SHARED_LAYERS_PROCESS=1` 的
+`ros2/tests/test_shared_layers_process.py`，另需隔离测试 adapter socket 和真实有资格入口。
+默认 skip 明确代表未验证，不算三进程通过。VM 模拟树莓派的资源实验也尚未执行。
+
+资源限制保留：dense bytes、G、三态验证和部分 staging 仍 O(N)，support/free 和 tracker
+stage 会同时持有旧/新有界结构，部分 legacy mask 仍整份复制。当前局部查询、dirty tiles
+及有界记录不等于端到端 O(dirty)，也不构成 CPU/RSS/Hz 已达标的承诺。

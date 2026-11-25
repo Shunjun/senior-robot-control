@@ -239,6 +239,15 @@ class GeometryTracker:
         self._profile = None
         # IDs/revisions do not rewind: a late bind cannot attach to a new track.
 
+    @property
+    def bound_support_ids(self) -> frozenset[str]:
+        """Current local references, including pending motion verification.
+
+        The fixed owner uses this read-only view to avoid assigning a restored
+        support to another contour before committing its batch.
+        """
+        return frozenset(identity for track in self._tracks.values() for identity in track.supports)
+
     def bind_support(self, local_track_id: int, support_ids: tuple[str, ...]) -> None:
         """Replace references after the sole fixed owner commits support.
 

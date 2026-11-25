@@ -18,6 +18,8 @@
 
 namespace senior_mapping
 {
+// Localization-only diagnostic / one-time V1 migration raster.
+// The management owner installs authoritative fixed cuts; this service never publishes /map.
 // Preserve native free/occupied/unknown semantics. Never infer free from absence.
 inline std::optional<nav_msgs::msg::OccupancyGrid> bounded_native_raster(
   karto::Mapper & mapper, double resolution, std::size_t maximum_cells)

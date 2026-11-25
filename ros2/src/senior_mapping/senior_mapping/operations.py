@@ -20,6 +20,7 @@ from senior_mapping.references import (
     SlamSnapshot,
     durable_mkdir,
     durable_move_tree,
+    load_snapshot,
     recover_move_tree,
 )
 from senior_mapping.schema import OPERATION_JOURNAL_STATEMENTS as OPERATION_JOURNAL_STATEMENTS
@@ -141,7 +142,7 @@ class MapOperations:
             guard = await self._graph_guard()
         if guard is None and active.exists():
             try:
-                snapshot = SlamSnapshot.read(active)
+                snapshot = load_snapshot((active / "occupancy.json").read_bytes())
                 await self._archive.verify_snapshot(active / "pose_graph", snapshot)
                 await self._confirm_graph(active / "pose_graph", snapshot.map_ref)
             except Exception:
@@ -221,7 +222,7 @@ class MapOperations:
             staging = Path(raw)
             manifest = await self._archive.validate_and_extract(path, staging)
             try:
-                snapshot = SlamSnapshot.read(staging / "occupancy")
+                snapshot = load_snapshot((staging / "occupancy/occupancy.json").read_bytes())
             except ValueError as exc:
                 raise DomainError(ErrorCode.VALIDATION, "stable layer is unreadable") from exc
             if snapshot.map_ref != manifest.map_ref:
@@ -859,7 +860,7 @@ class MapOperations:
                 _check_owned_path(self.map_root, history)
                 if not history.is_dir():
                     raise DomainError(ErrorCode.UNAVAILABLE, "verified map snapshot is unavailable")
-                snapshot = SlamSnapshot.read(history)
+                snapshot = load_snapshot((history / "occupancy.json").read_bytes())
                 await self._archive.verify_snapshot(history / "pose_graph", snapshot)
                 await self._graph_step(
                     self._archive.read_pose_graph(history / "pose_graph"), bounded=True

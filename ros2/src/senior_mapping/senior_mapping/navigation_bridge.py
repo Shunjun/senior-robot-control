@@ -1,4 +1,4 @@
-"""Owned native raster/odometry receipts to the injected localization reference.
+"""Owner-installed fixed cuts and independent original scan/odometry receipts.
 
 The caller has already verified child boot and static lidar provenance. Neither
 web requests nor arbitrary /map or TF publishers can install a reference here.
@@ -11,7 +11,8 @@ import time
 from dataclasses import replace
 from typing import Any
 
-from senior_mapping.evidence import anchor_digest
+from senior_mapping.evidence import SourceIdentity, anchor_digest
+from senior_mapping.references import _watermark_payload, validate_fixed_snapshot
 from senior_mapping.shared_scan import QualifiedScan, ReferenceBasis, project_hits
 from senior_mapping.workspace import WorkspaceGrid
 from vehicle_core.errors import DomainError, ErrorCode
@@ -36,6 +37,9 @@ class NativeNavigationBridge:
         self._reference_floor_steady_ns = 0
         self._capture: Any = None
         self._retired = False
+        self._authorized = None
+        self._fixed_watermark = None
+        self._owner_coverage_reason = None
 
     def begin(self, boot: str, odom_frame: str = "odom") -> None:
         self._scan = self._last_key = self._reference_floor = self._capture = None
@@ -43,10 +47,14 @@ class NativeNavigationBridge:
         self._reference_floor_steady_ns = time.monotonic_ns()
         self.odom_frame = odom_frame
         self.boot, self._cut, self._grid = boot, None, None
+        self._authorized = self._fixed_watermark = None
+        self._owner_coverage_reason = None
         if self.reference is not None:
             self.reference.begin(boot)
 
     def withdraw(self) -> None:
+        self._retired = True
+        self._authorized = None
         self.invalidate_current("reference_unavailable")
         if self.slot is not None:
             self.slot.retire()
@@ -74,8 +82,6 @@ class NativeNavigationBridge:
         ) != (0.0, 0.0, 0.0, 1.0):
             raise DomainError(ErrorCode.CONFLICT, "native raster axes changed")
         cells = bytes(value % 256 for value in message.data)
-        if 0 not in cells:
-            return {"pending": True}
         geometry = [info.width, info.height, info.resolution, origin.position.x, origin.position.y]
         identity = hashlib.sha256(json.dumps(geometry).encode() + cells).hexdigest()
         grid = WorkspaceGrid(
@@ -129,67 +135,141 @@ class NativeNavigationBridge:
 
         self.reference.set_map_owner(sole_map_owner)
 
-    def install(self, fields: dict[str, Any]) -> None:
-        if fields.get("active") is False:
-            self.withdraw()
-            return
-        if self.reference is None or self._cut is None or self._grid is None:
-            raise DomainError(ErrorCode.UNAVAILABLE, "qualified native navigation cut unavailable")
-        sequence, grid, message = self._grid
+    def authorize_reference(self, fields):
+        """Authenticated owner RPC selection, independent of the transferred JSON."""
         cut = self._cut
         if (
-            fields.get("grid_sequence") != sequence
+            self._retired
+            or cut is None
+            or fields.get("boot_id") != self.boot
             or fields.get("sequence") != cut["sequence"]
-            or cut["boot_id"] != self.boot
         ):
-            raise DomainError(ErrorCode.CONFLICT, "navigation cut changed")
-        ref = MapRef(fields["map_id"], fields["reference_revision"])
-        generation = fields["generation"]
-        if not isinstance(generation, str) or not 1 <= len(generation) <= 128:
-            raise DomainError(ErrorCode.VALIDATION, "reference generation is required")
-        if sequence != cut["sequence"] and generation != self.reference.map_generation:
-            raise DomainError(ErrorCode.CONFLICT, "corrected reference needs a new raster")
-        # //Compatible: preserve the native id/x/y/yaw graph and capture wire format.
-        # Native keyframe IDs are int32; C3 hashes complete string-ID records.
-        digest = anchor_digest([
-            dict(anchor_id=str(row["id"]), available=True,
-                 pose={axis: row[axis] for axis in ("x", "y", "yaw")})
-            for row in cut["anchors"]
-        ])
-        anchor = next(row for row in cut["anchors"] if row["id"] == cut["keyframe_id"])
-        self._prepare_publishers()
-        self._publisher.publish(message)
-        previous = (
-            self.reference.grid().map_ref if self.reference.grid() else None,
-            self.reference.map_generation,
+            raise DomainError(ErrorCode.CONFLICT, "reference selection changed graph")
+        token = (fields["map_id"], fields["reference_revision"], fields["generation"])
+        if self._authorized != token:
+            self._authorized = token
+            self._owner_floor_ns = fields["acceptance_floor_steady_ns"]
+            self._reference_floor = self._last_key
+            self._reference_floor_steady_ns = max(time.monotonic_ns(), self._owner_floor_ns)
+            self.invalidate_current("reference_changed")
+        if fields.get("coverage_reason") == "coverage_limit":
+            self._owner_coverage_reason = "coverage_limit"
+            if self.reference is not None:
+                self.reference.set_current_coverage(False, "coverage_limit")
+
+    def install_fixed(self, fixed, *, graph_cut):
+        validate_fixed_snapshot(fixed)
+        w = fixed.watermark
+        graph = self._cut
+        digest = anchor_digest(
+            [
+                dict(
+                    anchor_id=str(a["id"]),
+                    available=True,
+                    pose={axis: a[axis] for axis in ("x", "y", "yaw")},
+                )
+                for a in graph_cut["anchors"]
+            ]
         )
+        if (
+            self._retired
+            or graph is not graph_cut
+            or w.backend_boot != self.boot
+            or w.host_boot_id != self.host_boot_id
+            or self._authorized
+            != (w.map_ref.map_id, w.map_ref.reference_revision, w.reference_generation)
+            or w.graph_sequence != graph["sequence"]
+            or w.anchor_digest != digest
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "fixed install lacks current owner reference")
+        capture = graph.get("capture")
+        if capture is not None:
+            graph_source = SourceIdentity(
+                self.boot,
+                capture["bridge_boot_id"],
+                capture["source_epoch"],
+                capture["capture_generation"],
+                capture["time"]["clock_generation"],
+                capture["raw_gid"],
+                capture["bridge_gid"],
+            )
+            if w.source != graph_source:
+                raise DomainError(ErrorCode.CONFLICT, "fixed source differs from verified graph")
+        previous = self._fixed_watermark
+        if previous is not None and (
+            w.fixed_revision < previous.fixed_revision
+            or w.evidence_revision < previous.evidence_revision
+            or w.change_sequence < previous.change_sequence
+            or (
+                w.fixed_revision == previous.fixed_revision
+                and replace(w, change_sequence=previous.change_sequence) != previous
+            )
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "late fixed install")
+        if previous is not None and w.fixed_revision == previous.fixed_revision:
+            installed = None if self.reference is None else self.reference.grid()
+            if installed is None or installed.grid_id != fixed.grid.grid_id:
+                raise DomainError(ErrorCode.CONFLICT, "unchanged fixed revision changed raster")
+        if (
+            previous is not None
+            and previous.evidence_key is not None
+            and w.evidence_key is not None
+        ):
+            if w.evidence_key.sequence < previous.evidence_key.sequence:
+                raise DomainError(ErrorCode.CONFLICT, "late fixed evidence key")
+        if self._last_key is not None and w.evidence_key is not None:
+            if w.evidence_key.sequence > self._last_key.sequence:
+                raise DomainError(ErrorCode.CONFLICT, "fixed evidence is ahead of qualified input")
+        if self._last_key is not None and (
+            w.source is None or w.source != SourceIdentity.from_key(self._last_key)
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "fixed source retired")
+        if self.reference is None:
+            raise DomainError(ErrorCode.UNAVAILABLE, "reference owner unavailable")
+        anchor = next(a for a in graph["anchors"] if a["id"] == graph["keyframe_id"])
+        grid = replace(fixed.grid, display_only=False, waypoint_writes=True)
+        self._publish_fixed_grid(grid)
         self.reference.install(
             self.boot,
-            replace(grid, map_ref=ref),
-            generation,
+            grid,
+            w.reference_generation,
             str(anchor["id"]),
             Pose2D(anchor["x"], anchor["y"], anchor["yaw"]),
-            Pose2D(*cut["odom"]),
+            Pose2D(*graph["odom"]),
         )
-
         basis = ReferenceBasis(
-            ref.map_id,
-            ref.reference_revision,
-            generation,
-            cut["sequence"],
-            digest,
+            w.map_ref.map_id,
+            w.map_ref.reference_revision,
+            w.reference_generation,
+            w.graph_sequence,
+            w.anchor_digest,
             str(anchor["id"]),
             Pose2D(anchor["x"], anchor["y"], anchor["yaw"]),
-            Pose2D(*cut["odom"]),
+            Pose2D(*graph["odom"]),
         )
-        changed = previous != (ref, generation)
-        if changed:
-            self._reference_floor = self._last_key
-            self._reference_floor_steady_ns = time.monotonic_ns()
         if self.slot is not None:
             self.slot.install_reference(basis, floor_steady_ns=self._reference_floor_steady_ns)
-        if changed:
-            self.invalidate_current("reference_changed")
+        self._fixed_watermark = w
+        self._owner_coverage_reason = None
+        # This receipt proves bridge publication/reference installation only.
+        return dict(ok=True, watermark=_watermark_payload(w), grid_id=grid.grid_id)
+
+    def _publish_fixed_grid(self, grid):
+        from nav_msgs.msg import OccupancyGrid
+
+        self._prepare_publishers()
+        message = OccupancyGrid()
+        message.header.frame_id = "map"
+        message.header.stamp = self.node.get_clock().now().to_msg()
+        message.info.width, message.info.height = grid.width, grid.height
+        message.info.resolution = grid.resolution
+        message.info.origin.position.x, message.info.origin.position.y = (
+            grid.origin.x,
+            grid.origin.y,
+        )
+        message.info.origin.orientation.w = 1.0
+        message.data = [v if v != 255 else -1 for v in grid.cells]
+        self._publisher.publish(message)
 
     def observe_scan(self, scan: QualifiedScan, capture: Any) -> None:
         if (
@@ -227,6 +307,8 @@ class NativeNavigationBridge:
             for x, y in points
         )
         reason = "" if covered else "coverage_pending"
+        if self._owner_coverage_reason is not None:
+            covered, reason = False, self._owner_coverage_reason
         if self.slot is not None and self.slot.error is not None:
             covered, reason = False, "scan_slot_unavailable"
         self.reference.set_current_coverage(covered, reason or None)

@@ -246,6 +246,7 @@ class MapReferenceStore:
         binding = OccupancyIngestBinding(snapshot.map_ref, backend_boot, source_epoch)
         fresh._ingest_binding = binding
         fresh._ingest_fenced = False
+        fresh._fixed_retired = False  # fresh verified writer; never reopens an old binding
         return fresh, binding
 
     def revoke_ingest(self, binding: OccupancyIngestBinding) -> None:
@@ -404,6 +405,7 @@ class MapReferenceStore:
 
         staged = copy(self)
         staged._fixed_cut = None  # prepare the legacy graph members independently
+        staged._archived_fixed = None
         staged._live = {key: replace(record) for key, record in self._live.items()}
         staged._removed = {key: replace(record) for key, record in self._removed.items()}
         staged._waypoints = [replace(waypoint) for waypoint in self._waypoints]
@@ -634,7 +636,13 @@ class MapReferenceStore:
         return self.occupancy()
 
     def is_empty(self) -> bool:
-        return not self._live and not self._removed and not self._waypoints
+        return (
+            self._fixed_cut is None
+            and getattr(self, "_archived_fixed", None) is None
+            and not self._live
+            and not self._removed
+            and not self._waypoints
+        )
 
     def waypoint_bindings(self) -> tuple[WaypointBinding, ...]:
         """Immutable current bindings for the canonical waypoint owner."""
@@ -645,10 +653,17 @@ class MapReferenceStore:
         pose_graph_prefix: Path,
         pose_graph_cells: tuple[tuple[int, int], ...],
     ) -> SlamSnapshot:
-        if self._fixed_cut is not None:
-            raise DomainError(
-                ErrorCode.CONFLICT,
-                "V1 capture cannot save fixed V2 state; T4 explicit archive path required",
+        fixed = self._fixed_cut or getattr(self, "_archived_fixed", None)
+        if fixed is not None:
+            from senior_mapping.references import snapshot_from_fixed
+
+            fixed = replace(fixed, waypoint_bindings=self.waypoint_bindings())
+            return snapshot_from_fixed(
+                fixed,
+                odom_owner=self.odom_owner,
+                prefix=pose_graph_prefix,
+                review_required=self.review_required,
+                legacy_json=getattr(self, "_legacy_json", None),
             )
         bindings = tuple(self._binding(item, removed=False) for item in self._live.values())
         bindings += tuple(self._binding(item, removed=True) for item in self._removed.values())
@@ -672,6 +687,7 @@ class MapReferenceStore:
 
     def restore(self, snapshot: SlamSnapshot) -> None:
         self._require_capture_writable()
+        self._validate_archived_fixed(snapshot)
         self._reject_fixed_v1()
         self._fence_ingest()
         if not self.is_empty():
@@ -689,7 +705,9 @@ class MapReferenceStore:
     def replace(self, snapshot: SlamSnapshot) -> None:
         """Switch identity, resolution, odometry owner, and sequence together."""
         self._require_capture_writable()
-        self._reject_fixed_v1()
+        self._validate_archived_fixed(snapshot)
+        if self._fixed_cut is not None:
+            self._reject_fixed_v1()
         self._fence_ingest()
         self._reset_identity(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
         self._advance_generation()
@@ -721,10 +739,33 @@ class MapReferenceStore:
         self._odom_owner = owner
         self._cell_size_m = float(cell_size_m)
         self._seq = 0
+        self._archived_fixed = None
+        self._legacy_json = None
         self._known_anchors.clear()
         self._live.clear()
         self._removed.clear()
         self._waypoints.clear()
+
+    @staticmethod
+    def _validate_archived_fixed(snapshot):
+        if snapshot.fixed is None:
+            return
+        from senior_mapping.references import validate_fixed_snapshot
+
+        validate_fixed_snapshot(snapshot.fixed)
+        cut = snapshot.fixed
+        if (
+            snapshot.map_ref != cut.watermark.map_ref
+            or snapshot.cell_size_m != cut.grid.resolution
+            or snapshot.anchors != cut.anchors
+            or snapshot.waypoint_bindings != cut.waypoint_bindings
+            or snapshot.grid
+            != GridExtent(cut.grid.width, cut.grid.height, cut.grid.origin.x, cut.grid.origin.y)
+            or snapshot.bindings
+            or snapshot.removed
+            or snapshot.occupancy.cells
+        ):
+            raise DomainError(ErrorCode.CONFLICT, "archive envelope differs from fixed cut")
 
     def _install(self, snapshot: SlamSnapshot) -> None:
         self._known_anchors = {
@@ -732,7 +773,13 @@ class MapReferenceStore:
             for anchor in snapshot.anchors
             if anchor.available and anchor.pose is not None
         }
-        for binding in snapshot.bindings:
+        self._archived_fixed = snapshot.fixed
+        self._legacy_json = snapshot.legacy_json
+        if snapshot.fixed is not None:
+            self._change_sequence = max(
+                self._change_sequence, snapshot.fixed.watermark.change_sequence
+            )
+        for binding in snapshot.bindings if snapshot.fixed is None else ():
             self._seq += 1
             record = _Record(
                 binding.evidence,
@@ -852,7 +899,7 @@ class MapReferenceStore:
         return math.floor(scaled)
 
     def _reject_fixed_v1(self) -> None:
-        if self._fixed_cut is not None:
+        if self._fixed_cut is not None or getattr(self, "_archived_fixed", None) is not None:
             raise DomainError(ErrorCode.CONFLICT, "explicit V2 lifecycle required")
 
     def bind_fixed_context(
@@ -911,7 +958,13 @@ class MapReferenceStore:
             True,
             False,
         )
-        raster.install(anchors, (), (), legacy_base)
+        restored = getattr(self, "_archived_fixed", None)
+        supports = () if restored is None else restored.supports
+        tiles = () if restored is None else restored.free_tiles
+        if restored is not None:
+            legacy_base = restored.legacy_base
+            profiles = tuple({p.profile_id: p for p in (*restored.profiles, *profiles)}.values())
+        raster.install(anchors, supports, tiles, legacy_base)
         watermark = FixedWatermark(
             self.map_ref,
             self.map_generation,
@@ -920,9 +973,9 @@ class MapReferenceStore:
             source_identity,
             self._ingest_progress.sequence,
             digest,
-            0,
+            0 if restored is None else restored.watermark.fixed_revision + 1,
             None,
-            0,
+            0 if restored is None else restored.watermark.evidence_revision,
             self.change_sequence,
         )
         cut = FixedSnapshot(
@@ -930,8 +983,8 @@ class MapReferenceStore:
             raster.grid(),
             anchors,
             None,
-            (),
-            (),
+            supports,
+            tiles,
             legacy_base,
             self.waypoint_bindings(),
             profiles,
@@ -947,8 +1000,15 @@ class MapReferenceStore:
         self._fixed_floor, self._fixed_floor_ns = acceptance_floor, acceptance_floor_steady_ns
         self._fixed_accepted = None
         self._fixed_last_accepted = acceptance_floor
-        self._fixed_supports, self._fixed_tiles = {}, {}
+        self._fixed_supports = {s.support_id: s for s in supports}
+        self._fixed_tiles = {t.tile_key: t for t in tiles}
         self._fixed_by_anchor = {}
+        for support in supports:
+            self._fixed_by_anchor.setdefault(support.anchor_id, set()).add(
+                ("s", support.support_id)
+            )
+        for tile in tiles:
+            self._fixed_by_anchor.setdefault(tile.anchor_id, set()).add(("f", tile.tile_key))
         if legacy_base is not None:
             for b in legacy_base.anchor_bindings:
                 self._fixed_by_anchor.setdefault(b.anchor_id, set()).update(
@@ -956,10 +1016,14 @@ class MapReferenceStore:
                 )
         # IDs are owner-generated UUIDs; retained audit IDs need no unbounded tombstone list.
         self._fixed_raster, self._fixed_cut = raster, cut
-        self._fixed_member_count = len(cut.waypoint_bindings) + (
-            0
-            if legacy_base is None
-            else sum(2 * len(b.base_cell_indices) for b in legacy_base.anchor_bindings)
+        self._fixed_member_count = (
+            len(cut.waypoint_bindings)
+            + sum(s.member_count for s in supports)
+            + (
+                0
+                if legacy_base is None
+                else sum(2 * len(b.base_cell_indices) for b in legacy_base.anchor_bindings)
+            )
         )
         return cut
 
@@ -1338,6 +1402,9 @@ class MapReferenceStore:
                 else raster.support_projection(s, self._known_anchors[s.anchor_id])
             )
         tiles, observed_free_regions = self._stage_free_tiles(cut, delta, updates)
+        # Explicit legacy O removal must precede free conflict resolution;
+        # otherwise the old base would delete the very free proof replacing it.
+        legacy, explicit_dirty, explicit_charge = self._legacy_edits(cut, delta, set(), updates)
         qualified_free = set()
         for projection in observed_free_regions:
             qualified_free.update(projection.free)
@@ -1348,11 +1415,23 @@ class MapReferenceStore:
         # Every occupied write invalidates *all* intersecting older free, including
         # partial rotated bits that did not render as a complete target F cell.
         occupied = raster.occupied_cells(updates)
+        # A qualified current hit invalidates older free generations even while
+        # physical stable classification is unresolved. It paints no fixed O.
+        scan, basis, _ = self._fixed_accepted
+        from senior_mapping.references import rebase_pose
+        from senior_mapping.workspace import _transform
+
+        alignment = rebase_pose(Pose2D(0, 0, 0), basis.odom_basis, basis.map_basis)
+        occupied.update(
+            raster._cell(_transform(b.endpoint_odom, alignment))
+            for b in scan.beams
+            if b.kind == "hit" and b.endpoint_odom is not None
+        )
         # New free also cannot survive an independent occupied support.
         for projection in tuple(updates.values()):
             if projection is not None:
                 for cell, _local in projection.free_bits:
-                    if raster._legacy_value(cell, cut.legacy_base) == 100:
+                    if raster._legacy_value(cell, legacy) == 100:
                         occupied.add(cell)
                     for key in raster.reverse.get(cell, ()):
                         current = updates.get(key, raster.records.get(key, _Projection()))
@@ -1360,8 +1439,11 @@ class MapReferenceStore:
                             occupied.add(cell)
         self._invalidate_fixed_free(occupied, tiles, updates)
         charge += self._finalize_fixed_tiles(tiles, updates, self._known_anchors)
-        legacy, legacy_dirty, legacy_charge = self._legacy_edits(cut, delta, occupied, updates)
-        charge += legacy_charge
+        legacy, legacy_dirty, legacy_charge = self._legacy_edits(
+            replace(cut, legacy_base=legacy), replace(delta, legacy_edits=()), occupied, updates
+        )
+        legacy_dirty = set(legacy_dirty) | set(explicit_dirty)
+        charge += legacy_charge + explicit_charge
         patch = raster.prepare(
             updates,
             extent=self._fixed_extent(bounds, updates),
@@ -1656,3 +1738,20 @@ class MapReferenceStore:
         self._fixed_accepted = None
         self._fixed_floor = self._fixed_last_accepted
         # Original graph basis changes require a fresh scan but graph PENDING does not.
+
+    def local_support_candidates(self, binding, bounds, *, limit=8):
+        """Query only current spatial contributions; saturation never truncates identity."""
+        self._check_fixed_owner(binding)
+        raster = self._fixed_raster
+        lo, hi = raster._cell(bounds[:2]), raster._cell(bounds[2:])
+        if (hi[0] - lo[0] + 1) * (hi[1] - lo[1] + 1) > 8192:
+            return None
+        identities = set()
+        for y in range(lo[1], hi[1] + 1):
+            for x in range(lo[0], hi[0] + 1):
+                for kind, identity in raster.reverse.get((x, y), ()):
+                    if kind == "s":
+                        identities.add(identity)
+                        if len(identities) > limit:
+                            return None
+        return tuple(self._fixed_supports[i] for i in sorted(identities))

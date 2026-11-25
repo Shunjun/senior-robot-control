@@ -493,3 +493,95 @@ class OccupancyMaintainer:
             track.belief,
             source,
         )
+
+
+@dataclass
+class _FreeConfidence:
+    count: int = 0
+    first_ns: int | None = None
+    belief: float = 0.0
+
+
+class FreeSpaceAccumulator:
+    """Transient free confidence; thresholds retain the existing count/span/belief gate.
+
+    Coordinates are local to one trigger anchor. A graph correction or skipped
+    scan resets the window; no persisted free is reconstructed from raw history.
+    """
+
+    def __init__(self, thresholds: OccupancyThresholds) -> None:
+        self.limits = _parse_limits(thresholds)
+        self.cells: dict[tuple[int, int], _FreeConfidence] = {}
+        self.anchor = None
+        self.previous = None
+
+    def update(self, scan, basis, *, initial_belief=lambda cell: 0.0) -> set[tuple[int, int]]:
+        from senior_mapping.references import rebase_pose
+        from senior_mapping.workspace import _inverse, _transform
+
+        limits = self.limits
+        if limits is None:
+            return set()
+        previous = self.previous
+        if previous is not None and (
+            scan.key.sequence <= previous.key.sequence
+            or scan.capture.time.stamp_ns <= previous.capture.time.stamp_ns
+            or scan.capture.time.sample_steady_ns <= previous.capture.time.sample_steady_ns
+            or scan.capture.time.received_steady_ns <= previous.capture.time.received_steady_ns
+        ):
+            return set()
+        token = (basis.reference_generation, basis.anchor_digest, basis.anchor_id)
+        if self.anchor != token or (
+            previous is not None and scan.key.sequence != previous.key.sequence + 1
+        ):
+            self.cells.clear()
+        self.anchor, self.previous = token, scan
+        alignment = rebase_pose(Pose2D(0, 0, 0), basis.odom_basis, basis.map_basis)
+        free, hits = set(), set()
+        size = limits.cell_size_m
+        for beam in scan.beams:
+            if beam.kind != "hit" or beam.endpoint_odom is None:
+                # C1 currently admits no protocol-proven clear rays. Invalid,
+                # self and no-return beams cannot manufacture free evidence.
+                continue
+            origin = _inverse(_transform(beam.origin_odom, alignment), basis.map_basis)
+            endpoint = _inverse(_transform(beam.endpoint_odom, alignment), basis.map_basis)
+            if (
+                sum(
+                    abs(math.floor(a / size) - math.floor(b / size))
+                    for a, b in zip(origin, endpoint, strict=True)
+                )
+                > 8190
+            ):
+                raise DomainError(ErrorCode.VALIDATION, "fixed_capacity: free ray")
+            ray = _segment_cells(*origin, *endpoint, size)
+            if len(ray) > 8192:
+                raise DomainError(ErrorCode.VALIDATION, "fixed_capacity: free ray")
+            free.update(ray[:-1])
+            if len(free) > 100000:
+                raise DomainError(ErrorCode.VALIDATION, "fixed_capacity: free scan")
+            hits.add(ray[-1])
+        free.difference_update(hits)
+        if len(self.cells.keys() | free | hits) > 100000:
+            raise DomainError(ErrorCode.VALIDATION, "fixed_capacity: free confidence")
+        for cell in hits:
+            prior = self.cells.setdefault(cell, _FreeConfidence())
+            prior.count, prior.first_ns = 0, None
+            prior.belief = min(limits.belief_max, prior.belief + limits.hit_weight)
+        qualified = set()
+        now = scan.capture.time.sample_steady_ns
+        for cell in free:
+            if cell not in self.cells:
+                self.cells[cell] = _FreeConfidence(belief=initial_belief(cell))
+            prior = self.cells[cell]
+            if prior.first_ns is None:
+                prior.first_ns = now
+            prior.count += 1
+            prior.belief = max(limits.belief_min, prior.belief - limits.free_weight)
+            if (
+                prior.count >= limits.clear_free
+                and now - prior.first_ns >= math.ceil(limits.clear_span_s * 1e9)
+                and prior.belief <= limits.free_belief
+            ):
+                qualified.add(cell)
+        return qualified

@@ -402,11 +402,10 @@ def test_fixed_three_state_lifecycle_episode():
     rotated_cut = apply(7, lambda k, c: {"free_tiles": (tile(k, 1, ((0, 0),), "kf3"),)}, "kf3")
     assert rotated_cut.grid.cells[0] == 255
     assert_fixed_episode_codec(rotated_cut)
-    # Explicit V2 opt-in cannot silently pass through the production V1 saver.
+    # T4 explicitly captures the authoritative V2 cut through the original owner.
     from pathlib import Path
 
-    with pytest.raises(DomainError):
-        active._store.snapshot(Path("/unused"), ())
+    assert active._store.snapshot(Path("/unused"), ()).fixed == rotated_cut
     # Observed retirement permanently fences a previously accepted file fact.
     state["accepting"] = False
     with pytest.raises(DomainError):

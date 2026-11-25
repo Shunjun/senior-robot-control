@@ -79,12 +79,16 @@ class ActiveMap:
         )
         active = cls(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
         active._store, active._source, active._binding = store, source, binding
-        active._grid = render_stable_grid(
-            snapshot.map_ref,
-            f"{active._session_id}:restored",
-            snapshot.grid,
-            snapshot.cell_size_m,
-            snapshot.occupancy,
+        active._grid = (
+            snapshot.fixed.grid
+            if snapshot.fixed is not None
+            else render_stable_grid(
+                snapshot.map_ref,
+                f"{active._session_id}:restored",
+                snapshot.grid,
+                snapshot.cell_size_m,
+                snapshot.occupancy,
+            )
         )
         active._restored_cut = True
         return active
@@ -284,3 +288,12 @@ class ActiveMap:
         )
         self._grid = cut.grid
         return cut
+
+    def discard_support_ids(self, source: object, identities: tuple[str, ...]) -> None:
+        self._require_source(source)
+        getattr(self._store, "_fixed_issued", set()).difference_update(identities)
+
+    def local_support_candidates(self, source: object, bounds, *, limit=8):
+        return self._store.local_support_candidates(
+            self._require_source(source), bounds, limit=limit
+        )

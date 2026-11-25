@@ -280,9 +280,16 @@ class FixedRaster:
         self.last_dirty_tiles = frozenset()
 
     def _cell(self, point):
-        return math.floor((point[0] - self.origin.x) / self.r), math.floor(
-            (point[1] - self.origin.y) / self.r
-        )
+        # Quantize in a translation-invariant lattice. Subtracting an expanded
+        # dense origin before division changed boundary endpoints by one ulp,
+        # making a saved cut render differently after natural extent growth.
+        def axis(value, origin):
+            scaled_origin = origin / self.r
+            integral = round(scaled_origin)
+            fraction = scaled_origin - integral
+            return math.floor(value / self.r - fraction) - integral
+
+        return axis(point[0], self.origin.x), axis(point[1], self.origin.y)
 
     def _candidates(self, quad):
         lo = self._cell((min(p[0] for p in quad), min(p[1] for p in quad)))

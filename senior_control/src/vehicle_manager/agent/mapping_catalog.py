@@ -176,6 +176,12 @@ class ProductionMappingRequests:
             self._runtime.phase = "failed"
         checked_at = 0.0
         while True:
+            # Some supported asyncio wait_for versions can finish an IPC reply
+            # in the same turn as cancellation. Do not lose the owner's pending
+            # shutdown request when that completed inner await wins the race.
+            task = asyncio.current_task()
+            if task is not None and getattr(task, "cancelling", lambda: 0)():
+                raise asyncio.CancelledError
             try:
                 now = asyncio.get_running_loop().time()
                 if now - checked_at >= 1:
@@ -191,6 +197,35 @@ class ProductionMappingRequests:
         await self._runtime.close()
 
     async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
+        if kind == "map.export":
+            from pathlib import Path
+
+            from vehicle_core.errors import DomainError, ErrorCode
+            from vehicle_core.values import MapRef
+
+            try:
+                session = self._runtime._session
+                ref = MapRef(fields["map_id"], fields["reference_revision"])
+                if session is None or ref != session.entry.map_ref:
+                    raise DomainError(ErrorCode.CONFLICT, "export needs the selected owner cut")
+                destination = Path(fields["path"])
+                root = self._runtime.backend.root.parent / "map-transfer"
+                if (
+                    not destination.is_absolute()
+                    or destination.parent != root
+                    or destination.resolve() != destination
+                    or root.is_symlink()
+                ):
+                    raise DomainError(ErrorCode.VALIDATION, "export path escapes map-transfer")
+                root.mkdir(mode=0o700, parents=True, exist_ok=True)
+                # Original task dispatcher validates the filename/operation ID;
+                # the mapping owner also enforces the local destination boundary.
+                await session.export_bundle(destination)
+                return {"ok": True, "operation_id": fields.get("operation_id")}
+            except DomainError as exc:
+                return {"ok": False, "error": exc.code.value}
+            except (KeyError, ValueError, OSError):
+                return {"ok": False, "error": "validation"}
         if kind in {
             "map.catalog",
             "map.status",

@@ -9,6 +9,82 @@ from senior_mapping.workspace import WorkspaceGrid
 from vehicle_core.values import MapRef, Pose2D
 
 
+def install_synthetic_fixed(bridge, fields):
+    """Synthetic-admitted fixed F baseline replaces the retired raw install fixture."""
+    from dataclasses import replace
+
+    from senior_mapping.evidence import FixedWatermark, SourceIdentity, anchor_digest
+    from senior_mapping.references import (
+        AnchorPose,
+        FixedSnapshot,
+        LegacyBase,
+        fixed_anchor_records,
+    )
+    from senior_mapping.workspace import fixed_grid_id
+
+    graph = bridge._cut
+    original = bridge._grid[1]
+    grid = replace(
+        original,
+        grid_id=fixed_grid_id(
+            original.map_ref,
+            original.width,
+            original.height,
+            original.resolution,
+            original.origin,
+            original.cells,
+        ),
+        display_only=True,
+        waypoint_writes=False,
+    )
+    mask = bytearray((len(grid.cells) + 7) // 8)
+    for i, value in enumerate(grid.cells):
+        if value != 255:
+            mask[i // 8] |= 1 << (i % 8)
+    base = LegacyBase(
+        grid.grid_id, grid, "legacy-derived", "0" * 64, "synthetic-admitted", bytes(mask), ()
+    )
+    anchors = tuple(
+        sorted(
+            (
+                AnchorPose(str(a["id"]), Pose2D(a["x"], a["y"], a["yaw"]), True)
+                for a in graph["anchors"]
+            ),
+            key=lambda a: a.anchor_id.encode(),
+        )
+    )
+    old = bridge._fixed_watermark
+    revision = (
+        0
+        if old is None
+        else old.fixed_revision + (old.reference_generation != fields["generation"])
+    )
+    watermark = FixedWatermark(
+        grid.map_ref,
+        fields["generation"],
+        bridge.boot,
+        "host",
+        None if bridge._last_key is None else SourceIdentity.from_key(bridge._last_key),
+        graph["sequence"],
+        anchor_digest(fixed_anchor_records(anchors)),
+        revision,
+        None,
+        0,
+        0,
+    )
+    cut = FixedSnapshot(watermark, grid, anchors, None, (), (), base, (), ())
+    bridge.host_boot_id = "host"
+    bridge._publish_fixed_grid = lambda grid: None
+    bridge.authorize_reference(
+        {
+            **fields,
+            "boot_id": bridge.boot,
+            "acceptance_floor_steady_ns": getattr(bridge, "_owner_floor_ns", 0),
+        }
+    )
+    return bridge.install_fixed(cut, graph_cut=graph)
+
+
 def header(sequence, now=None):
     now = time.monotonic_ns() if now is None else now
     return NS(
@@ -291,7 +367,8 @@ def test_bridge_install_rejects_scan_sampled_before_new_reference():
     bridge._publish_transform = lambda stamp: None
     bridge._publish_current = lambda *args: outputs.append(args)
     delayed = message(2)
-    bridge.install(
+    install_synthetic_fixed(
+        bridge,
         dict(
             active=True,
             sequence=1,
@@ -299,7 +376,7 @@ def test_bridge_install_rejects_scan_sampled_before_new_reference():
             map_id="map",
             reference_revision=1,
             generation="R2",
-        )
+        ),
     )
     bridge.observe_scan(decode(delayed), delayed.scan.capture)
     assert not outputs[-1][0] and ref.pose() is None
@@ -351,10 +428,15 @@ def test_real_graph_install_uses_c3_digest_independent_of_keyframe_order():
     frames = [NS(id=i, x=float(i), y=0.0, yaw=0.0) for i in (0, 1, 2, 10)]
     digests = []
     for ordered in (frames, list(reversed(frames))):
-        cut = RosMappingBackend._graph(NS(
-            boot_id="backend", graph_commit_sequence=1, odom_frame="odom",
-            map_frame="map", keyframes=ordered,
-        ))
+        cut = RosMappingBackend._graph(
+            NS(
+                boot_id="backend",
+                graph_commit_sequence=1,
+                odom_frame="odom",
+                map_frame="map",
+                keyframes=ordered,
+            )
+        )
         original_anchors = [dict(row) for row in cut["anchors"]]
         cut.update(keyframe_id=0, odom=[0.0, 0.0, 0.0])
         ref = reference()
@@ -364,19 +446,32 @@ def test_real_graph_install_uses_c3_digest_independent_of_keyframe_order():
         bridge._publisher = NS(publish=lambda _: None)
         bridge._publish_current = lambda *args: None
         bases = []
-        bridge.slot = NS(install_reference=lambda basis, target=bases, **kw: target.append(basis),
-                         invalidate=lambda _: None)
+        bridge.slot = NS(
+            install_reference=lambda basis, target=bases, **kw: target.append(basis),
+            invalidate=lambda _: None,
+        )
         bridge.observe_cut(cut)
-        bridge.install(dict(active=True, grid_sequence=1, sequence=1, map_id="map",
-                            reference_revision=1, generation="R1"))
+        install_synthetic_fixed(
+            bridge,
+            dict(
+                active=True,
+                grid_sequence=1,
+                sequence=1,
+                map_id="map",
+                reference_revision=1,
+                generation="R1",
+            ),
+        )
         # Independent review's literal C3 result, not an expectation built by our helper.
         assert bases[0].anchor_digest == (
             "df9170d6bdc8571fc6657a6cffa56f545366733859708317fcfe164c991334f9"
         )
         from senior_mapping.evidence import anchor_digest
 
-        records = [dict(anchor_id=str(f.id), available=True,
-                        pose=dict(x=f.x, y=f.y, yaw=f.yaw)) for f in ordered]
+        records = [
+            dict(anchor_id=str(f.id), available=True, pose=dict(x=f.x, y=f.y, yaw=f.yaw))
+            for f in ordered
+        ]
         assert bases[0].anchor_digest == anchor_digest(records)
         assert cut["anchors"] == original_anchors  # native graph/capture wire stays intact
         digests.append(bases[0].anchor_digest)

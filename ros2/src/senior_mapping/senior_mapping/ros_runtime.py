@@ -10,12 +10,17 @@ import json
 import math
 import os
 import signal
+import stat
 import tempfile
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from senior_perception.vision.raw_capture import capture_from_message
+
 from senior_mapping.navigation_bridge import NativeNavigationBridge
+from senior_mapping.references import decode_fixed_snapshot
 from senior_mapping.shared_scan import LatestScanSlot, decode_qualified_scan
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.lifecycle_events import ResourceProcesses
@@ -133,13 +138,34 @@ class RosMappingBackend:
                     )
                     return {"ok": bool(response.ok), "sequence": response.graph_commit_sequence}
                 if method == "grid":
+                    if fields.get("purpose") not in ("diagnostic", "migrate_legacy"):
+                        raise DomainError(ErrorCode.CONFLICT, "raw raster is localization-only")
+                    if fields.get("purpose") == "migrate_legacy":
+                        if getattr(self, "_legacy_raster_used", False):
+                            raise DomainError(ErrorCode.CONFLICT, "legacy raster already consumed")
+                        self._legacy_raster_used = True
                     cut = await self._navigation.raster(fields["sequence"])
                     return (
                         {"ok": True, **cut} if cut.get("pending") else await self._transfer_cut(cut)
                     )
                 if method == "reference":
-                    self._navigation.install(fields)
+                    if fields.get("active") is False:
+                        self._navigation.withdraw()
+                    else:
+                        self._navigation.authorize_reference(fields)
                     return {"ok": True}
+                if method == "install_fixed":
+                    cut = await asyncio.to_thread(
+                        _read_fixed_transfer, fields["path"], fields["sha256"]
+                    )
+                    if fields.get("acceptance_floor_steady_ns") != self._navigation._owner_floor_ns:
+                        raise DomainError(ErrorCode.CONFLICT, "fixed reference floor changed")
+                    ack = self._navigation.install_fixed(cut, graph_cut=self._navigation._cut)
+                    if fields.get("coverage_reason") == "coverage_limit":
+                        self._navigation.authorize_reference(
+                            {**fields, "sequence": cut.watermark.graph_sequence}
+                        )
+                    return ack
                 if method == "next":
                     response = await self._call(
                         "next", boot_id=self._boot, graph_commit_sequence=fields["sequence"]
@@ -164,6 +190,8 @@ class RosMappingBackend:
                 raise DomainError(ErrorCode.VALIDATION, "unknown mapping backend request")
             except DomainError as exc:
                 return {"ok": False, "error": exc.code.value}
+            except (OSError, ValueError, KeyError, TypeError):
+                return {"ok": False, "error": ErrorCode.VALIDATION.value}
 
     async def _start(self, fields: dict[str, Any]) -> dict[str, Any]:
         from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -247,6 +275,7 @@ class RosMappingBackend:
             await self._stop()
             raise
         self._root = root
+        self._legacy_raster_used = False
         try:
             deadline = asyncio.get_running_loop().time() + 10
             while True:
@@ -428,6 +457,7 @@ class RosMappingBackend:
         cut = self._graph(response)
         cut.update(
             keyframe_id=response.committed_keyframe_id,
+            capture=asdict(capture_from_message(scan.capture)),
             stamp=response.sample_stamp.sec + response.sample_stamp.nanosec * 1e-9,
             sensor=[
                 response.corrected_sensor_x,
@@ -464,3 +494,40 @@ class RosMappingBackend:
         self._navigation.close()
         for client, _ in self._services.values():
             self.node.destroy_client(client)
+
+
+def _read_fixed_transfer(path: str, digest: str):
+    path = Path(path)
+    if not path.is_absolute() or ".." in path.parts:
+        raise DomainError(ErrorCode.VALIDATION, "fixed transfer path must be canonical")
+    directory_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        # Pin each ancestor inode without following symlinks, including races.
+        for part in path.parts[1:-1]:
+            parent = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd
+            )
+            os.close(directory_fd)
+            directory_fd = parent
+        directory = os.fstat(directory_fd)
+        if directory.st_uid != os.getuid() or directory.st_mode & 0o077:
+            raise DomainError(ErrorCode.VALIDATION, "fixed transfer directory must be private")
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    with os.fdopen(fd, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o077
+            or metadata.st_size > 8 * 1024 * 1024
+        ):
+            raise DomainError(ErrorCode.VALIDATION, "fixed transfer must be private and bounded")
+        payload = stream.read(8 * 1024 * 1024 + 1)
+    if len(payload) > 8 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+        raise DomainError(ErrorCode.CONFLICT, "fixed transfer digest changed")
+    try:
+        return decode_fixed_snapshot(payload, transfer=True)
+    except (ValueError, TypeError) as exc:
+        raise DomainError(ErrorCode.VALIDATION, "fixed transfer is invalid") from exc
