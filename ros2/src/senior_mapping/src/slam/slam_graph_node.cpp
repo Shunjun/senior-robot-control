@@ -9,6 +9,8 @@
 #include "static_lidar_tf_ingress.hpp"
 
 #include <algorithm>
+#include <atomic>
+#include <deque>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
@@ -18,6 +20,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -25,6 +28,7 @@
 #include <boost/uuid/uuid_io.hpp>
 
 #include "rclcpp/rclcpp.hpp"
+#include "senior_interfaces/msg/qualified_mapping_scan.hpp"
 #include "senior_interfaces/srv/capture_graph.hpp"
 #include "senior_interfaces/srv/match_stationary_scan.hpp"
 #include "senior_interfaces/srv/read_graph.hpp"
@@ -45,6 +49,13 @@ public:
 
   ~SlamGraphNode() override
   {
+    accepting_.store(false);
+    stopping_.store(true);
+    if (bounded_ingress_) {bounded_ingress_->retire_source();}
+    if (ingress_executor_) {ingress_executor_->cancel();}
+    if (ingress_thread_.joinable()) {ingress_thread_.join();}
+    // No ingress work can retain graph/cache or TF state after this barrier.
+    {const std::lock_guard<std::mutex> lock(queue_mutex_); graph_queue_.clear();}
     if (capture_directory_ || bounded_ingress_) {
       //Compatible: join Humble's dedicated TF listener before retiring the ingress lock.
       tfL_.reset();
@@ -135,7 +146,7 @@ public:
             const std::lock_guard<std::mutex> lock(scan_ingress_mutex_);
             if (request->boot_id != boot_id_) {return;}
             accepting_ = request->accepting;
-            input_floor_ = now();
+            input_floor_ns_.store(now().nanoseconds());
             response->graph_commit_sequence = graph_commit_.sequence;
             response->ok = true;
           });
@@ -144,6 +155,7 @@ public:
         disable_stock_mutations();
       }
       if (!bounded_topic.empty()) {
+        ingress_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
         if (!static_lidar_topic.empty()) {
           start_static_lidar_tf(static_lidar_topic);
         }
@@ -164,7 +176,7 @@ public:
       const auto maximum = declare_parameter<int>("mapping_max_grid_cells", 1048576);
       if (maximum < 1 || maximum > 1048576) {throw std::invalid_argument("Invalid map raster budget");}
       navigation_ = std::make_unique<MappingNavigation>(*this, boot_id_,
-        [this] {return graph_commit_.sequence > 0 && bounded_ingress_->source_active();},
+        [this] {return graph_commit_.sequence > 0 && bounded_ingress_->active_snapshot();},
         [this, maximum](std::uint64_t sequence) -> std::optional<nav_msgs::msg::OccupancyGrid> {
           const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
           boost::mutex::scoped_lock lock(smapper_mutex_);
@@ -172,6 +184,19 @@ public:
           auto grid = bounded_native_raster(*smapper_->getMapper(), resolution_, maximum);
           if (grid) {grid->header.frame_id = map_frame_; grid->header.stamp = now();}
           return grid;
+        });
+    }
+    if (ingress_group_) {
+      ingress_executor_ = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
+      ingress_executor_->add_callback_group(ingress_group_, get_node_base_interface());
+      ingress_thread_ = std::thread([this] {
+          try {ingress_executor_->spin();}
+          catch (const std::exception & error) {
+            bounded_ingress_->retire_source();
+            try {publish_invalid(true, "ingress_failed");}
+            catch (const std::exception &) {}  // The ROS context may already be shutting down.
+            RCLCPP_ERROR(get_logger(), "Qualified ingress stopped: %s", error.what());
+          }
         });
     }
   }
@@ -194,6 +219,29 @@ private:
   struct InFlightScan
   {
     BoundedScanIngress::BoundedScan::ConstSharedPtr scan;
+    LaserTransform mount;
+    StaticReceipt::ConstSharedPtr static_receipt;
+  };
+
+  using Qualified = senior_interfaces::msg::QualifiedMappingScan;
+  struct GeometryWitness
+  {
+    NativeLaserOffset offset;
+    LaserRayLayout rays;
+    double angle_max, range_min, range_max, height;
+    std::int8_t sign;
+    bool matches(const sensor_msgs::msg::LaserScan & scan, LaserTransform mount) const
+    {
+      return scan.angle_min == rays.angle_min && scan.angle_increment == rays.angle_increment &&
+        scan.angle_max == angle_max && scan.range_min == range_min && scan.range_max == range_max &&
+        scan.ranges.size() == rays.ray_count && std::abs(mount.z-height) <= 1e-5 &&
+        matches_native_laser_geometry(mount, offset, rays);
+    }
+  };
+  struct GraphCandidate
+  {
+    sensor_msgs::msg::LaserScan::ConstSharedPtr scan;
+    BoundedScanIngress::BoundedScan::ConstSharedPtr original;
     LaserTransform mount;
     StaticReceipt::ConstSharedPtr static_receipt;
   };
@@ -257,7 +305,7 @@ private:
     const auto raw_node = declare_parameter<std::string>(
       "verified_static_lidar_tf_source_node", "/robot_state_publisher");
     static_lidar_tf_ = std::make_unique<StaticLidarTfIngress>(
-      *this, topic, relay_node, raw_topic, raw_node, base_frame_, frame);
+      *this, topic, relay_node, raw_topic, raw_node, base_frame_, frame, ingress_group_);
   }
 
   void start_bounded_ingress(const std::string & topic)
@@ -269,38 +317,124 @@ private:
     // No node callbacks have spun yet, so discard it before it can create TF futures.
     scan_filter_.reset();
     scan_filter_sub_.reset();
+    qualified_publisher_ = create_publisher<Qualified>(
+      declare_parameter<std::string>("qualified_scan_topic", "/senior/slam/qualified_scan"),
+      rclcpp::QoS(1).reliable().durability_volatile());
     bounded_ingress_ = std::make_unique<BoundedScanIngress>(
       *this, *tf_, topic, scan_topic_, odom_frame_, base_frame_,
       [this](sensor_msgs::msg::LaserScan::ConstSharedPtr scan,
         BoundedScanIngress::BoundedScan::ConstSharedPtr original, LaserTransform mount,
         StaticReceipt::ConstSharedPtr static_receipt)
       {
-        const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
-        if (production_ && (!accepting_ || rclcpp::Time(scan->header.stamp) <= input_floor_)) {
-          return;
-        }
-        // Check the cached mount even if the vendor later throttles this scan.
-        const auto cached = lasers_.find(scan->header.frame_id);
-        if (cached != lasers_.end() &&
-          !match_native_mount(cached->second.getLaser(), *scan, mount))
-        {
-          retire_geometry();
-          return;
-        }
-        in_flight_ = InFlightScan{std::move(original), mount, std::move(static_receipt)};
-        try {
-          AsynchronousSlamToolbox::laserCallback(std::move(scan));
-          karto::Pose2 odometry;
-          if (navigation_ && pose_helper_->getOdomPose(odometry, in_flight_->scan->capture.stamp)) {
-            navigation_->observe(in_flight_->scan->capture, odometry,
-              in_flight_->static_receipt != nullptr);
+        if (stopping_.load()) {return;}
+        const auto witness = std::atomic_load(&geometry_witness_);
+        if (witness) {
+          if (!witness->matches(*scan, mount)) {
+            bounded_ingress_->retire_source();
+            publish_invalid(true, "geometry_changed");
+            return;
           }
-        } catch (...) {
-          in_flight_.reset();
-          throw;
+          publish_qualified(*witness, original, mount, static_receipt);
         }
-        in_flight_.reset();
-      }, static_lidar_tf_.get());
+        // Bootstrap must still reach getLaser/addScan before a cached witness exists.
+        const std::lock_guard<std::mutex> queue_lock(queue_mutex_);
+        if (graph_queue_.size() == 8) {graph_queue_.pop_front();}
+        graph_queue_.push_back({std::move(scan), std::move(original), mount,
+          std::move(static_receipt)});
+      }, static_lidar_tf_.get(), ingress_group_);
+    graph_drain_ = create_wall_timer(std::chrono::milliseconds(5), [this] {drain_graph_scan();});
+    qualified_expiry_ = create_wall_timer(std::chrono::milliseconds(20), [this] {
+        if (bounded_ingress_->retired_snapshot()) {
+          if (!retirement_published_) {
+            publish_invalid(true, "source_retired"); retirement_published_ = true;
+          }
+        } else if (!bounded_ingress_->active_snapshot()) {
+          if (current_valid_) {publish_invalid(false, "source_unavailable");}
+        } else if (current_valid_ && senior_sensor_ingress::time::monotonic_ns() >= current_deadline_) {
+          publish_invalid(false, "expired");
+        }
+      }, ingress_group_);
+  }
+
+  void publish_qualified(const GeometryWitness & witness,
+    BoundedScanIngress::BoundedScan::ConstSharedPtr original, LaserTransform mount,
+    StaticReceipt::ConstSharedPtr static_receipt)
+  {
+    try {
+      const auto exact = tf_->lookupTransform(odom_frame_, base_frame_,
+        rclcpp::Time(original->capture.stamp, get_clock()->get_clock_type())).transform;
+      Qualified result;
+      result.backend_boot = boot_id_; result.status = Qualified::QUALIFIED;
+      result.scan = *original;
+      if (static_receipt) {
+        result.static_lidar_tf_receipt = *static_receipt;
+        result.static_receipt_valid = true;
+      }
+      result.odom_base.x = exact.translation.x;
+      result.odom_base.y = exact.translation.y;
+      const auto & q = exact.rotation;
+      result.odom_base.theta = std::atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z));
+      result.base_lidar.translation.x = mount.x;
+      result.base_lidar.translation.y = mount.y;
+      result.base_lidar.translation.z = mount.z;
+      result.base_lidar.rotation.x = mount.qx; result.base_lidar.rotation.y = mount.qy;
+      result.base_lidar.rotation.z = mount.qz; result.base_lidar.rotation.w = mount.qw;
+      result.raw_ray_angle_sign = witness.sign;
+      result.geometry_id = boot_id_ + ":mount-1";
+      if (std::isfinite(result.odom_base.x) && std::isfinite(result.odom_base.y) &&
+        std::isfinite(result.odom_base.theta) &&
+        scan_receipt_admission::fresh(original->capture, scan_receipt_admission::steady_seconds()) &&
+        bounded_ingress_->active_snapshot())
+      {
+        qualified_publisher_->publish(result);
+        current_deadline_ = original->capture.sample_steady_ns + 500000000ULL;
+        current_valid_ = true;
+      }
+    } catch (const tf2::TransformException &) {
+      publish_invalid(false, "exact_odom_missing");
+    }
+  }
+
+  void publish_invalid(bool retired, const std::string & reason)
+  {
+    Qualified result;
+    result.backend_boot = boot_id_;
+    result.status = retired ? Qualified::RETIRED : Qualified::INVALID;
+    result.reason = reason;
+    qualified_publisher_->publish(result);
+    current_valid_ = false;
+  }
+
+  void drain_graph_scan()
+  {
+    std::optional<GraphCandidate> candidate;
+    {
+      const std::lock_guard<std::mutex> lock(queue_mutex_);
+      if (graph_queue_.empty()) {return;}
+      candidate = std::move(graph_queue_.front()); graph_queue_.pop_front();
+    }
+    const auto & scan = candidate->scan;
+    if (stopping_.load() || !bounded_ingress_->active_snapshot() ||
+      !scan_receipt_admission::fresh(candidate->original->capture, scan_receipt_admission::steady_seconds()) ||
+      (production_ && (!accepting_.load() ||
+      rclcpp::Time(scan->header.stamp).nanoseconds() <= input_floor_ns_.load()))) {return;}
+    const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
+    const auto cached = lasers_.find(scan->header.frame_id);
+    if (cached != lasers_.end() &&
+      !match_native_mount(cached->second.getLaser(), *scan, candidate->mount))
+    {
+      retire_geometry(); return;
+    }
+    in_flight_ = InFlightScan{candidate->original, candidate->mount, candidate->static_receipt};
+    try {
+      AsynchronousSlamToolbox::laserCallback(scan);
+      karto::Pose2 odometry;
+      if (navigation_ && pose_helper_->getOdomPose(odometry, in_flight_->scan->capture.stamp)) {
+        navigation_->observe(in_flight_->scan->capture, odometry,
+          in_flight_->static_receipt != nullptr);
+      }
+    } catch (...) {in_flight_.reset(); throw;}
+    in_flight_.reset();
   }
 
   void start_owned_capture()
@@ -386,6 +520,12 @@ private:
         mount_height_ = in_flight_->mount.z;
       }
       ray_angle_sign = *matched;
+      const auto offset = laser->GetOffsetPose();
+      std::shared_ptr<const GeometryWitness> witness = std::make_shared<GeometryWitness>(GeometryWitness{
+        {offset.GetX(), offset.GetY(), offset.GetHeading()},
+        {scan->angle_min, scan->angle_increment, scan->ranges.size(), *matched == -1},
+        scan->angle_max, scan->range_min, scan->range_max, in_flight_->mount.z, *matched});
+      std::atomic_store(&geometry_witness_, std::move(witness));
     }
     auto * committed = AsynchronousSlamToolbox::addScan(laser, scan, odom_pose);
     if ((capture_directory_ || in_flight_) && committed) {
@@ -441,10 +581,10 @@ private:
       [this](const ReadGraphCommit::Request::SharedPtr request,
         ReadGraphCommit::Response::SharedPtr response)
       {
-        if (request->boot_id != boot_id_ || !bounded_ingress_->source_active()) {
+        if (request->boot_id != boot_id_ || !bounded_ingress_->active_snapshot()) {
           return;
         }
-        // Delivery and lookup share the bounded ingress executor.
+        // Delivery and lookup stay on the graph owner; ingress eligibility is an atomic witness.
         const auto [state, cut] = graph_commit_history_.lookup(request->graph_commit_sequence);
         switch (state) {
           case CommitLookup::invalid:
@@ -478,7 +618,7 @@ private:
           result.static_lidar_tf_receipt_valid = true;
         }
         fill_keyframes(cut->keyframes, result.keyframes);
-        if (bounded_ingress_->source_active()) {
+        if (bounded_ingress_->active_snapshot()) {
           result.status = ReadGraphCommit::Response::OK;
           *response = std::move(result);
         }
@@ -496,7 +636,7 @@ private:
     std::optional<CommittedIngressReceipt> receipt;
     {
       const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
-      if (bounded_ingress_ && last_committed_ingress_ && !bounded_ingress_->source_active()) {
+      if (bounded_ingress_ && last_committed_ingress_ && !bounded_ingress_->active_snapshot()) {
         return;
       }
       boost::mutex::scoped_lock lock(smapper_mutex_);
@@ -537,7 +677,7 @@ private:
       static_receipt = *receipt->static_receipt;
     }
     const auto publication_allowed = [this]() {
-        return !bounded_ingress_ || bounded_ingress_->source_active();
+        return !bounded_ingress_ || bounded_ingress_->active_snapshot();
       };
     if (!publication_allowed()) {
       return;
@@ -754,7 +894,7 @@ private:
         if (capture_directory_ || bounded_ingress_) {
           fill_commit_watermark(*response, watermark);
         }
-        if (bounded_ingress_ && last_committed_ingress_ && bounded_ingress_->source_active()) {
+        if (bounded_ingress_ && last_committed_ingress_ && bounded_ingress_->active_snapshot()) {
           response->last_committed_scan_valid = true;
           response->last_committed_scan = last_committed_ingress_->scan;
         }
@@ -820,8 +960,18 @@ private:
   std::unique_ptr<tbb::global_control> compute_budget_;
   std::unique_ptr<MappingNavigation> navigation_;
   bool production_{false};
-  bool accepting_{true};
-  rclcpp::Time input_floor_{0, 0, RCL_ROS_TIME};
+  std::atomic<bool> accepting_{true}, stopping_{false};
+  std::atomic<std::int64_t> input_floor_ns_{0};
+  std::shared_ptr<const GeometryWitness> geometry_witness_;
+  std::mutex queue_mutex_;
+  std::deque<GraphCandidate> graph_queue_;
+  rclcpp::CallbackGroup::SharedPtr ingress_group_;
+  std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> ingress_executor_;
+  std::thread ingress_thread_;
+  rclcpp::TimerBase::SharedPtr graph_drain_, qualified_expiry_;
+  rclcpp::Publisher<Qualified>::SharedPtr qualified_publisher_;
+  bool current_valid_{false}, retirement_published_{false};
+  std::uint64_t current_deadline_{0};
   rclcpp::Service<senior_interfaces::srv::MappingGate>::SharedPtr mapping_gate_;
   GraphCommitWatermark graph_commit_;
   std::optional<InFlightScan> in_flight_;

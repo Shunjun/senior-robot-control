@@ -88,7 +88,8 @@ bool same_lifetime(const Receipt & first, const Receipt & latest)
 
 StaticLidarTfIngress::StaticLidarTfIngress(
   rclcpp::Node & node, std::string topic, std::string relay_node,
-  std::string raw_topic, std::string raw_node, std::string base, std::string lidar)
+  std::string raw_topic, std::string raw_node, std::string base, std::string lidar,
+  rclcpp::CallbackGroup::SharedPtr group)
 : node_(node), topic_(std::move(topic)), relay_node_(std::move(relay_node)),
   raw_topic_(std::move(raw_topic)), raw_node_(std::move(raw_node)), base_(std::move(base)),
   lidar_(std::move(lidar))
@@ -100,12 +101,14 @@ StaticLidarTfIngress::StaticLidarTfIngress(
   {
     throw std::invalid_argument("Invalid verified static lidar TF configuration");
   }
+  rclcpp::SubscriptionOptions options;
+  options.callback_group = group;
   subscription_ = node_.create_subscription<Receipt>(
     topic_, rclcpp::QoS(1).reliable().transient_local(),
     [this](Receipt::ConstSharedPtr receipt, const rclcpp::MessageInfo & info) {
       offer(std::move(receipt), info);
-    });
-  timer_ = node_.create_wall_timer(20ms, [this] {poll();});
+    }, options);
+  timer_ = node_.create_wall_timer(20ms, [this] {poll();}, group);
 }
 
 bool StaticLidarTfIngress::current_owners(const Receipt & receipt) const

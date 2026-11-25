@@ -27,6 +27,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/FencedSemanticEvidence.msg"
   "msg/FinalCommand.msg"
   "msg/Keyframe.msg"
+  "msg/QualifiedMappingScan.msg"
+  "msg/CurrentObstacles.msg"
   "msg/RawCaptureHeader.msg"
   "msg/RawImageLayout.msg"
   "msg/RgbdMotionCandidate.msg"

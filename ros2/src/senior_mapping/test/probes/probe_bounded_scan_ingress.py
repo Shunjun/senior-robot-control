@@ -30,8 +30,8 @@ from probe_read_graph import (
 from rclpy.parameter import Parameter
 from rclpy.qos import qos_profile_sensor_data
 from rosgraph_msgs.msg import Clock
-from senior_interfaces.msg import BoundedRawLaserScan
-from senior_interfaces.srv import CaptureGraph, ReadGraph, ReadLoadedGraph
+from senior_interfaces.msg import BoundedRawLaserScan, QualifiedMappingScan
+from senior_interfaces.srv import CaptureGraph, MappingGate, ReadGraph, ReadLoadedGraph
 from sensor_msgs.msg import LaserScan
 from tf2_ros import StaticTransformBroadcaster, TransformBroadcaster
 
@@ -99,7 +99,7 @@ def bounded_scan(scan, received_ros, bridge_gid, raw_gid, sequence):
     return result
 
 
-def arguments(executable, capture_directory, *, use_sim_time=False):
+def arguments(executable, capture_directory, *, use_sim_time=False, production=False):
     result = owned_arguments(executable, capture_directory or "")
     if capture_directory is None:
         index = result.index("capture_directory:=")
@@ -112,10 +112,19 @@ def arguments(executable, capture_directory, *, use_sim_time=False):
             f"use_sim_time:={str(use_sim_time).lower()}",
         ]
     )
+    if production:
+        result.extend(
+            [
+                "-p",
+                "production_session:=true",
+                "-p",
+                "production_boot_id:=00000000-0000-0000-0000-000000000001",
+            ]
+        )
     return result
 
 
-def probe(executable, root, combined):
+def probe(executable, root, combined, geometry_drift=False):
     os.environ["ROS_LOCALHOST_ONLY"] = "1"
     os.environ["ROS_DOMAIN_ID"] = str(secrets.randbelow(12) + (128 if combined else 115))
     staging = root / "staging" if combined else None
@@ -129,7 +138,12 @@ def probe(executable, root, combined):
     try:
         graph = node.create_client(ReadGraph, SERVICE)
         capture = node.create_client(CaptureGraph, CAPTURE_SERVICE)
+        gate = node.create_client(MappingGate, "/senior/slam/mapping_gate")
         saved = None
+        qualified = []
+        node.create_subscription(
+            QualifiedMappingScan, "/senior/slam/qualified_scan", qualified.append, 1
+        )
         raw = node.create_publisher(LaserScan, SCAN, qos_profile_sensor_data)
         publisher = bridge.create_publisher(
             BoundedRawLaserScan, BOUNDED_TOPIC, qos_profile_sensor_data
@@ -154,7 +168,9 @@ def probe(executable, root, combined):
 
         static_tf = StaticTransformBroadcaster(node)
         odom_tf = TransformBroadcaster(node)
-        with candidate(arguments(executable, staging, use_sim_time=True)) as process:
+        with candidate(
+            arguments(executable, staging, use_sim_time=True, production=combined)
+        ) as process:
             end = time.monotonic() + 4
             while clock.get_subscription_count() < 2 and time.monotonic() < end:
                 set_clock(100_000_000_000)
@@ -220,6 +236,15 @@ def probe(executable, root, combined):
             spin_for(node, 0.12)
             assert not read_snapshot(node, graph).graph_commit_sequence
 
+            if combined:
+                assert gate.wait_for_service(timeout_sec=4)
+                enable = MappingGate.Request()
+                enable.boot_id = "00000000-0000-0000-0000-000000000001"
+                enable.accepting = True
+                assert request(node, gate, enable).ok
+                stamp = next_stamp()
+                odom_tf.sendTransform(transform(stamp, ODOM, BASE, 0.0, 0.37))
+                scan = scan_in_room(stamp, 0.0, 0.37)
             valid = bounded_scan(scan, next_stamp(), bridge_gid, raw_gid, 13)
             publisher.publish(valid)
             # Same header, different receipt/body. It must never replace the exact queued scan.
@@ -230,6 +255,48 @@ def probe(executable, root, combined):
             assert committed.last_committed_scan_valid
             assert committed.last_committed_scan == valid.capture
             assert committed.last_committed_keyframe_id == committed.keyframes[0].id
+
+            # The first scan bootstraps the cached native laser. Subsequent scans
+            # at the identical pose must produce facts without another keyframe.
+            # Capture is requested asynchronously: this checks delivery on the
+            # same interval, but is not proof that slow serialization overlapped.
+            if combined:
+                disable = MappingGate.Request()
+                disable.boot_id = committed.boot_id
+                disable.accepting = False
+                assert request(node, gate, disable).ok
+            pending_capture = None
+            if staging is not None:
+                pending_capture = capture.call_async(CaptureGraph.Request())
+            receipts = []
+            for sequence in (15, 16):
+                stamp = next_stamp()
+                odom_tf.sendTransform(transform(stamp, ODOM, BASE, 0.0, 0.37))
+                current = bounded_scan(
+                    scan_in_room(stamp, 0.0, 0.37), stamp, bridge_gid, raw_gid, sequence
+                )
+                receipts.append(current.capture)
+                publisher.publish(current)
+                spin_for(node, 0.12)
+            facts = [row for row in qualified if row.status == row.QUALIFIED]
+            for receipt in receipts:
+                assert any(row.scan.capture == receipt for row in facts), (
+                    "No-keyframe qualified scan was blocked behind graph/capture"
+                )
+            assert read_snapshot(node, graph).graph_commit_sequence == 1
+            if pending_capture is not None:
+                end = time.monotonic() + 5
+                while not pending_capture.done() and time.monotonic() < end:
+                    spin_for(node, 0.02)
+                assert (
+                    pending_capture.done()
+                    and pending_capture.result().status == CaptureGraph.Response.OK
+                )
+                # The existing capture checks below expect an empty destination.
+                import shutil
+
+                for entry in staging.iterdir():
+                    shutil.rmtree(entry) if entry.is_dir() else entry.unlink()
 
             if staging is not None:
                 # A capture is a historical graph cut, not a renewal of scan freshness.
@@ -246,10 +313,29 @@ def probe(executable, root, combined):
                 prefix.parent.rename(root / "saved")
                 saved = root / "saved" / prefix.name, cut
 
+            if geometry_drift:
+                # Cached mount disagrees under the same source and unchanged scan layout.
+                static_tf.sendTransform(transform(next_stamp(), BASE, LASER, 0.25))
+                spin_for(node, 0.08)
+                stamp = next_stamp()
+                odom_tf.sendTransform(transform(stamp, ODOM, BASE, 0.0, 0.37))
+                publisher.publish(
+                    bounded_scan(scan_in_room(stamp, 0.0, 0.37), stamp, bridge_gid, raw_gid, 17)
+                )
+                spin_for(node, 0.12)
+                assert not any(
+                    row.status == row.QUALIFIED and row.scan.capture.sequence == 17
+                    for row in qualified
+                )
+                assert qualified[-1].status == QualifiedMappingScan.RETIRED
+
             # A lost writer breaks exclusivity and revokes the lineage.
             bridge.destroy_publisher(publisher)
             retired = wait_for_graph(node, graph, lambda value: not value.last_committed_scan_valid)
             assert retired.graph_commit_sequence == 1 and retired.keyframes == committed.keyframes
+            spin_for(node, 0.08)
+            assert qualified[-1].status == QualifiedMappingScan.RETIRED
+            assert not qualified[-1].scan.ranges
             if staging is not None:
                 refused = request(node, capture, CaptureGraph.Request())
                 assert refused.status == CaptureGraph.Response.UNAVAILABLE
@@ -276,4 +362,9 @@ def probe(executable, root, combined):
 
 if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as scratch:
-        probe(sys.argv[1], Path(scratch).resolve(), "--capture" in sys.argv[2:])
+        probe(
+            sys.argv[1],
+            Path(scratch).resolve(),
+            "--capture" in sys.argv[2:],
+            "--geometry-drift" in sys.argv[2:],
+        )

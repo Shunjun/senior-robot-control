@@ -34,18 +34,20 @@ bool same_geometry(const Message & lhs, const Message & rhs)
 BoundedScanIngress::BoundedScanIngress(
   rclcpp::Node & node, tf2_ros::Buffer & tf, std::string bounded_topic,
   std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit,
-  StaticLidarTfIngress * static_lidar_tf)
+  StaticLidarTfIngress * static_lidar_tf, rclcpp::CallbackGroup::SharedPtr group)
 : node_(node), tf_(tf), bounded_topic_(std::move(bounded_topic)),
   raw_topic_(std::move(raw_topic)), odom_frame_(std::move(odom_frame)),
   base_frame_(std::move(base_frame)), submit_(std::move(submit)),
   static_lidar_tf_(static_lidar_tf)
 {
+  rclcpp::SubscriptionOptions options;
+  options.callback_group = group;
   subscription_ = node_.create_subscription<Message>(
     bounded_topic_, rclcpp::SensorDataQoS().keep_last(pending_limit),
     [this](Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info) {
       offer(std::move(scan), info);
-    });
-  timer_ = node_.create_wall_timer(20ms, [this] {poll();});
+    }, options);
+  timer_ = node_.create_wall_timer(20ms, [this] {poll();}, group);
 }
 
 bool BoundedScanIngress::observe_clock(std::int64_t now)
@@ -80,7 +82,7 @@ bool BoundedScanIngress::observe_clock(std::int64_t now)
 void BoundedScanIngress::retire_source()
 {
   closed_ = true;
-  pending_.clear();
+  active_.store(false);
 }
 
 bool BoundedScanIngress::current_owner(const Receipt & receipt)
@@ -98,7 +100,10 @@ bool BoundedScanIngress::source_active()
     retire_source();
     return false;
   }
-  return !static_lidar_tf_ || static_lidar_tf_->source_active();
+  const bool active = !static_lidar_tf_ || static_lidar_tf_->source_active();
+  if (static_lidar_tf_ && static_lidar_tf_->retired()) {retire_source();}
+  active_.store(active && !closed_.load());
+  return active;
 }
 
 void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info)
@@ -173,6 +178,8 @@ void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::Messa
 void BoundedScanIngress::poll()
 {
   if (!source_active()) {
+    active_.store(false);
+    if (closed_.load()) {pending_.clear();}
     return;
   }
   const auto now_steady = steady_seconds();

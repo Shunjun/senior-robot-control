@@ -4,13 +4,14 @@ The caller has already verified child boot and static lidar provenance. Neither
 web requests nor arbitrary /map or TF publishers can install a reference here.
 """
 
-import asyncio
 import base64
 import hashlib
 import json
+import time
 from dataclasses import replace
 from typing import Any
 
+from senior_mapping.shared_scan import QualifiedScan, ReferenceBasis, project_hits
 from senior_mapping.workspace import WorkspaceGrid
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef, Pose2D
@@ -20,19 +21,34 @@ class NativeNavigationBridge:
     def __init__(self, node: Any, reference: Any, call: Any) -> None:
         self.node, self.reference, self.call = node, reference, call
         self.boot = ""
+        self.host_boot_id = ""
         self.odom_frame = "odom"
         self._cut: dict[str, Any] | None = None
         self._grid: tuple[int, WorkspaceGrid, Any] | None = None
         self._publisher: Any = None
         self._tf: Any = None
+        self._current_publisher: Any = None
+        self.slot: Any = None
+        self._scan: QualifiedScan | None = None
+        self._last_key: Any = None
+        self._reference_floor: Any = None
+        self._reference_floor_steady_ns = 0
+        self._capture: Any = None
+        self._retired = False
 
     def begin(self, boot: str, odom_frame: str = "odom") -> None:
+        self._scan = self._last_key = self._reference_floor = self._capture = None
+        self._retired = False
+        self._reference_floor_steady_ns = time.monotonic_ns()
         self.odom_frame = odom_frame
         self.boot, self._cut, self._grid = boot, None, None
         if self.reference is not None:
             self.reference.begin(boot)
 
     def withdraw(self) -> None:
+        self.invalidate_current("reference_unavailable")
+        if self.slot is not None:
+            self.slot.retire()
         if self.reference is not None:
             self.reference.withdraw()
 
@@ -135,6 +151,10 @@ class NativeNavigationBridge:
         anchor = next(row for row in cut["anchors"] if row["id"] == cut["keyframe_id"])
         self._prepare_publishers()
         self._publisher.publish(message)
+        previous = (
+            self.reference.grid().map_ref if self.reference.grid() else None,
+            self.reference.map_generation,
+        )
         self.reference.install(
             self.boot,
             replace(grid, map_ref=ref),
@@ -144,25 +164,116 @@ class NativeNavigationBridge:
             Pose2D(*cut["odom"]),
         )
 
-    async def run(self) -> None:
-        boot = self.boot
-        while self.boot == boot:
-            try:
-                result = await self.call("pose", boot_id=boot)
-                if (
-                    not result.ok
-                    or result.boot_id != boot
-                    or not result.static_lidar_tf_receipt_valid
-                ):
-                    self.reference.invalidate_pose()
-                else:
-                    self.reference.observe(
-                        boot, result.capture, Pose2D(result.odom_x, result.odom_y, result.odom_yaw)
-                    )
-                    self._publish_transform(result.capture.stamp)
-            except (DomainError, RuntimeError, ValueError):
-                self.reference.invalidate_pose()
-            await asyncio.sleep(0.05)
+        basis = ReferenceBasis(
+            ref.map_id,
+            ref.reference_revision,
+            generation,
+            cut["sequence"],
+            hashlib.sha256(
+                json.dumps(cut["anchors"], sort_keys=True, separators=(",", ":")).encode()
+            ).hexdigest(),
+            str(anchor["id"]),
+            Pose2D(anchor["x"], anchor["y"], anchor["yaw"]),
+            Pose2D(*cut["odom"]),
+        )
+        changed = previous != (ref, generation)
+        if changed:
+            self._reference_floor = self._last_key
+            self._reference_floor_steady_ns = time.monotonic_ns()
+        if self.slot is not None:
+            self.slot.install_reference(basis, floor_steady_ns=self._reference_floor_steady_ns)
+        if changed:
+            self.invalidate_current("reference_changed")
+
+    def observe_scan(self, scan: QualifiedScan, capture: Any) -> None:
+        if (
+            self._retired
+            or scan.key.backend_boot != self.boot
+            or scan.capture.time.sample_steady_ns <= self._reference_floor_steady_ns
+        ):
+            return
+        if self._last_key is not None and (
+            scan.key.source != self._last_key.source or scan.key.sequence <= self._last_key.sequence
+        ):
+            return
+        self._last_key, self._capture = scan.key, capture
+        if time.monotonic_ns() >= scan.valid_until_steady_ns:
+            self.invalidate_current("expired")
+            return
+        if self.reference is None:
+            self.invalidate_current("reference_unavailable")
+            if self.slot is not None:
+                self.slot.write(scan)
+            return
+        self.reference.observe(self.boot, capture, scan.odom_base)
+        alignment = self.reference.map_to_odom()
+        if alignment is None:
+            self.invalidate_current("reference_unavailable")
+            if self.slot is not None:
+                self.slot.write(scan)
+            return
+        self._scan = scan
+        points = project_hits(scan, alignment)
+        grid = self.reference.grid()
+        covered = grid is not None and all(
+            grid.origin.x <= x < grid.origin.x + grid.width * grid.resolution
+            and grid.origin.y <= y < grid.origin.y + grid.height * grid.resolution
+            for x, y in points
+        )
+        reason = "" if covered else "coverage_pending"
+        if self.slot is not None and self.slot.error is not None:
+            covered, reason = False, "scan_slot_unavailable"
+        self.reference.set_current_coverage(covered, reason or None)
+        self._publish_transform(capture.stamp)
+        self._publish_current(True, reason, points, scan.valid_until_steady_ns)
+        if self.slot is not None:
+            self.slot.write(scan)
+
+    def invalidate_current(self, reason: str, *, retired: bool = False) -> None:
+        self._scan = None
+        self._retired = self._retired or retired
+        if self.reference is not None:
+            self.reference.invalidate_pose()
+            self.reference.set_current_coverage(False, reason)
+        if self.slot is not None:
+            if retired:
+                self.slot.retire()
+            else:
+                self.slot.invalidate(reason)
+        self._publish_current(False, reason, (), 0)
+
+    def check_current(self) -> None:
+        if self._scan is not None and time.monotonic_ns() >= self._scan.valid_until_steady_ns:
+            self.invalidate_current("expired")
+
+    def _publish_current(self, valid: bool, reason: str, points: tuple, deadline: int) -> None:
+        if not self.host_boot_id or not self.boot:
+            return
+        from geometry_msgs.msg import Point32
+        from rclpy.qos import QoSProfile, ReliabilityPolicy
+        from senior_interfaces.msg import CurrentObstacles
+
+        if self._current_publisher is None:
+            self._current_publisher = self.node.create_publisher(
+                CurrentObstacles,
+                "/senior/mapping/current_obstacles",
+                QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
+            )
+        message = CurrentObstacles()
+        message.backend_boot = self.boot
+        message.host_boot_id = self.host_boot_id
+        grid = None if self.reference is None else self.reference.grid()
+        if grid is not None:
+            message.map_id = grid.map_ref.map_id
+            message.reference_revision = grid.map_ref.reference_revision
+            message.map_generation = self.reference.map_generation or ""
+        if self._capture is not None:
+            message.capture = self._capture
+        message.valid, message.reason = valid, reason
+        message.valid_until_steady_ns = deadline
+        message.frame_id = "map"
+        message.points = [Point32(x=float(x), y=float(y), z=0.0) for x, y in points]
+        self._current_publisher.publish(message)
 
     def _publish_transform(self, stamp: Any) -> None:
         if self._tf is None:
@@ -184,6 +295,9 @@ class NativeNavigationBridge:
 
     def close(self) -> None:
         self.withdraw()
+        if self._current_publisher is not None:
+            self.node.destroy_publisher(self._current_publisher)
+            self._current_publisher = None
         if self._publisher is not None:
             self.node.destroy_publisher(self._publisher)
             self._publisher = None

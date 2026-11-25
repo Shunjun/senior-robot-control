@@ -37,6 +37,9 @@ class NativeFixture:
         from senior_localization.live_mapping_reference import LiveMappingReference
 
         self.reference = LiveMappingReference(SimpleNamespace(task_motion_allowed=lambda **_: True))
+        from senior_mapping.navigation_bridge import NativeNavigationBridge
+
+        self.navigation = NativeNavigationBridge(SimpleNamespace(), self.reference, None)
         self.pose_sequence = 0
         self.raster = None
 
@@ -57,7 +60,7 @@ class NativeFixture:
             self.boot, self.sequence = str(uuid.uuid4()), 0
             self.cuts.clear()
             self.pose_sequence = 0
-            self.reference.begin(self.boot)
+            self.navigation.begin(self.boot)
             self.anchors = (
                 json.loads(Path(fields["prefix"] + ".posegraph").read_text())
                 if fields.get("prefix")
@@ -125,8 +128,36 @@ class NativeFixture:
                 raw_gid="synthetic-raw",
                 bridge_gid="synthetic-bridge",
                 sequence=self.pose_sequence,
+                frame_id="laser",
+                reason="",
             )
-            self.reference.observe(self.boot, header, Pose2D(0.0, 0.0, 0.0))
+            from senior_mapping.shared_scan import Beam, QualifiedScan, ScanKey
+            from senior_perception.vision.raw_capture import capture_from_message
+
+            capture = capture_from_message(header)
+            # Synthetic native bytes, real bridge qualification/projection. The
+            # original fixture's 60 half-metre returns fit this installed grid.
+            beams = tuple(
+                Beam(
+                    i,
+                    (0.0, 0.0),
+                    (0.5 * math.cos(-3.14 + i * 6.28 / 60), 0.5 * math.sin(-3.14 + i * 6.28 / 60)),
+                    "hit",
+                )
+                for i in range(60)
+            )
+            self.navigation.observe_scan(
+                QualifiedScan(
+                    ScanKey.of(self.boot, capture),
+                    capture,
+                    "synthetic-geometry",
+                    Pose2D(0.0, 0.0, 0.0),
+                    beams,
+                    now + 500_000_000,
+                    "synthetic-host",
+                ),
+                header,
+            )
             return dict(ok=True)
         if action == "gate":
             return dict(ok=True, sequence=self.sequence)

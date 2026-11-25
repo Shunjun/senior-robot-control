@@ -3,9 +3,11 @@
 from dataclasses import dataclass
 from typing import Literal
 
+# //Compatible: retain original public and old pickle lookup paths as identical aliases.
+from vehicle_core.values import HitKind as HitKind
 from vehicle_core.values import MapRef, Pose2D
+from vehicle_core.values import RangeRay as RangeRay
 
-HitKind = Literal["static", "unknown_static", "person", "moving", "unknown_dynamic"]
 ChangeSource = Literal["geometric_confirmation", "observed_free_space"]
 
 
@@ -25,15 +27,6 @@ class OccupancyThresholds:
     belief_max: float | None = None
     max_age_s: float | None = None
     min_quality: float | None = None
-
-
-@dataclass(frozen=True)
-class RangeRay:
-    angle: float
-    range_m: float
-    valid: bool
-    no_return_free: bool
-    clear_limit_m: float | None
 
 
 @dataclass(frozen=True)

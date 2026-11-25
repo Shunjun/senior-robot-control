@@ -3,6 +3,18 @@
 from dataclasses import dataclass
 from enum import Enum
 from math import isfinite
+from typing import Literal
+
+HitKind = Literal["static", "unknown_static", "person", "moving", "unknown_dynamic"]
+
+
+@dataclass(frozen=True)
+class RangeRay:
+    angle: float
+    range_m: float
+    valid: bool
+    no_return_free: bool
+    clear_limit_m: float | None
 
 
 def _finite(*values: float) -> None:

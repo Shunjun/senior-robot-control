@@ -9,10 +9,9 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from senior_mapping.evidence import HitKind
-
 from senior_perception.vision.depth import GeometryObservation
 from senior_perception.vision.detector import Detection
+from vehicle_core.values import HitKind
 
 _MOVING_LABELS = frozenset({"bicycle", "car", "motorcycle", "bus", "truck", "dog", "cat"})
 

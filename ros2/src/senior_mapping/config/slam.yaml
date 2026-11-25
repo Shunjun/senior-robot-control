@@ -8,6 +8,7 @@ slam_toolbox:
     solver_plugin: senior_mapping/BoundedCeresSolver
     mapping_solver_threads: 1
     mapping_worker_threads: 1
+    qualified_scan_topic: /senior/slam/qualified_scan
     mapping_max_grid_cells: 1048576
     ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
     ceres_preconditioner: SCHUR_JACOBI

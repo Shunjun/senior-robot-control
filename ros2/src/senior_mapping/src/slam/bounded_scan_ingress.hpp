@@ -4,6 +4,7 @@
 #include "laser_geometry.hpp"
 #include <senior_sensor_ingress/sample_time.hpp>
 
+#include <atomic>
 #include <chrono>
 #include <cstdint>
 #include <deque>
@@ -20,7 +21,8 @@ namespace senior_mapping
 {
 class StaticLidarTfIngress;
 
-// All subscription and timer work runs on the owner's single-threaded executor.
+// Mutable receipt state belongs exclusively to the independent serial ingress group.
+// Graph consumers only read active_snapshot() or request terminal retirement.
 class BoundedScanIngress
 {
 public:
@@ -35,10 +37,12 @@ public:
   BoundedScanIngress(
     rclcpp::Node & node, tf2_ros::Buffer & tf, std::string bounded_topic,
     std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit,
-    StaticLidarTfIngress * static_lidar_tf);
+    StaticLidarTfIngress * static_lidar_tf, rclcpp::CallbackGroup::SharedPtr group);
 
   bool source_active();
   void retire_source();
+  bool active_snapshot() const {return active_.load() && !closed_.load();}
+  bool retired_snapshot() const {return closed_.load();}
 
 private:
   using Message = BoundedScan;
@@ -59,7 +63,8 @@ private:
   std::int64_t last_steady_ns_{0};
   std::uint64_t receipt_floor_ns_{0};
   senior_sensor_ingress::time::ClockTracker clock_;
-  bool closed_{false};
+  std::atomic<bool> closed_{false};
+  std::atomic<bool> active_{false};
   rclcpp::Subscription<Message>::SharedPtr subscription_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

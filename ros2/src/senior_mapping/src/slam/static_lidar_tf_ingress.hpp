@@ -12,7 +12,7 @@
 
 namespace senior_mapping
 {
-// All state is owned by the graph's single-threaded executor.
+// All mutable state belongs to the independent serial ingress group.
 class StaticLidarTfIngress
 {
 public:
@@ -20,9 +20,11 @@ public:
 
   StaticLidarTfIngress(
     rclcpp::Node & node, std::string topic, std::string relay_node,
-    std::string raw_topic, std::string raw_node, std::string base, std::string lidar);
+    std::string raw_topic, std::string raw_node, std::string base, std::string lidar,
+    rclcpp::CallbackGroup::SharedPtr group);
 
   bool source_active();
+  bool retired() const {return retired_;}
   bool admits(const senior_interfaces::msg::RawCaptureHeader & scan);
   Receipt::ConstSharedPtr verify_mount(
     const senior_interfaces::msg::RawCaptureHeader & scan, LaserTransform actual);

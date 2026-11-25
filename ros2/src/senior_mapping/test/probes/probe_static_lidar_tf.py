@@ -34,7 +34,12 @@ from probe_read_graph import (
 from rclpy.duration import Duration
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
 from rclpy.serialization import deserialize_message, serialize_message
-from senior_interfaces.msg import BoundedRawLaserScan, BoundedStaticTf, StaticTransformEdge
+from senior_interfaces.msg import (
+    BoundedRawLaserScan,
+    BoundedStaticTf,
+    QualifiedMappingScan,
+    StaticTransformEdge,
+)
 from senior_interfaces.srv import (
     CaptureGraph,
     MappingGate,
@@ -68,6 +73,10 @@ def probe(executable, drift, root):
     tf_source = rclpy.create_node("robot_state_publisher")
     relay = rclpy.create_node("slam_static_lidar_tf_receipt")
     try:
+        qualified = []
+        node.create_subscription(
+            QualifiedMappingScan, "/senior/slam/qualified_scan", qualified.append, 1
+        )
         graph = node.create_client(ReadGraph, SERVICE)
         commits = node.create_client(ReadGraphCommit, COMMIT_SERVICE)
         raw = node.create_publisher(LaserScan, SCAN, qos_profile_sensor_data)
@@ -236,6 +245,11 @@ def probe(executable, drift, root):
             first_receipt = serialize_message(receipt)
             first = commit_next(1, 0.0)
             check_proof(first, first_receipt)
+            publish_scan()
+            spin_for(node, 0.12)
+            assert any(
+                row.status == row.QUALIFIED and row.static_receipt_valid for row in qualified
+            )
             pending = lookup(2)
             assert pending.status == ReadGraphCommit.Response.PENDING
             check_proof(pending)
@@ -298,6 +312,9 @@ def probe(executable, drift, root):
                 witness.publish(receipt)
             state = wait_for_graph(node, graph, lambda value: not value.last_committed_scan_valid)
             assert state.graph_commit_sequence == last_commit
+            spin_for(node, 0.08)
+            assert qualified[-1].status == QualifiedMappingScan.RETIRED
+            qualified_count = sum(row.status == row.QUALIFIED for row in qualified)
             if not drift:
                 retired = request(node, capture, CaptureGraph.Request())
                 assert retired.status == CaptureGraph.Response.UNAVAILABLE
@@ -312,6 +329,7 @@ def probe(executable, drift, root):
             static_tf.sendTransform(transform(node.get_clock().now().to_msg(), BASE, LASER, 0.24))
             publish_scan(x=1.0)
             spin_for(node, 0.12)
+            assert sum(row.status == row.QUALIFIED for row in qualified) == qualified_count
             unavailable = lookup()
             assert unavailable.status == ReadGraphCommit.Response.UNAVAILABLE
             check_proof(unavailable)

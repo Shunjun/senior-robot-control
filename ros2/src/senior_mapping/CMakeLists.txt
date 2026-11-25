@@ -18,6 +18,7 @@ find_package(rclcpp REQUIRED)
 find_package(senior_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(slam_toolbox 2.6.10 EXACT REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(TBB REQUIRED)
@@ -46,7 +47,7 @@ add_executable(slam_graph_node
   src/slam/slam_graph_node.cpp src/slam/staged_graph.cpp src/slam/native_capture.cpp src/slam/bounded_scan_ingress.cpp
   src/slam/static_lidar_tf_ingress.cpp)
 target_compile_features(slam_graph_node PRIVATE cxx_std_17)
-ament_target_dependencies(slam_graph_node rclcpp senior_interfaces sensor_msgs nav_msgs slam_toolbox tf2_ros senior_sensor_ingress)
+ament_target_dependencies(slam_graph_node rclcpp senior_interfaces sensor_msgs nav_msgs geometry_msgs slam_toolbox tf2_ros senior_sensor_ingress)
 target_link_libraries(slam_graph_node
   "${SLAM_TOOLBOX_ASYNC_LIBRARY}"
   "${SLAM_TOOLBOX_COMMON_LIBRARY}"
@@ -145,6 +146,13 @@ if(BUILD_TESTING)
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_bounded_scan_ingress.py"
       "$<TARGET_FILE:slam_graph_node>"
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60
+  )
+  ament_add_test(bounded_scan_geometry_runtime
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_bounded_scan_ingress.py"
+      "$<TARGET_FILE:slam_graph_node>" --geometry-drift
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 60
   )

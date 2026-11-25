@@ -11,9 +11,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from senior_mapping.evidence import RangeRay
-
 from senior_perception.vision.synchronizer import AlignedRgbdFrame, DepthFrame
+from vehicle_core.values import RangeRay
 
 ColumnStatus = Literal["hit", "no_obstacle", "invalid"]
 

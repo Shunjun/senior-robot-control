@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from senior_mapping.navigation_bridge import NativeNavigationBridge
+from senior_mapping.shared_scan import LatestScanSlot, decode_qualified_scan
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.lifecycle_events import ResourceProcesses
 
@@ -33,7 +34,14 @@ class RosMappingBackend:
         self._transfer = tempfile.TemporaryDirectory(prefix="senior-map-", dir=ram)
         self._lock = asyncio.Lock()
         self._navigation = NativeNavigationBridge(node, reference, self._call)
-        self._pose_task: asyncio.Task[None] | None = None
+        self._scan_subscription = self._scan_timer = None
+        self._scan_accepting = False
+        self._qualified_gid = None
+        self._learning_client = None
+        self._scan_slot = None
+        self._host_boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        self._navigation.host_boot_id = self._host_boot_id
+        self._register_qualified_receipt()
 
     def _prepare_services(self) -> None:
         if self._services:
@@ -58,6 +66,7 @@ class RosMappingBackend:
                 self.node.create_client(ReadMappingGrid, "/senior/slam/read_mapping_grid"),
                 ReadMappingGrid,
             ),
+            # //Compatible: retained diagnostic service; no production freshness polling.
             "pose": (
                 self.node.create_client(ReadMappingPose, "/senior/slam/read_mapping_pose"),
                 ReadMappingPose,
@@ -255,25 +264,137 @@ class RosMappingBackend:
                 raise DomainError(ErrorCode.CONFLICT, "SLAM did not start a fresh owned graph")
             self._boot = graph.boot_id
             self._navigation.begin(self._boot, graph.odom_frame)
-            if self._navigation.reference is not None:
-                self._pose_task = asyncio.create_task(self._navigation.run())
+            self._start_scan_channel()
             return {
                 "ok": True,
                 "boot_id": self._boot,
                 "odom_frame": graph.odom_frame,
                 "map_frame": graph.map_frame,
                 "loaded": await self._transfer_cut(self._graph(graph)),
+                "qualified_scan_path": str(self._scan_slot.path),
+                "qualified_scan_nonce": self._scan_slot.nonce,
+                "qualified_scan_schema": 1,
+                "host_boot_id": self._host_boot_id,
             }
         except BaseException:
             await self._stop()
             raise
 
+    def _register_qualified_receipt(self) -> None:
+        # //Compatible: Humble rclpy has no per-message GID. Reuse the node's
+        # original authenticated native receipt group, registered before first spin.
+        try:
+            from senior_interfaces.msg import QualifiedMappingScan
+        except ImportError:
+            # //Compatible: older installs keep control available, but cannot start mapping.
+            return
+        from senior_sensor_ingress.native_receipt import subscribe
+
+        self._scan_subscription = subscribe(
+            self.node,
+            QualifiedMappingScan,
+            "/senior/slam/qualified_scan",
+            self._on_qualified_scan,
+            writer="slam_toolbox",
+            qos="reliable",
+            invalidate=self._invalidate_qualified,
+        )
+
+    def _invalidate_qualified(self) -> None:
+        if self._scan_accepting:
+            self._navigation.invalidate_current("qualified_receipt_unavailable")
+
+    def _start_scan_channel(self) -> None:
+        from senior_perception.learning_client import LearningClient
+
+        from vehicle_core.config import DeviceProfile
+
+        if self._scan_subscription is None:
+            raise DomainError(ErrorCode.UNAVAILABLE, "qualified scan interfaces need a rebuild")
+        self._scan_profile = DeviceProfile()
+        claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
+        if claim:
+            self._learning_client = LearningClient(Path(claim), read_only=True)
+        self._scan_slot = LatestScanSlot(
+            Path(self._transfer.name) / "latest-scan.json",
+            nonce=str(uuid.uuid4()),
+            backend_boot=self._boot,
+            host_boot_id=self._host_boot_id,
+        )
+        self._navigation.slot = self._scan_slot
+        self._qualified_gid = None
+        self._scan_accepting = True
+        self._scan_timer = self.node.create_timer(0.05, self._poll_scan_channel)
+
+    def _qualified_owner(self) -> bytes | None:
+        endpoints = self.node.get_publishers_info_by_topic("/senior/slam/qualified_scan")
+        if len(endpoints) != 1:
+            return None
+        owner = endpoints[0]
+        if (
+            owner.node_name != "slam_toolbox"
+            or owner.node_namespace != "/"
+            or owner.topic_type != "senior_interfaces/msg/QualifiedMappingScan"
+        ):
+            return None
+        gid = bytes(owner.endpoint_gid)
+        if self._qualified_gid is not None and self._qualified_gid != gid:
+            return None
+        return gid
+
+    def _on_qualified_scan(self, message: Any, info: Any) -> None:
+        if not self._scan_accepting or message.backend_boot != self._boot:
+            return
+        owner = self._qualified_owner()
+        if (
+            owner is None
+            or not isinstance(info, dict)
+            or info.get("native_receipt_authenticated") is not True
+            or bytes(info.get("publisher_gid", b"")) != owner
+        ):
+            return
+        self._qualified_gid = owner
+        if message.status != message.QUALIFIED:
+            self._navigation.invalidate_current(
+                message.reason or "native_invalid", retired=message.status == message.RETIRED
+            )
+            return
+        try:
+            view = None if self._learning_client is None else self._learning_client.view
+            scan = decode_qualified_scan(
+                message, self._scan_profile, learning_view=view, host_boot_id=self._host_boot_id
+            )
+            self._navigation.observe_scan(scan, message.scan.capture)
+        except ValueError:
+            self._navigation.invalidate_current("scan_decode_invalid")
+
+    def _poll_scan_channel(self) -> None:
+        if not self._scan_accepting:
+            return
+        if self._learning_client is not None:
+            self._learning_client.poll()
+        owner = self._qualified_owner()
+        if self._qualified_gid is not None and owner is None:
+            self._navigation.invalidate_current("qualified_owner_changed", retired=True)
+        self._navigation.check_current()
+        if self._scan_slot is not None and self._scan_slot.error is not None:
+            if self._navigation.reference is not None:
+                self._navigation.reference.set_current_coverage(False, "scan_slot_unavailable")
+
     async def _stop(self) -> None:
+        self._scan_accepting = False
         self._navigation.withdraw()
-        if self._pose_task is not None:
-            self._pose_task.cancel()
-            await asyncio.gather(self._pose_task, return_exceptions=True)
-            self._pose_task = None
+        # The shared receipt group belongs to the node and is closed by its context;
+        # the accepting fence above disables only this mapping session's input.
+        if self._scan_timer is not None:
+            self.node.destroy_timer(self._scan_timer)
+            self._scan_timer = None
+        if self._learning_client is not None:
+            self._learning_client.close()
+            self._learning_client = None
+        if self._scan_slot is not None:
+            await asyncio.to_thread(self._scan_slot.close)
+            self._scan_slot = self._navigation.slot = None
         for child in (self._child, self._relay):
             if child is None:
                 continue

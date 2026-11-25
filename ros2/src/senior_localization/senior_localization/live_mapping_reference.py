@@ -32,6 +32,8 @@ class LiveMappingReference:
         self._source: tuple[Any, ...] | None = None
         self._latest: tuple[SampleTime, Pose2D, int] | None = None
         self._available = False
+        self._coverage = False
+        self.coverage_reason = "current_scan_unavailable"
         self._map_owner: Callable[[], bool] | None = None
 
     def begin(self, boot: str) -> None:
@@ -43,9 +45,15 @@ class LiveMappingReference:
         self._grid = self._map_basis = self._odom_basis = None
         self._generation = None
         self._available = False
+        self.set_current_coverage(False, "reference_unavailable")
 
     def invalidate_pose(self) -> None:
         self._available = False
+        self.set_current_coverage(False, "current_scan_unavailable")
+
+    def set_current_coverage(self, valid: bool, reason: str | None = None) -> None:
+        self._coverage = valid
+        self.coverage_reason = reason
 
     def install(
         self,
@@ -90,7 +98,12 @@ class LiveMappingReference:
             header.clock_generation,
         )
         if self._latest is not None and header.sequence <= self._latest[2]:
-            self._available = (sample, odometry, header.sequence) == self._latest
+            # A delayed receipt has no authority over a newer accepted sample.
+            if (
+                header.sequence == self._latest[2]
+                and (sample, odometry, header.sequence) != self._latest
+            ):
+                self.invalidate_pose()
             return
         self._source = source
         self._latest = (sample, odometry, header.sequence)
@@ -147,6 +160,7 @@ class LiveMappingReference:
             and ref == self._grid.map_ref
             and generation == self._generation
             and self.pose() is not None
+            and self._coverage
         )
 
     def state(
@@ -170,7 +184,8 @@ class LiveMappingReference:
             "map_generation": self._generation if grid else None,
             "localization_generation": self._generation if pose else None,
             "map_grid_id": grid.grid_id if grid else None,
-            "navigation_ready": navigation_ready and pose is not None,
+            "navigation_ready": navigation_ready and pose is not None and self._coverage,
+            "current_coverage_reason": self.coverage_reason,
             "robot_pose": None if pose is None else {"x": pose.x, "y": pose.y, "yaw": pose.yaw},
             "scan_points": [],
         }

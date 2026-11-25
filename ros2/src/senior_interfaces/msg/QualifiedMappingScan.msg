@@ -1,0 +1,13 @@
+uint8 INVALID=0
+uint8 QUALIFIED=1
+uint8 RETIRED=2
+string<=36 backend_boot
+uint8 status
+string<=64 reason
+senior_interfaces/BoundedRawLaserScan scan
+senior_interfaces/BoundedStaticTf static_lidar_tf_receipt
+bool static_receipt_valid
+geometry_msgs/Pose2D odom_base
+geometry_msgs/Transform base_lidar
+int8 raw_ray_angle_sign
+string<=128 geometry_id

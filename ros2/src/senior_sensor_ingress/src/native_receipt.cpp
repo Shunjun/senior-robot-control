@@ -28,6 +28,7 @@
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "senior_interfaces/msg/scan_motion.hpp"
+#include "senior_interfaces/msg/qualified_mapping_scan.hpp"
 #include "senior_interfaces/msg/drive_execution_feedback.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -73,6 +74,8 @@ class NativeReceipt : public rclcpp::Node {
       else if (type == "sensor_msgs/msg/NavSatFix") add<sensor_msgs::msg::NavSatFix>(id, qos);
       else if (type == "sensor_msgs/msg/Imu") add<sensor_msgs::msg::Imu>(id, qos);
       else if (type == "senior_interfaces/msg/ScanMotion") add<senior_interfaces::msg::ScanMotion>(id, qos);
+      else if (type == "senior_interfaces/msg/QualifiedMappingScan")
+        add<senior_interfaces::msg::QualifiedMappingScan>(id, qos);
       else if (type == "senior_interfaces/msg/DriveExecutionFeedback")
         add<senior_interfaces::msg::DriveExecutionFeedback>(id, qos);
       else if (type == "std_msgs/msg/String") add<std_msgs::msg::String>(id, qos);
@@ -172,6 +175,10 @@ class NativeReceipt : public rclcpp::Node {
   static bool bounded(const senior_interfaces::msg::ScanMotion &m) {
     return m.header.frame_id.size() <= 128 && m.source_epoch.size() <= 128 && m.reason.size() <= 512;
   }
+  static bool bounded(const senior_interfaces::msg::QualifiedMappingScan &m) {
+    return m.scan.ranges.size() <= 2048 && m.scan.intensities.size() <= 2048 &&
+      m.static_lidar_tf_receipt.edges.size() <= 32 && m.geometry_id.size() <= 128;
+  }
   static bool bounded(const senior_interfaces::msg::DriveExecutionFeedback &m) {
     return m.robot_id.size() <= 128 && m.owner_boot_id.size() <= 128 &&
       m.session_id.size() <= 128 && m.request_id.size() <= 128 &&
@@ -233,6 +240,15 @@ class NativeReceipt : public rclcpp::Node {
     if (!c.valid || c.clock_generation == 0 || c.stamp != m.header.stamp ||
         m.first_capture.stamp != m.interval_start)
       throw std::invalid_argument("invalid derived capture");
+    return senior_sensor_ingress::time::SampleTime{stamp_ns(c.stamp), stamp_ns(c.received_ros),
+      c.received_steady_ns, c.sample_steady_ns, c.clock_generation};
+  }
+  static std::optional<senior_sensor_ingress::time::SampleTime> derived_sample(
+      const senior_interfaces::msg::QualifiedMappingScan &m) {
+    if (m.status != m.QUALIFIED) return std::nullopt;
+    const auto &c = m.scan.capture;
+    if (!c.valid || c.clock_generation == 0 || !m.static_receipt_valid)
+      throw std::invalid_argument("invalid qualified mapping capture");
     return senior_sensor_ingress::time::SampleTime{stamp_ns(c.stamp), stamp_ns(c.received_ros),
       c.received_steady_ns, c.sample_steady_ns, c.clock_generation};
   }
