@@ -131,13 +131,14 @@ interface FormProps {
   data: SettingsData;
   busy: boolean;
   enabled: boolean;
+  refreshControls: ReactElement;
   submit: (
     group: SettingsGroup,
     values: DrivingSettings | LoggingSettings,
     restore: boolean,
   ) => void;
 }
-function DrivingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
+function DrivingForm({ data, busy, enabled, submit, refreshControls }: FormProps): ReactElement {
   const unit = useSpeedUnit();
   const fields = FIELDS.map((f) =>
     f.unit === "km/h" ? { ...f, scale: speedScale(unit), unit } : f,
@@ -169,154 +170,162 @@ function DrivingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
     submit("driving", values, restore);
   }
   return (
-    <fieldset disabled={!enabled || busy}>
-      <legend className={ui.srOnly}>
-        驾驶设置 · 配置修订号 {data.snapshot.driving_version}
-      </legend>
-      <div className={ui.fields}>
-        {fields.map((f) => (
-          <label key={f.key}>
-            {f.label}（{f.unit}）
-            <input
-              aria-label={f.label}
-              type="number"
-              step="any"
-              min={data.capabilities.driving_minimum[f.key] * f.scale}
-              max={data.capabilities.driving_maximum[f.key] * f.scale}
-              value={
-                draft[f.key] === ""
-                  ? ""
-                  : Number((Number(draft[f.key]) * f.scale).toPrecision(12))
-              }
+    <>
+      <fieldset disabled={!enabled || busy}>
+        <legend className={ui.srOnly}>
+          驾驶设置 · 配置修订号 {data.snapshot.driving_version}
+        </legend>
+        <div className={ui.fields}>
+          {fields.map((f) => (
+            <label key={f.key}>
+              {f.label}（{f.unit}）
+              <input
+                aria-label={f.label}
+                type="number"
+                step="any"
+                min={data.capabilities.driving_minimum[f.key] * f.scale}
+                max={data.capabilities.driving_maximum[f.key] * f.scale}
+                value={
+                  draft[f.key] === ""
+                    ? ""
+                    : Number((Number(draft[f.key]) * f.scale).toPrecision(12))
+                }
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    [f.key]:
+                      e.target.value === ""
+                        ? ""
+                        : String(Number(e.target.value) / f.scale),
+                  })
+                }
+              />
+            </label>
+          ))}
+        </div>
+        <details className={ui.configDetails}>
+          <summary>生效值、范围与操控说明</summary>
+          {fields.map((f) => (
+            <p key={f.key}>
+              {f.label} · 已保存{" "}
+              {(data.snapshot.driving[f.key] * f.scale).toFixed(2)} {f.unit} ·
+              默认{" "}
+              {(data.capabilities.driving_defaults[f.key] * f.scale).toFixed(2)} ·
+              范围{" "}
+              {(data.capabilities.driving_minimum[f.key] * f.scale).toFixed(2)}–
+              {(data.capabilities.driving_maximum[f.key] * f.scale).toFixed(2)}
+            </p>
+          ))}
+          <p>
+            手动退化模式按摇杆百分比映射已保存上限；实际满杆速度仍受当前档位、倒车和正常车体/轮能力约束，遇障碍会进一步限速。
+          </p>
+        </details>
+        {validation && <p role="alert">{validation}</p>}
+        {!data.can_apply_driving && (
+          <p>车端尚未允许修改驾驶参数，请先松杆、暂停任务并停稳。</p>
+        )}
+      </fieldset>
+      <div className={`${ui.actions} items-center`}>
+        <Button variant="primary" disabled={!enabled || busy || !data.can_apply_driving} onClick={() => save(false)}>
+          保存驾驶设置
+        </Button>
+        <Button className="max-[460.001px]:order-3 max-[460.001px]:basis-full" disabled={!enabled || busy || !data.can_apply_driving} onClick={() => save(true)}>
+          恢复驾驶默认值
+        </Button>
+        {refreshControls}
+      </div>
+    </>
+  );
+}
+function LoggingForm({ data, busy, enabled, submit, refreshControls }: FormProps): ReactElement {
+  const [draft, setDraft] = useState(data.snapshot.logging);
+  return (
+    <>
+      <fieldset disabled={!enabled || busy}>
+        <legend className={ui.srOnly}>
+          日志设置 · 配置修订号 {data.snapshot.logging_version}
+        </legend>
+        <div className={ui.fields}>
+          <label>
+            常规日志级别
+            <select
+              value={draft.level}
               onChange={(e) =>
                 setDraft({
                   ...draft,
-                  [f.key]:
-                    e.target.value === ""
-                      ? ""
-                      : String(Number(e.target.value) / f.scale),
+                  level: e.target.value as LoggingSettings["level"],
+                })
+              }
+            >
+              {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map((level) => (
+                <option key={level}>{level}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            保留时间（小时）
+            <input
+              type="number"
+              min="1"
+              max="720"
+              value={draft.retention_seconds / 3600}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  retention_seconds: Number(e.target.value) * 3600,
                 })
               }
             />
+            <small>允许 1 小时–30 天，默认 7 天</small>
           </label>
-        ))}
-      </div>
-      <details className={ui.configDetails}>
-        <summary>生效值、范围与操控说明</summary>
-        {fields.map((f) => (
-          <p key={f.key}>
-            {f.label} · 已保存{" "}
-            {(data.snapshot.driving[f.key] * f.scale).toFixed(2)} {f.unit} ·
-            默认{" "}
-            {(data.capabilities.driving_defaults[f.key] * f.scale).toFixed(2)} ·
-            范围{" "}
-            {(data.capabilities.driving_minimum[f.key] * f.scale).toFixed(2)}–
-            {(data.capabilities.driving_maximum[f.key] * f.scale).toFixed(2)}
-          </p>
-        ))}
-        <p>
-          手动退化模式按摇杆百分比映射已保存上限；实际满杆速度仍受当前档位、倒车和正常车体/轮能力约束，遇障碍会进一步限速。
-        </p>
-      </details>
-      <div className={ui.actions}>
-        <Button variant="primary" disabled={!data.can_apply_driving} onClick={() => save(false)}>
-          保存驾驶设置
-        </Button>
-        <Button disabled={!data.can_apply_driving} onClick={() => save(true)}>
-          恢复驾驶默认值
-        </Button>
-      </div>
-      {validation && <p role="alert">{validation}</p>}
-      {!data.can_apply_driving && (
-        <p>车端尚未允许修改驾驶参数，请先松杆、暂停任务并停稳。</p>
-      )}
-    </fieldset>
-  );
-}
-function LoggingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
-  const [draft, setDraft] = useState(data.snapshot.logging);
-  return (
-    <fieldset disabled={!enabled || busy}>
-      <legend className={ui.srOnly}>
-        日志设置 · 配置修订号 {data.snapshot.logging_version}
-      </legend>
-      <div className={ui.fields}>
-        <label>
-          常规日志级别
-          <select
-            value={draft.level}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                level: e.target.value as LoggingSettings["level"],
-              })
-            }
-          >
-            {["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"].map((level) => (
-              <option key={level}>{level}</option>
-            ))}
-          </select>
-        </label>
-        <label>
-          保留时间（小时）
-          <input
-            type="number"
-            min="1"
-            max="720"
-            value={draft.retention_seconds / 3600}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                retention_seconds: Number(e.target.value) * 3600,
-              })
-            }
-          />
-          <small>允许 1 小时–30 天，默认 7 天</small>
-        </label>
-        <label>
-          自动恢复时长（秒）
-          <input
-            type="number"
-            min="60"
-            max="3600"
-            value={draft.debug_restore_seconds}
-            onChange={(e) =>
-              setDraft({
-                ...draft,
-                debug_restore_seconds: Number(e.target.value),
-              })
-            }
-          />
-          <small>允许 60–3600 秒，默认 300 秒</small>
-        </label>
-        <div className={ui.check}>
-          <Switch
-            label="临时调试日志"
-            checked={draft.debug_enabled}
-            onChange={(debug_enabled) => setDraft({ ...draft, debug_enabled })}
-          />
+          <label>
+            自动恢复时长（秒）
+            <input
+              type="number"
+              min="60"
+              max="3600"
+              value={draft.debug_restore_seconds}
+              onChange={(e) =>
+                setDraft({
+                  ...draft,
+                  debug_restore_seconds: Number(e.target.value),
+                })
+              }
+            />
+            <small>允许 60–3600 秒，默认 300 秒</small>
+          </label>
+          <div className={ui.check}>
+            <Switch
+              label="临时调试日志"
+              checked={draft.debug_enabled}
+              onChange={(debug_enabled) => setDraft({ ...draft, debug_enabled })}
+            />
+          </div>
         </div>
-      </div>
-      <p>运行中可修改。自动恢复由车端负责，网页断开仍会恢复原级别。</p>
-      {data.snapshot.debug_deadline_utc !== null && (
-        <p>
-          当前恢复截止：
-          {new Date(data.snapshot.debug_deadline_utc * 1000).toLocaleString()}
-        </p>
-      )}
-      <div className={ui.actions}>
-        <Button variant="primary" onClick={() => submit("logging", draft, false)}>
+        <p>运行中可修改。自动恢复由车端负责，网页断开仍会恢复原级别。</p>
+        {data.snapshot.debug_deadline_utc !== null && (
+          <p>
+            当前恢复截止：
+            {new Date(data.snapshot.debug_deadline_utc * 1000).toLocaleString()}
+          </p>
+        )}
+      </fieldset>
+      <div className={`${ui.actions} items-center`}>
+        <Button variant="primary" disabled={!enabled || busy} onClick={() => submit("logging", draft, false)}>
           保存日志设置
         </Button>
         <Button
+          className="max-[460.001px]:order-3 max-[460.001px]:basis-full"
+          disabled={!enabled || busy}
           onClick={() =>
             submit("logging", data.capabilities.logging_defaults, true)
           }
         >
           恢复日志默认值
         </Button>
+        {refreshControls}
       </div>
-    </fieldset>
+    </>
   );
 }
 export const VehicleSettings = memo(function VehicleSettings({
@@ -447,16 +456,14 @@ export const VehicleSettings = memo(function VehicleSettings({
     void send(request);
   }
   const refreshControls = (
-    <footer className="mt-5 flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-line pt-4">
-      <Button
-        className="ml-auto shrink-0"
-        disabled={!available || busy !== null}
-        onClick={() => void refresh()}
-      >
-        <RefreshCw aria-hidden="true" />
-        刷新配置
-      </Button>
-    </footer>
+    <Button
+      className="ml-auto shrink-0"
+      disabled={!available || busy !== null}
+      onClick={() => void refresh()}
+    >
+      <RefreshCw aria-hidden="true" />
+      刷新配置
+    </Button>
   );
   return (
     <section className={ui.card} aria-label="车辆设置">
@@ -525,12 +532,13 @@ export const VehicleSettings = memo(function VehicleSettings({
                 <DrivingForm
                   key={`driving-${saved.driving}`}
                   data={data}
+                  refreshControls={refreshControls}
                   busy={busy !== null || unknown !== null}
                   enabled={available}
                   submit={submit}
                 />
               )}
-              {refreshControls}
+              {!data && <div className={ui.actions}>{refreshControls}</div>}
             </div>
             <div hidden={category !== "logging"}>
               <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
@@ -545,12 +553,13 @@ export const VehicleSettings = memo(function VehicleSettings({
                 <LoggingForm
                   key={`logging-${saved.logging}`}
                   data={data}
+                  refreshControls={refreshControls}
                   busy={busy !== null || unknown !== null}
                   enabled={available}
                   submit={submit}
                 />
               )}
-              {refreshControls}
+              {!data && <div className={ui.actions}>{refreshControls}</div>}
             </div>
           </div>
           <section hidden={category !== "camera"} className={ui.section}>
@@ -570,7 +579,7 @@ export const VehicleSettings = memo(function VehicleSettings({
               </label>
             </div>
             <p>暂未实现：画质参数写入。</p>
-            {refreshControls}
+            <div className={ui.actions}>{refreshControls}</div>
           </section>
           <section
             hidden={category !== "performance"}
@@ -593,7 +602,7 @@ export const VehicleSettings = memo(function VehicleSettings({
                 {...(port ? { port } : {})}
               />
             </details>
-            {refreshControls}
+            <div className={ui.actions}>{refreshControls}</div>
           </section>
         </div>
       </div>
