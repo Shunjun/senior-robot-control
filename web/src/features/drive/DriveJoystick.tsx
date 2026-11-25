@@ -6,7 +6,7 @@ import {
   type PointerEvent,
   type KeyboardEvent,
 } from "react";
-import { Move } from "lucide-react";
+import { Grip } from "lucide-react";
 import type { ReleaseReason } from "./Joystick";
 
 // Complete utility strings keep the finite presentation states visible to Tailwind.
@@ -213,7 +213,7 @@ export function DriveJoystick({
             transform: `translate(${-value.turn * 110}%,${-value.linear * 110}%)`,
           }}
         >
-          <Move size={24} />
+          <Grip size={24} />
         </span>
       </div>
       <p id="drive-stick-hint" className={ui.quiet}>
