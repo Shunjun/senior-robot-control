@@ -15,6 +15,7 @@ interface VehicleToolsProps {
 export function VehicleTools({
   port,
   page = "control",
+  onBack,
   cameraOn = false,
   onCameraChange,
 }: VehicleToolsProps): ReactElement {
@@ -23,6 +24,7 @@ export function VehicleTools({
     <>
       <div hidden={page !== "settings"}>
         <VehicleSettings
+          onBack={onBack}
           cameraOn={cameraOn}
           onCameraChange={onCameraChange}
           {...(port ? { port } : {})}
@@ -35,6 +37,7 @@ export function VehicleTools({
       </div>
       <div hidden={page !== "logs"}>
         <VehicleLogs
+          onBack={onBack}
           port={port?.logs ?? null}
           enabled={
             view.available &&

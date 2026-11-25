@@ -1,6 +1,16 @@
 import { useEffect, useLayoutEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactElement } from "react";
 
-import styles from "./Drive.module.css";
+
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  stickBox: "grid gap-1.5",
+  stick: "relative touch-none select-none rounded-xl border border-line bg-stick",
+  stickVertical: "w-[110px] h-[190px]",
+  stickHorizontal: "w-[190px] h-[110px]",
+  track: "absolute inset-3 rounded-md border border-line",
+  thumb: "absolute size-12 left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-amber",
+  stickHint: "text-[12px] text-ink-dim",
+} as const;
 
 /** Why a stick let go. The drive view passes it on as the reason for the stop. */
 export type ReleaseReason = "release" | "cancel" | "blur" | "hidden";
@@ -158,14 +168,14 @@ export function Joystick({
 
   const offset = `${50 - value * 50}%`;
   return (
-    <div className={styles.stickBox}>
+    <div className={ui.stickBox}>
       <div
         role="group"
         aria-label={label}
         aria-describedby={hintId}
         aria-disabled={disabled}
         tabIndex={0}
-        className={`${styles.stick} ${axis === "vertical" ? styles.stickVertical : styles.stickHorizontal}`}
+        className={`${ui.stick} ${axis === "vertical" ? ui.stickVertical : ui.stickHorizontal}`}
         data-value={value.toFixed(2)}
         data-held={value !== 0}
         onPointerDown={onPointerDown}
@@ -179,14 +189,14 @@ export function Joystick({
         onKeyUp={onKeyUp}
         onBlur={() => letGo("blur")}
       >
-        <span aria-hidden="true" className={styles.track} />
+        <span aria-hidden="true" className={ui.track} />
         <span
           aria-hidden="true"
-          className={styles.thumb}
+          className={ui.thumb}
           style={axis === "vertical" ? { top: offset } : { left: offset }}
         />
       </div>
-      <p id={hintId} className={styles.stickHint}>
+      <p id={hintId} className={ui.stickHint}>
         {hint}
       </p>
     </div>

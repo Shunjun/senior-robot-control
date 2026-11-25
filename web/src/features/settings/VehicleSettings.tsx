@@ -1,3 +1,4 @@
+import { newId } from "../../ids";
 import { memo, useEffect, useRef, useState, type ReactElement } from "react";
 import { validateSettingsRequest } from "../../api/vehicleState";
 import type {
@@ -11,12 +12,76 @@ import type {
 import { useSpeedUnit, speedScale } from "../../display/speedUnits";
 import { Switch } from "../../components/ui/Switch";
 import { VehicleStateView } from "../devices/VehicleStateView";
-import styles from "./Settings.module.css";
+import { Button } from "../../components/ui/Button";
+
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  srOnly: [
+    "settings-sr-only absolute w-[1px] h-[1px] overflow-hidden [clip-path:inset(50%)]"
+  ].join(" "),
+  fields: [
+    "settings-fields mt-4.5 grid grid-cols-[1fr_1fr] gap-4 [&_label]:text-[11px] [&_label]:flex [&_label]:flex-col",
+    "[&_label]:gap-[7px] [&_label]:text-field [&_input]:w-full [&_input]:pt-2.5 [&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:bg-none",
+    "[&_input]:bg-input [&_input]:border [&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input [&_input]:text-input-ink [&_input]:min-w-0",
+    "[&_select]:w-full [&_select]:pt-2.5 [&_select]:pr-2.5 [&_select]:pb-2.5 [&_select]:pl-2.5 [&_select]:bg-none [&_select]:bg-input [&_select]:border",
+    "[&_select]:border-solid [&_select]:border-login-input-border-color [&_select]:rounded-input [&_select]:text-input-ink [&_select]:min-w-0 [&_small]:text-ink-dim [&_small]:text-[10px]",
+    "[&_.settings-check]:flex-row [&_.settings-check]:items-center max-[460.001px]:grid-cols-[1fr]"
+  ].join(" "),
+  configDetails: [
+    "settings-config-details mt-3.5 text-muted text-[10px] [&_summary]:cursor-pointer"
+  ].join(" "),
+  actions: [
+    "settings-actions flex gap-2 flex-wrap mt-5.5 ",
+    ""
+  ].join(" "),
+  check: [
+    "settings-check self-center [&>button]:w-full [&>button]:justify-between"
+  ].join(" "),
+  card: [
+    "settings-card absolute inset-0 overflow-auto pt-7 pr-7 pb-7 pl-7",
+    "bg-none bg-full-view min-w-0 z-[20] [&>header]:flex [&>header]:items-center [&>header]:justify-between [&>header]:gap-3",
+    "[&>header]:mb-6 [&_h1]:text-[23px] [&_h1]:font-[450] [&_h1]:mt-0 [&_h1]:mr-0 [&_h1]:mb-2 [&_h1]:ml-0 [&_h2]:text-[16px]",
+    "[&_h2]:font-medium [&_h2]:mt-0 [&_h2]:mr-0 [&_h2]:mb-0 [&_h2]:ml-0 [&_p]:text-[11px] [&_p]:text-ink-dim [&_p]:leading-[1.8]",
+    "[&_button:not([aria-busy])]:pt-2 [&_button:not([aria-busy])]:pr-3 [&_button:not([aria-busy])]:pb-2 [&_button:not([aria-busy])]:pl-3 [&_button:not([aria-busy])]:border [&_button:not([aria-busy])]:border-solid [&_button:not([aria-busy])]:border-line [&_button:not([aria-busy])]:rounded-control",
+    "[&_button:not([aria-busy])]:bg-none [&_button:not([aria-busy])]:bg-control [&_button:not([aria-busy])]:text-ink [&_button:not([aria-busy])]:cursor-pointer [&_button:not([aria-busy])]:text-[11px] [&&_.settings-nav_button]:text-left [&&_.settings-nav_button]:border-0 [&&_.settings-nav_button]:border-none",
+    "[&&_.settings-nav_button]:border-current [&&_.settings-nav_button]:bg-none [&&_.settings-nav_button]:bg-transparent [&&_.settings-nav_button[aria-pressed=true]]:text-settings-card-color [&&_.settings-nav_button[aria-pressed=true]]:bg-none [&&_.settings-nav_button[aria-pressed=true]]:bg-settings-card-background-color [&_button:disabled]:opacity-[0.45] [&_button:disabled]:cursor-not-allowed",
+    "[&_fieldset]:border-0 [&_fieldset]:border-none [&_fieldset]:border-current [&_fieldset]:pt-0 [&_fieldset]:pr-0 [&_fieldset]:pb-0 [&_fieldset]:pl-0 [&_fieldset]:mt-0",
+    "[&_fieldset]:mr-0 [&_fieldset]:mb-0 [&_fieldset]:ml-0 [&_fieldset]:min-w-0 [&_legend]:text-[10px] [&_legend]:text-ink-dim [&_legend]:mb-4.5 max-[760.001px]:pt-4.5",
+    "max-[760.001px]:pr-4.5 max-[760.001px]:pb-4.5 max-[760.001px]:pl-4.5 max-[460.001px]:pt-3.5 max-[460.001px]:pr-3.5 max-[460.001px]:pb-3.5 max-[460.001px]:pl-3.5 max-[460.001px]:[&&_.settings-nav_button]:pt-2",
+    "max-[460.001px]:[&&_.settings-nav_button]:pr-2 max-[460.001px]:[&&_.settings-nav_button]:pb-2 max-[460.001px]:[&&_.settings-nav_button]:pl-2 max-[460.001px]:[&&_.settings-nav_button]:text-[10px] [&_header_p]:mt-0 [&_header_p]:mr-0 [&_header_p]:mb-0 [&_header_p]:ml-0"
+  ].join(" "),
+  layout: [
+    "settings-layout grid grid-cols-[185px_minmax(0,_650px)] gap-5.5 max-[760.001px]:grid-cols-[1fr]"
+  ].join(" "),
+  nav: [
+    "settings-nav flex flex-col gap-1.5 self-start max-[760.001px]:flex-row max-[760.001px]:flex-wrap max-[760.001px]:gap-0.5"
+  ].join(" "),
+  content: [
+    "settings-content min-w-0"
+  ].join(" "),
+  feedback: [
+    "settings-feedback pt-[9px] pr-3 pb-[9px] pl-3 border border-solid border-settings-feedback-border-color",
+    "rounded-md bg-none bg-settings-card"
+  ].join(" "),
+  groups: [
+    "settings-groups [&>div]:bg-none [&>div]:bg-settings-card [&>div]:border [&>div]:border-solid [&>div]:border-line [&>div]:rounded-panel [&>div]:pt-[19px]",
+    "[&>div]:pr-[19px] [&>div]:pb-[19px] [&>div]:pl-[19px] max-[460.001px]:[&>div]:pt-3.5 max-[460.001px]:[&>div]:pr-3.5 max-[460.001px]:[&>div]:pb-3.5 max-[460.001px]:[&>div]:pl-3.5 [&>div>p]:mt-[5px]",
+    "[&[hidden]]:hidden [&>div[hidden]]:hidden"
+  ].join(" "),
+  section: [
+    "settings-section bg-none bg-settings-card border border-solid border-line rounded-panel pt-[19px]",
+    "pr-[19px] pb-[19px] pl-[19px] max-[460.001px]:pt-3.5 max-[460.001px]:pr-3.5 max-[460.001px]:pb-3.5 max-[460.001px]:pl-3.5 [&>p:first-of-type]:mt-[5px]",
+    "[&[hidden]]:hidden [&>button[role=switch]]:w-full [&>button[role=switch]]:justify-between [&>button[role=switch]]:border-0 [&>button[role=switch]]:border-none [&>button[role=switch]]:border-current [&>button[role=switch]]:[border-radius:0] [&>button[role=switch]]:pt-[15px]",
+    "[&>button[role=switch]]:pr-0 [&>button[role=switch]]:pb-[15px] [&>button[role=switch]]:pl-0 [&>button[role=switch]]:bg-none [&>button[role=switch]]:bg-transparent [&>button[role=switch]]:border-b [&>button[role=switch]]:[border-bottom-style:solid] [&>button[role=switch]]:border-b-line-soft"
+  ].join(" "),
+} as const;
+
 export interface VehicleSettingsProps {
   cameraOn?: boolean;
   onCameraChange?: ((value: boolean) => void) | undefined;
   port?: VehiclePort;
   enabled: boolean;
+  onBack?: (() => void) | undefined;
 }
 const FIELDS: ReadonlyArray<{
   key: keyof DrivingSettings;
@@ -104,8 +169,10 @@ function DrivingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
   }
   return (
     <fieldset disabled={!enabled || busy}>
-      <legend>驾驶设置 · 生效版本 {data.snapshot.driving_version}</legend>
-      <div className={styles.fields}>
+      <legend className={ui.srOnly}>
+        驾驶设置 · 生效版本 {data.snapshot.driving_version}
+      </legend>
+      <div className={ui.fields}>
         {fields.map((f) => (
           <label key={f.key}>
             {f.label}（{f.unit}）
@@ -130,27 +197,33 @@ function DrivingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
                 })
               }
             />
-            <small>
-              已保存上限 {(data.snapshot.driving[f.key] * f.scale).toFixed(2)} ·
-              默认{" "}
-              {(data.capabilities.driving_defaults[f.key] * f.scale).toFixed(2)}{" "}
-              · 范围{" "}
-              {(data.capabilities.driving_minimum[f.key] * f.scale).toFixed(2)}–
-              {(data.capabilities.driving_maximum[f.key] * f.scale).toFixed(2)}
-            </small>
           </label>
         ))}
       </div>
-      <p>
-        手动退化模式按摇杆百分比映射已保存上限；实际满杆速度仍受当前档位、倒车和正常车体/轮能力约束，遇障碍会进一步限速。
-      </p>
-      <div className={styles.actions}>
-        <button disabled={!data.can_apply_driving} onClick={() => save(false)}>
+      <details className={ui.configDetails}>
+        <summary>生效值、范围与操控说明</summary>
+        {fields.map((f) => (
+          <p key={f.key}>
+            {f.label} · 已保存{" "}
+            {(data.snapshot.driving[f.key] * f.scale).toFixed(2)} {f.unit} ·
+            默认{" "}
+            {(data.capabilities.driving_defaults[f.key] * f.scale).toFixed(2)} ·
+            范围{" "}
+            {(data.capabilities.driving_minimum[f.key] * f.scale).toFixed(2)}–
+            {(data.capabilities.driving_maximum[f.key] * f.scale).toFixed(2)}
+          </p>
+        ))}
+        <p>
+          手动退化模式按摇杆百分比映射已保存上限；实际满杆速度仍受当前档位、倒车和正常车体/轮能力约束，遇障碍会进一步限速。
+        </p>
+      </details>
+      <div className={ui.actions}>
+        <Button variant="primary" disabled={!data.can_apply_driving} onClick={() => save(false)}>
           保存驾驶设置
-        </button>
-        <button disabled={!data.can_apply_driving} onClick={() => save(true)}>
+        </Button>
+        <Button disabled={!data.can_apply_driving} onClick={() => save(true)}>
           恢复驾驶默认值
-        </button>
+        </Button>
       </div>
       {validation && <p role="alert">{validation}</p>}
       {!data.can_apply_driving && (
@@ -163,8 +236,10 @@ function LoggingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
   const [draft, setDraft] = useState(data.snapshot.logging);
   return (
     <fieldset disabled={!enabled || busy}>
-      <legend>日志设置 · 生效版本 {data.snapshot.logging_version}</legend>
-      <div className={styles.fields}>
+      <legend className={ui.srOnly}>
+        日志设置 · 生效版本 {data.snapshot.logging_version}
+      </legend>
+      <div className={ui.fields}>
         <label>
           常规日志级别
           <select
@@ -213,16 +288,13 @@ function LoggingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
           />
           <small>允许 60–3600 秒，默认 300 秒</small>
         </label>
-        <label className={styles.check}>
-          <input
-            type="checkbox"
+        <div className={ui.check}>
+          <Switch
+            label="临时调试日志"
             checked={draft.debug_enabled}
-            onChange={(e) =>
-              setDraft({ ...draft, debug_enabled: e.target.checked })
-            }
+            onChange={(debug_enabled) => setDraft({ ...draft, debug_enabled })}
           />
-          临时调试日志
-        </label>
+        </div>
       </div>
       <p>运行中可修改。自动恢复由车端负责，网页断开仍会恢复原级别。</p>
       {data.snapshot.debug_deadline_utc !== null && (
@@ -231,17 +303,17 @@ function LoggingForm({ data, busy, enabled, submit }: FormProps): ReactElement {
           {new Date(data.snapshot.debug_deadline_utc * 1000).toLocaleString()}
         </p>
       )}
-      <div className={styles.actions}>
-        <button onClick={() => submit("logging", draft, false)}>
+      <div className={ui.actions}>
+        <Button variant="primary" onClick={() => submit("logging", draft, false)}>
           保存日志设置
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={() =>
             submit("logging", data.capabilities.logging_defaults, true)
           }
         >
           恢复日志默认值
-        </button>
+        </Button>
       </div>
     </fieldset>
   );
@@ -250,6 +322,7 @@ export const VehicleSettings = memo(function VehicleSettings({
   port,
   enabled,
   cameraOn = false,
+  onBack,
   onCameraChange,
 }: VehicleSettingsProps): ReactElement {
   const [category, setCategory] = useState("driving");
@@ -355,7 +428,7 @@ export const VehicleSettings = memo(function VehicleSettings({
   ): void {
     if (!data || unknown) return;
     const request: SettingsRequest = {
-      request_id: crypto.randomUUID(),
+      request_id: newId(),
       expected_version:
         group === "driving"
           ? data.snapshot.driving_version
@@ -373,24 +446,19 @@ export const VehicleSettings = memo(function VehicleSettings({
     void send(request);
   }
   return (
-    <section className={styles.card} aria-label="车辆设置">
+    <section className={ui.card} aria-label="车辆设置">
       <header>
         <div>
-          <h1>设置</h1>
-          <p>管理车辆操控、预览与状态配置。</p>
+          <h1>车辆设置</h1>
+          <p>管理当前车辆的操控、预览与状态配置。</p>
         </div>
-        <button
-          disabled={!available || busy !== null}
-          onClick={() => void refresh()}
-        >
-          回读生效配置
-        </button>
+        {onBack && <Button onClick={onBack}>返回控制 ↗</Button>}
       </header>
-      <div className={styles.layout}>
-        <nav className={styles.nav} aria-label="设置分类">
+      <div className={ui.layout}>
+        <nav className={ui.nav} aria-label="设置分类">
           {[
-            ["driving", "驾驶操控"],
-            ["camera", "摄像头预览"],
+            ["driving", "驾驶与操控"],
+            ["camera", "摄像头与预览"],
             ["performance", "状态与性能"],
             ["logging", "日志配置"],
           ].map(([id, label]) => (
@@ -403,11 +471,15 @@ export const VehicleSettings = memo(function VehicleSettings({
             </button>
           ))}
         </nav>
-        <div className={styles.content}>
+        <div className={ui.content}>
           {!available && <p>车辆设置暂不可用，请连接支持设置的车辆。</p>}
-          {message && <p role="status">{message}</p>}
+          {message && (
+            <p role="status" className={ui.feedback}>
+              {message}
+            </p>
+          )}
           {unknown && (
-            <div className={styles.actions}>
+            <div className={ui.actions}>
               <button
                 disabled={!available || busy !== null}
                 onClick={() => void send(unknown, true)}
@@ -426,9 +498,10 @@ export const VehicleSettings = memo(function VehicleSettings({
             <p role="status">正在读取车辆设置…</p>
           )}
           {data && (
-            <div className={styles.groups}>
+            <div className={ui.groups}>
               <div hidden={category !== "driving"}>
-                <h2>驾驶操控</h2>
+                <h2>驾驶与操控</h2>
+                <p>保存后由车端确认生效；速度显示单位与控制页一致。</p>
                 <DrivingForm
                   key={`driving-${saved.driving}`}
                   data={data}
@@ -449,21 +522,37 @@ export const VehicleSettings = memo(function VehicleSettings({
               </div>
             </div>
           )}
-          <section hidden={category !== "camera"} className={styles.section}>
-            <h2>摄像头预览</h2>
+          <section hidden={category !== "camera"} className={ui.section}>
+            <h2>摄像头与预览</h2>
             <p>与控制页共用摄像头开关。</p>
             <Switch
               label="显示摄像头预览"
               checked={cameraOn}
               onChange={(value) => onCameraChange?.(value)}
             />
+            <div className={ui.fields}>
+              <label>
+                画质
+                <select disabled aria-label="画质">
+                  <option>由车端提供</option>
+                </select>
+              </label>
+            </div>
             <p>暂未实现：画质参数写入。</p>
           </section>
           <section
             hidden={category !== "performance"}
-            className={styles.section}
+            className={ui.section}
           >
             <h2>状态与性能</h2>
+            <div className={ui.fields}>
+              <label>
+                状态采样间隔
+                <select disabled aria-label="状态采样间隔">
+                  <option>由车端提供</option>
+                </select>
+              </label>
+            </div>
             <p>状态浮层使用车端真实样本；暂未实现采样频率写入。</p>
             <details>
               <summary>车辆诊断与固定回波校准</summary>
@@ -473,6 +562,21 @@ export const VehicleSettings = memo(function VehicleSettings({
               />
             </details>
           </section>
+          <details className={ui.configDetails}>
+            <summary>生效配置与版本</summary>
+            <Button
+              disabled={!available || busy !== null}
+              onClick={() => void refresh()}
+            >
+              回读生效配置
+            </Button>
+            {data && (
+              <p>
+                驾驶版本 {data.snapshot.driving_version} · 日志版本{" "}
+                {data.snapshot.logging_version}
+              </p>
+            )}
+          </details>
         </div>
       </div>
     </section>

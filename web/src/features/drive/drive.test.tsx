@@ -169,7 +169,7 @@ it("actual controls stop on key release and restart with the same authority on a
     fireEvent.click(screen.getByRole("button", { name: "释放控制权" })),
   );
   expect(sent.at(-1)).toEqual(["control.release", { authority_id: "a" }]);
-  expect(screen.getByText("未获取控制")).toBeTruthy();
+  expect(screen.getByText("未获取控制权")).toBeTruthy();
 });
 it("sends emergency stop before fencing a held input, and requires owner permission for software reset", async () => {
   const sent: string[] = [];

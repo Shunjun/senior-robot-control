@@ -14,13 +14,14 @@ import {
   useParams,
 } from "react-router-dom";
 
-import { ChevronDown, Activity, ArrowLeftRight, Car } from "lucide-react";
+import { ChevronDown, CircleDot, ArrowLeftRight } from "lucide-react";
+import vehicleMarker from "./assets/vehicle-marker.svg";
 import { Button } from "./components/ui/Button";
 import { SegmentedControl } from "./components/ui/SegmentedControl";
 import { EmergencyStop } from "./features/drive/EmergencyStop";
 import { useWorkspaceView } from "./features/devices/useWorkspaceView";
 import { SpeedUnitContext } from "./display/speedUnits";
-import styles from "./App.module.css";
+
 import {
   UnauthorizedError,
   type ControlApi,
@@ -35,6 +36,103 @@ import {
 import { Login } from "./features/devices/Login";
 import { RobotPanel } from "./features/devices/RobotPanel";
 
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  demo: [
+    "app-demo pt-2 pr-2 pb-2 pl-2 bg-none bg-app-demo-background-color text-white"
+  ].join(" "),
+  demoTag: [
+    "app-demo-tag font-bold mr-3"
+  ].join(" "),
+  placeholder: [
+    "app-placeholder flex flex-col items-center justify-center text-center h-[var(--viewport-height)] min-h-[var(--viewport-min)]",
+    "text-ink-soft border border-solid border-line rounded-scene bg-none bg-app-placeholder-background-color pt-8",
+    "pr-8 pb-8 pl-8 [background:linear-gradient(135deg,_var(--color-tone-26282ba8),_var(--color-tone-1b1e2299))] [&_h2]:text-[28px] [&_h2]:font-[450] [&_h2]:mt-3.5 [&_h2]:mr-0",
+    "[&_h2]:mb-3.5 [&_h2]:ml-0 [&_h2]:tracking-[-0.5px] [&_p]:text-[13px] [&_p]:leading-[2] [&_p]:mt-3.5 [&_p]:mr-0 [&_p]:mb-[27px]",
+    "[&_p]:ml-0 max-[460.001px]:[&_h2]:text-[24px] max-[460.001px]:pt-5 max-[460.001px]:pr-5 max-[460.001px]:pb-5 max-[460.001px]:pl-5 max-[460.001px]:[&_p]:text-[12px]"
+  ].join(" "),
+  emptySymbol: [
+    "app-empty-symbol grid place-items-center w-[92px] h-[92px] mt-0 mr-auto mb-[27px]",
+    "ml-auto border border-solid border-app-empty-symbol-border-color bg-none bg-app-empty-symbol-background-color rounded-symbol shadow-app-empty-symbol",
+    "[&_img]:opacity-[0.85] max-[460.001px]:w-[80px] max-[460.001px]:h-[80px]"
+  ].join(" "),
+  emptyEnglish: [
+    "app-empty-english font-normal text-[9px] leading-[normal] font-mono tracking-[2px] text-app-empty-english-color"
+  ].join(" "),
+  emptyActions: [
+    "app-empty-actions flex justify-center gap-2.5 [&_button]:min-w-[125px] [&_button]:pt-3 [&_button]:pr-4.5 [&_button]:pb-3",
+    "[&_button]:pl-4.5 max-[460.001px]:[&_button]:min-w-[112px] max-[460.001px]:[&_button]:pt-[11px] max-[460.001px]:[&_button]:pr-3.5 max-[460.001px]:[&_button]:pb-[11px] max-[460.001px]:[&_button]:pl-3.5"
+  ].join(" "),
+  emptyFootnote: [
+    "app-empty-footnote text-[10px] text-app-empty-footnote-color mt-[29px] max-[460.001px]:text-[9px]"
+  ].join(" "),
+  shell: [
+    "app-shell relative flex flex-col gap-3.5 leading-[normal] max-[760.001px]:gap-2.5 max-[460.001px]:[&[data-workspace=false]_.app-device-trigger]:[grid-column:2/5]",
+    "max-[460.001px]:[&[data-workspace=false]_.app-device-trigger]:justify-self-end"
+  ].join(" "),
+  header: [
+    "app-header flex items-center gap-5 h-[46px] flex-none relative z-[30]",
+    "[&>div[role=group]]:bg-none [&>div[role=group]]:bg-transparent [&>div[role=group]]:pt-0 [&>div[role=group]]:pr-0 [&>div[role=group]]:pb-0 [&>div[role=group]]:pl-0 [&>div[role=group]]:w-[max-content] [&>div[role=group]]:justify-self-start",
+    "[&>div[role=group]_button]:text-[12px] [&>div[role=group]_button]:pt-[9px] [&>div[role=group]_button]:pr-[13px] [&>div[role=group]_button]:pb-[9px] [&>div[role=group]_button]:pl-[13px] max-[760.001px]:gap-[7px] max-[760.001px]:flex-wrap max-[760.001px]:h-auto",
+    "max-[760.001px]:min-h-[44px] max-[760.001px]:[&>button]:text-[11px] max-[460.001px]:grid max-[460.001px]:grid-cols-[auto_minmax(0,_1fr)_auto_auto] max-[460.001px]:gap-[7px] max-[460.001px]:[&>div[role=group]]:[grid-row:2] max-[460.001px]:[&>div[role=group]]:[grid-column:1/3] max-[460.001px]:[&>div[role=group]_button]:text-[10px]",
+    "max-[460.001px]:[&>div[role=group]_button]:min-h-0 max-[460.001px]:[&>div[role=group]_button]:pt-[7px] max-[460.001px]:[&>div[role=group]_button]:pr-[7px] max-[460.001px]:[&>div[role=group]_button]:pb-[7px] max-[460.001px]:[&>div[role=group]_button]:pl-[7px] max-[460.001px]:[&>.app-grow]:hidden max-[460.001px]:[&>button[aria-label=切换速度单位]]:[grid-row:1] max-[460.001px]:[&>button[aria-label=切换速度单位]]:[grid-column:3]",
+    "max-[460.001px]:[&>button[aria-label=切换速度单位]]:min-h-0 max-[460.001px]:[&>button[aria-label=切换速度单位]]:text-[10px] max-[460.001px]:[&>button[aria-label=切换速度单位]]:pt-[5px] max-[460.001px]:[&>button[aria-label=切换速度单位]]:pr-[9px] max-[460.001px]:[&>button[aria-label=切换速度单位]]:pb-[5px] max-[460.001px]:[&>button[aria-label=切换速度单位]]:pl-[9px] max-[460.001px]:[&>button[aria-label=切换速度单位]]:leading-[1.2] max-[460.001px]:[&>button[aria-expanded]]:[grid-row:2]",
+    "max-[460.001px]:[&>button[aria-expanded]]:[grid-column:3] max-[460.001px]:[&>button[aria-expanded]]:min-h-0 max-[460.001px]:[&>button[aria-expanded]]:text-[11px] max-[460.001px]:[&>button[aria-expanded]]:pt-1.5 max-[460.001px]:[&>button[aria-expanded]]:pr-2 max-[460.001px]:[&>button[aria-expanded]]:pb-1.5 max-[460.001px]:[&>button[aria-expanded]]:pl-2 max-[460.001px]:[&>div:has(>button[aria-label=急停])]:[grid-row:1/3]",
+    "max-[460.001px]:[&>div:has(>button[aria-label=急停])]:[grid-column:4] [&>button[aria-label=切换速度单位]]:text-[11px] [&>button[aria-label=切换速度单位]]:pt-2 [&>button[aria-label=切换速度单位]]:pr-2.5 [&>button[aria-label=切换速度单位]]:pb-2 [&>button[aria-label=切换速度单位]]:pl-2.5 [&>button[aria-label=切换速度单位]>span]:flex [&>button[aria-label=切换速度单位]>span]:items-center",
+    "[&>button[aria-label=切换速度单位]>span]:gap-1 [&>button[aria-label=切换速度单位]_small]:flex [&>button[aria-label=切换速度单位]_small]:items-center [&>button[aria-label=切换速度单位]_small]:gap-[3px] [&>button[aria-label=切换速度单位]_small]:text-app-header-color [&>button[aria-label=切换速度单位]_small]:text-[9px] [&>button[aria-expanded]]:text-[13px] max-[460.001px]:[&>button[aria-label=切换速度单位]>span]:block",
+    "max-[460.001px]:[&>button[aria-label=切换速度单位]_small]:mt-px max-[460.001px]:[&>button[aria-label=切换速度单位]_small]:text-[8px] [&>button[aria-label=切换速度单位]_small_svg]:w-[10px] [&>button[aria-label=切换速度单位]_small_svg]:h-[10px]"
+  ].join(" "),
+  brand: [
+    "app-brand flex items-center gap-[9px] whitespace-nowrap pr-5 border-r [border-right-style:solid]",
+    "border-r-line [&_svg]:w-[29px] [&_svg]:h-[29px] [&_svg]:text-amber max-[760.001px]:[&_svg]:w-[23px] max-[760.001px]:[&_svg]:h-[23px] max-[460.001px]:pr-0 max-[460.001px]:border-0",
+    "max-[460.001px]:border-none max-[460.001px]:border-current"
+  ].join(" "),
+  brandName: [
+    "app-brand-name text-[20px] tracking-[2px] font-semibold max-[760.001px]:text-[16px] max-[460.001px]:tracking-[1px]"
+  ].join(" "),
+  deviceTrigger: [
+    "app-device-trigger flex-none [&_button]:text-[12px] [&_button]:pt-1 [&_button]:pr-[7px] [&_button]:pb-1 [&_button]:pl-[7px] [&_button]:bg-none",
+    "[&_button]:bg-transparent [&_button]:border-0 [&_button]:border-none [&_button]:border-current max-[760.001px]:[&_button]:text-[10px] max-[760.001px]:[&_button]:pt-1.5 max-[760.001px]:[&_button]:pr-1.5 max-[760.001px]:[&_button]:pb-1.5",
+    "max-[760.001px]:[&_button]:pl-1.5 max-[460.001px]:min-w-0 max-[460.001px]:[&_button]:max-w-full max-[460.001px]:[&_button>span:first-child]:overflow-hidden max-[460.001px]:[&_button>span:first-child]:text-ellipsis max-[460.001px]:[&_button>span:first-child]:whitespace-nowrap"
+  ].join(" "),
+  srOnly: [
+    "app-sr-only absolute w-[1px] h-[1px] pt-0 pr-0 pb-0 pl-0",
+    "overflow-hidden [clip-path:inset(50%)] whitespace-nowrap"
+  ].join(" "),
+  grow: [
+    "app-grow flex-1"
+  ].join(" "),
+  notice: [
+    "app-notice text-alert-ink bg-none bg-red-wash pt-3 pr-3 pb-3 pl-3",
+    "rounded-md"
+  ].join(" "),
+  side: [
+    "app-side absolute z-[60] top-14 left-40 w-[328px] max-h-[calc(var(--viewport-height)_-_96px)] overflow-auto",
+    "bg-none bg-app-side-background-color border border-solid border-line rounded-card shadow-app-side pt-4.5",
+    "pr-4.5 pb-4.5 pl-4.5 max-[760.001px]:left-1 max-[760.001px]:top-22 max-[760.001px]:max-w-[calc(100%_-_8px)] max-[460.001px]:left-0 max-[460.001px]:right-0",
+    "max-[460.001px]:top-20.5 max-[460.001px]:w-auto"
+  ].join(" "),
+  main: [
+    "app-main relative min-w-0 rounded-scene overflow-hidden"
+  ].join(" "),
+  footer: [
+    "app-footer text-[10px] text-app-footer-color flex justify-between gap-3 max-[760.001px]:text-[9px] max-[460.001px]:[&_span:last-child]:hidden"
+  ].join(" "),
+  logout: [
+    "app-logout mt-0 mr-0 mb-0 ml-0 pt-0 pr-0 pb-0",
+    "pl-0 bg-none bg-transparent border-0 border-none border-current text-ink-dim cursor-pointer",
+    "text-[9px] max-[760.001px]:pt-0 max-[760.001px]:pr-0 max-[760.001px]:pb-0 max-[760.001px]:pl-0 max-[460.001px]:top-20 max-[460.001px]:right-0.5",
+    "max-[460.001px]:text-[8px]"
+  ].join(" "),
+  app: [
+    "app-app min-h-svh pt-5 pr-6 pb-4.5 pl-6 max-[760.001px]:pt-3 max-[760.001px]:pr-3",
+    "max-[760.001px]:pb-3 max-[760.001px]:pl-3"
+  ].join(" "),
+  splash: [
+    "app-splash grid place-items-center min-h-[80dvh]"
+  ].join(" "),
+} as const;
+
 const ROBOT_POLL_MS = 5_000;
 
 export interface AppProps {
@@ -48,8 +146,8 @@ type Auth = "checking" | "out" | "in";
 
 function DemoLabel(): ReactElement {
   return (
-    <div className={styles.demo} role="note" aria-label="演示数据标记">
-      <span className={styles.demoTag}>演示数据</span>
+    <div className={ui.demo} role="note" aria-label="演示数据标记">
+      <span className={ui.demoTag}>演示数据</span>
       <span>非真实设备，所有状态均为模拟，不会驱动底盘</span>
     </div>
   );
@@ -87,6 +185,7 @@ function Shell({
   const workspace = useWorkspaceView();
   const [pairOpen, setPairOpen] = useState(false);
   const menu = useRef<HTMLElement>(null);
+  const scene = useRef<HTMLElement>(null);
   const trigger = useRef<HTMLDivElement>(null);
   const closeDevices = useCallback(() => setOpenDeviceList(null), []);
   useEffect(() => {
@@ -119,17 +218,29 @@ function Shell({
   let main: ReactElement;
   if (robotId === undefined) {
     main = (
-      <section className={styles.placeholder}>
-        <Car size={52} aria-hidden="true" />
-        <h2>选择车辆，开始工作</h2>
-        <p>选择已配对车辆，或生成配对码连接新设备。</p>
-        <div className={styles.emptyActions}>
+      <section className={ui.placeholder}>
+        <div className={ui.emptySymbol}>
+          <img src={vehicleMarker} width="46" height="54" alt="" />
+        </div>
+        <span className={ui.emptyEnglish}>WHEEL / READY WHEN YOU ARE</span>
+        <h2>还没有选择车辆</h2>
+        <p>
+          选择已配对的车辆进入控制，
+          <br />
+          或生成配对码，添加一辆新车。
+        </p>
+        <div className={ui.emptyActions}>
           <Button variant="primary" onClick={() => setOpenDeviceList("empty")}>
             选择车辆
           </Button>
           {pairing && (
             <Button onClick={() => setPairOpen(true)}>配对新车</Button>
           )}
+        </div>
+        <div className={ui.emptyFootnote}>
+          {list.failed
+            ? "设备列表暂未更新"
+            : `已有 ${list.robots.length} 辆已配对车辆`}
         </div>
       </section>
     );
@@ -149,13 +260,13 @@ function Shell({
     );
   } else if (list.status === "loading") {
     main = (
-      <section className={styles.placeholder} role="status">
+      <section className={ui.placeholder} role="status">
         <p>正在读取设备列表…</p>
       </section>
     );
   } else {
     main = (
-      <section className={styles.placeholder}>
+      <section className={ui.placeholder}>
         <h2>没有这台设备</h2>
         <p>设备编号 {robotId} 不在当前账户的设备列表中，可能已被撤销。</p>
       </section>
@@ -164,9 +275,9 @@ function Shell({
 
   return (
     <SpeedUnitContext.Provider value={workspace.unit}>
-      <div className={styles.shell} data-workspace={selected !== undefined}>
-        <header className={styles.header}>
-          <div className={styles.brand}>
+      <div className={ui.shell} data-workspace={selected !== undefined}>
+        <header className={`${ui.header} ${!selected ? "max-[460.001px]:grid-rows-[34.59375px_30px_28px]" : ""}`}>
+          <div className={ui.brand}>
             <svg viewBox="0 0 36 36" fill="none" aria-hidden="true">
               <circle cx="18" cy="18" r="15" stroke="#eeeade" strokeWidth="2" />
               <circle
@@ -179,9 +290,9 @@ function Shell({
               />
               <circle cx="18" cy="18" r="2" fill="#eeeade" />
             </svg>
-            <span className={styles.brandName}>WHEEL</span>
+            <span className={ui.brandName}>WHEEL</span>
           </div>
-          <div ref={trigger} className={styles.deviceTrigger}>
+          <div ref={trigger} className={`${ui.deviceTrigger} ${!selected ? "max-[460.001px]:row-start-3" : ""}`}>
             <Button
               aria-label={selected ? "切换车辆" : "选择车辆"}
               aria-expanded={devicesOpen}
@@ -192,7 +303,7 @@ function Shell({
             >
               <span>{selected?.name ?? "选择车辆"}</span>
               <ChevronDown size={16} />
-              <span className={styles.srOnly}>
+              <span className={ui.srOnly}>
                 {selected ? "切换车辆" : "选择设备"}
               </span>
             </Button>
@@ -210,7 +321,7 @@ function Shell({
               ]}
             />
           )}
-          <div className={styles.grow} />
+          <div className={ui.grow} />
           {selected && (
             <Button
               aria-label="切换速度单位"
@@ -219,42 +330,55 @@ function Shell({
                 workspace.setUnit(workspace.unit === "m/s" ? "km/h" : "m/s")
               }
             >
-              {workspace.unit}
-              <ArrowLeftRight size={16} />
+              <span>
+                {workspace.unit}
+                <small>
+                  <ArrowLeftRight size={10} />
+                  {workspace.unit === "m/s" ? "km/h" : "m/s"}
+                </small>
+              </span>
             </Button>
           )}
           {selected && (
             <Button
-              disabled={!selected}
+              disabled={!selected || workspace.page !== "control"}
               aria-expanded={workspace.statusOpen}
               onClick={() => workspace.setStatusOpen(!workspace.statusOpen)}
             >
-              <Activity size={16} />
+              <CircleDot size={12} />
               状态
             </Button>
           )}
           {selected && <EmergencyStop key={selected.id} link={link} compact />}
-          <button
-            type="button"
-            className={styles.logout}
-            disabled={loggingOut}
-            onClick={onLogout}
-          >
-            退出登录
-          </button>
         </header>
         {notice !== null && (
-          <p className={styles.notice} role="alert">
+          <p className={ui.notice} role="alert">
             {notice}
           </p>
         )}
         {devicesOpen && (
-          <aside ref={menu} id="device-switcher" className={styles.side}>
+          <aside ref={menu} id="device-switcher" className={ui.side}>
             <DeviceList
               list={list}
               selectedId={robotId ?? null}
               onRefresh={onRefresh}
               pairing={null}
+              onPair={
+                pairing
+                  ? () => {
+                      closeDevices();
+                      setPairOpen(true);
+                    }
+                  : undefined
+              }
+              onClearSelection={
+                selected
+                  ? () => {
+                      closeDevices();
+                      navigate("/robots");
+                    }
+                  : undefined
+              }
               onSelect={closeDevices}
               onClose={() => {
                 closeDevices();
@@ -270,42 +394,34 @@ function Shell({
                     }
               }
             />
-            <div className={styles.menuActions}>
-              {pairing && (
-                <Button
-                  variant="primary"
-                  onClick={() => {
-                    closeDevices();
-                    setPairOpen(true);
-                  }}
-                >
-                  配对新车
-                </Button>
-              )}
-              {selected && (
-                <Button
-                  onClick={() => {
-                    closeDevices();
-                    navigate("/robots");
-                  }}
-                >
-                  取消选择
-                </Button>
-              )}
-            </div>
           </aside>
         )}
         {pairing && pairOpen && (
           <PairingPanel
             {...pairing}
             initiallyOpen
+            overlayTarget={scene.current}
             onClose={() => {
               setPairOpen(false);
               trigger.current?.querySelector("button")?.focus();
             }}
           />
         )}
-        <main className={styles.main}>{main}</main>
+        <main ref={scene} className={ui.main}>
+          {main}
+        </main>
+        <footer className={ui.footer}>
+          <span>WHEEL · 车辆控制工作区</span>
+          <span className="max-[460.001px]:hidden">地图连线表示任务顺序，不代表实际规划路径</span>{" "}
+          <button
+            type="button"
+            className={ui.logout}
+            disabled={loggingOut}
+            onClick={onLogout}
+          >
+            退出登录
+          </button>
+        </footer>
       </div>
     </SpeedUnitContext.Provider>
   );
@@ -433,11 +549,10 @@ export function App({ api, link, demo = false }: AppProps): ReactElement {
   );
 
   return (
-    <div className={styles.app}>
+    <div className={ui.app}>
       {demo && <DemoLabel />}
       {auth === "checking" ? (
-        <div className={styles.splash} role="status">
-          <span className={styles.splashBar} aria-hidden="true" />
+        <div className={ui.splash} role="status">
           正在校验会话…
         </div>
       ) : (

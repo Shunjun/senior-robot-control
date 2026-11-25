@@ -1,3 +1,4 @@
+import { newId } from "../ids";
 /** Versioned vehicle UI contract. New routes require an explicit car capability. */
 export type Mode = 'unknown' | 'idle' | 'manual' | 'task' | 'braking' | 'obstacle_hold' | 'feedback_stop' | 'execution_fault' | 'estop';
 export type Capability = 'runtime.v1' | 'motion.intent.v1' | 'settings.v1' | 'task.execution.v1' | 'logs.v1' | 'learning.v1' | 'task.names.v1';
@@ -614,7 +615,7 @@ export class VehicleTransport implements VehiclePort {
     const frame = this.require('task.execution.v1');
     const task = frame.task;
     if (!task?.allowed_actions.includes(action)) throw new Error('车端未允许该任务动作');
-    const requestId = crypto.randomUUID();
+    const requestId = newId();
     const response = record(await this.send('task.execution.command', {
       request_id: requestId,
       expected_version: task.version,

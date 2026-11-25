@@ -5,7 +5,6 @@ import {
   render as testingRender,
   screen,
   waitFor,
-  within,
 } from "@testing-library/react";
 import { afterEach, expect, it } from "vitest";
 import { testPort, settingsFixture } from "../../api/vehicleState.testUtils";
@@ -62,7 +61,7 @@ it("converts only displayed km/h to SI, submits one group and reads effective va
   expect(degraded.value).toBe("1.08");
   fireEvent.change(degraded, { target: { value: "0.72" } });
   expect(
-    within(degraded.closest("label")!).getByText(/已保存上限 1.08/),
+    screen.getByText(/退化模式线速度上限 · 已保存 1.08/),
   ).toBeTruthy();
   fireEvent.change(field, { target: { value: "4" } });
   fireEvent.click(screen.getByRole("button", { name: "保存驾驶设置" }));
@@ -77,9 +76,9 @@ it("converts only displayed km/h to SI, submits one group and reads effective va
     },
   });
   await screen.findByText("驾驶设置 · 生效版本 3");
-  const readback = screen.getByLabelText("退化模式线速度上限");
+  expect(screen.getByLabelText("退化模式线速度上限")).toHaveProperty("value", "0.72");
   expect(
-    within(readback.closest("label")!).getByText(/已保存上限 0.72/),
+    screen.getByText(/退化模式线速度上限 · 已保存 0.72/),
   ).toBeTruthy();
 });
 it("keeps unknown request identity through disconnect and queries instead of creating another apply", async () => {

@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { RobotLink } from "../../api/client";
@@ -58,7 +58,8 @@ describe("map lifecycle", () => {
   it("test_import_waits_for_localization", () => {
     const { link } = fakeLink();
     render(<MapManager robotId="robot-alpha" snapshot={snapshot({ localized: false })} link={link} />);
-    expect((screen.getByRole("button", { name: "导入地图包" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "导入地图包" }));
+    expect((within(screen.getByRole("dialog", { name: "导入地图包" })).getByRole("button", { name: "导入地图包" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/完成定位后才可导入/)).toBeTruthy();
   });
 
@@ -78,8 +79,9 @@ describe("map lifecycle", () => {
         status: "succeeded",
       });
     render(<MapManager robotId="robot-alpha" snapshot={snapshot()} link={link} />);
-    fireEvent.change(screen.getByLabelText("地图包名称"), { target: { value: "backup.zip" } });
     fireEvent.click(screen.getByRole("button", { name: "导出地图包" }));
+    fireEvent.change(screen.getByLabelText("地图包名称"), { target: { value: "backup.zip" } });
+    fireEvent.click(within(screen.getByRole("dialog", { name: "导出地图包" })).getByRole("button", { name: "导出地图包" }));
     await waitFor(() => expect(requests).toHaveBeenCalledTimes(1));
     open();
     await waitFor(() =>
@@ -125,6 +127,7 @@ it("uses the live catalog for lifecycle operations and discards replies from the
   const { rerender } = render(<ControlSurface robotId="robot-alpha" snapshot={snapshot({ mapping_protocol_version: 1 })} link={link} />);
   fireEvent.click(screen.getByRole("button", { name: "地图管理" }));
   await screen.findByText("仓库");
+  fireEvent.click(screen.getByRole("button", { name: "＋ 新建地图" }));
   fireEvent.change(screen.getByLabelText("新地图名称"), { target: { value: "车间" } });
   fireEvent.click(screen.getByRole("button", { name: "新建并开始建图" }));
   await screen.findByText("车间");

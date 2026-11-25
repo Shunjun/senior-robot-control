@@ -32,7 +32,7 @@ it("shows received resource counters and expires an unchanged sample even while 
   const snapshot = { ...frame.payload, robot_id: "robot" };
   const { rerender } = render(<ControlSurface robotId="robot" link={link} snapshot={snapshot} statusOpen />);
   fireEvent.click(screen.getByRole("button", { name:"性能" }));
-  expect(screen.getByText("25.0%")).toBeTruthy();
+  expect(screen.getByLabelText("整机 CPU 读数").textContent).toBe("25.0%");
   expect(screen.getByText("512 MiB")).toBeTruthy();
   expect(screen.getByText("未启动")).toBeTruthy();
   act(() => vi.advanceTimersByTime(3501));
@@ -40,7 +40,7 @@ it("shows received resource counters and expires an unchanged sample even while 
   rerender(<ControlSurface robotId="robot" link={link} snapshot={snapshot} statusOpen={false} />);
   rerender(<ControlSurface robotId="robot" link={link} snapshot={snapshot} statusOpen />);
   expect(screen.getByText("样本已过期")).toBeTruthy();
-  expect(screen.queryByText("25.0%")).toBeNull();
+  expect(screen.getByLabelText("整机 CPU 读数").textContent).toBe("不可用");
   fireEvent.click(screen.getByRole("button", { name: "地图管理" }));
   await act(async () => { await Promise.resolve(); });
   expect(request).not.toHaveBeenCalled();

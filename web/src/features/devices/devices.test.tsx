@@ -197,7 +197,7 @@ describe("robot switching", () => {
       expect(link.connects).toEqual(["robot-alpha", "robot-beta"]),
     );
     expect(link.disconnects).toBeGreaterThanOrEqual(1);
-    await screen.findByText("等待车端快照");
+    await screen.findByText("正在同步车辆状态");
 
     // A late frame of the old robot must not repaint the new robot's panel.
     link.emit(
@@ -206,7 +206,7 @@ describe("robot switching", () => {
     expect(screen.queryByText("patrolling-alpha")).toBeNull();
 
     link.emit(snapshot("robot-beta", { execution_status: "charging-beta" }));
-    expect(screen.queryByText("等待车端快照")).toBeNull();
+    expect(screen.queryByText("正在同步车辆状态")).toBeNull();
     expect(screen.getByText("车端运行状态尚未接通")).toBeTruthy();
   });
 });
@@ -1474,10 +1474,9 @@ describe("operator workspace", () => {
 
   it("test_keeps_manual_controls_mounted_on_primary_view_switch", async () => {
     await openWorkspace();
-    expect(screen.queryByRole("region", { name: "实时视频" })).toBeNull();
+    expect(screen.getByRole("region", { name: "实时视频" })).toBeTruthy();
     const stick = screen.getByRole("group", { name: "驾驶摇杆" });
     const stop = screen.getByRole("button", { name: "获取控制权" });
-    fireEvent.click(screen.getByRole("switch", { name: "摄像头" }));
     fireEvent.click(screen.getByRole("button", { name: "交换主次画面" }));
     expect(screen.getByRole("region", { name: "实时视频" })).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "交换主次画面" }));
@@ -1503,7 +1502,7 @@ describe("operator workspace", () => {
     expect(
       link.requests.filter(({ type }) => type === "control.release"),
     ).toHaveLength(1);
-    expect(screen.getByText("未获取控制")).toBeTruthy();
+    expect(screen.getByText("未获取控制权")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "手动驾驶" }));
     expect(screen.getByRole("button", { name: "获取控制权" })).toBeTruthy();
     fireEvent.keyDown(stick, { key: "ArrowUp" });
@@ -1557,7 +1556,8 @@ it("keeps an exported map read-only and requires task runtime before cancellatio
       .getByRole("application", { name: "地图" })
       .getAttribute("data-picking"),
   ).toBe("false");
-  for (const name of ["设为 Home", "返航", "确认目标"]) {
+  fireEvent.click(screen.getByText("定位与 Home 详情"));
+  for (const name of ["设为 Home", "返回 Home", "在地图上设置目标"]) {
     expect(
       (screen.getByRole("button", { name }) as HTMLButtonElement).disabled,
     ).toBe(true);
@@ -1569,7 +1569,7 @@ it("keeps an exported map read-only and requires task runtime before cancellatio
   fireEvent.click(screen.getByRole("button", { name: "任务管理" }));
   await screen.findByText("地图导出副本 · 仅供查看");
   expect(
-    (screen.getByText("提交任务").closest("button") as HTMLButtonElement)
+    (screen.getByRole("button", { name: "新建任务" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
   expect(link.requests.some(({ type }) => type === "waypoint.list")).toBe(
@@ -1622,10 +1622,11 @@ it("sends an eligible goal and return with the current map fence", async () => {
   fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
   await waitFor(() =>
     expect(
-      (screen.getByRole("button", { name: "返航" }) as HTMLButtonElement)
+      (screen.getByRole("button", { name: "返回 Home" }) as HTMLButtonElement)
         .disabled,
     ).toBe(false),
   );
+  fireEvent.click(screen.getByRole("button", { name: "在地图上设置目标" }));
   fireEvent.change(screen.getByLabelText("X (m)"), {
     target: { value: "0.5" },
   });
@@ -1634,7 +1635,7 @@ it("sends an eligible goal and return with the current map fence", async () => {
   });
   fireEvent.click(screen.getByRole("button", { name: "确认目标" }));
   await screen.findByText(/车端已受理目标/);
-  fireEvent.click(screen.getByRole("button", { name: "返航" }));
+  fireEvent.click(screen.getByRole("button", { name: "返回 Home" }));
   await screen.findByText(/车端已受理返航/);
   expect(link.requests).toEqual(
     expect.arrayContaining([
@@ -1739,13 +1740,14 @@ it("updates navigation readiness from snapshots without reloading the map", asyn
       screen
         .getByRole("application", { name: "地图" })
         .getAttribute("data-picking"),
-    ).toBe("true"),
+    ).toBe("false"),
   );
   const returnHome = () =>
-    screen.getByRole("button", { name: "返航" }) as HTMLButtonElement;
+    screen.getByRole("button", { name: "返回 Home", hidden:true }) as HTMLButtonElement;
   expect(returnHome().disabled).toBe(true);
   link.emit({ ...current, navigation_ready: true });
   expect(returnHome().disabled).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "在地图上设置目标" }));
   fireEvent.change(screen.getByLabelText("X (m)"), {
     target: { value: "0.5" },
   });
@@ -1769,7 +1771,7 @@ it("updates navigation readiness from snapshots without reloading the map", asyn
   expect(returnHome().disabled).toBe(true);
   expect(goal().disabled).toBe(true);
   expect(
-    (screen.getByRole("button", { name: "取消导航" }) as HTMLButtonElement)
+    (screen.getByRole("button", { name: "取消导航", hidden:true }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
   link.emit({ ...current, navigation_ready: false });
@@ -2005,7 +2007,7 @@ describe("device unpairing", () => {
     expect(revokeRobot).toHaveBeenCalledExactlyOnceWith("robot-alpha");
     expect((confirm as HTMLButtonElement).disabled).toBe(true);
     await act(async () => finish());
-    await screen.findByRole("heading", { name: "选择车辆，开始工作" });
+    await screen.findByRole("heading", { name: "还没有选择车辆" });
     expect(screen.queryByRole("link", { name: /Alpha/ })).toBeNull();
     await openDevices();
     expect(screen.getByRole("link", { name: /Beta/ })).toBeTruthy();
@@ -2015,7 +2017,7 @@ describe("device unpairing", () => {
   it("keeps the device after failure and allows retry or cancellation", async () => {
     const revokeRobot = vi.fn().mockRejectedValue(new ApiError("failed", 500));
     mount(
-      "/robots",
+      "/robots/robot-alpha",
       Object.assign(new FakeApi(), { revokeRobot }),
       new FakeLink(),
     );
@@ -2038,11 +2040,11 @@ describe("device unpairing", () => {
     expect(screen.queryByRole("button", { name: "确认删除配对" })).toBeNull();
   });
 
-  it("keeps another selected robot and rejects an older refresh that still contains the deleted one", async () => {
+  it("only deletes the selected robot and rejects an older refresh that still contains the deleted one", async () => {
     const api = new FakeApi();
     const link = new FakeLink();
     const listRobots = vi.spyOn(api, "listRobots");
-    mount("/robots/robot-alpha", api, link);
+    mount("/robots/robot-beta", api, link);
     await waitFor(() => expect(link.connects).toHaveLength(1));
     let finishRefresh!: (robots: RobotSummary[]) => void;
     listRobots.mockImplementationOnce(
@@ -2054,6 +2056,8 @@ describe("device unpairing", () => {
     fireEvent.click(screen.getByRole("button", { name: "切换车辆" }));
     await openDevices();
     fireEvent.click(screen.getByRole("button", { name: "刷新设备" }));
+    expect(screen.queryByText("管理其他配对")).toBeNull();
+    expect(screen.queryByRole("button", { name: "删除 Alpha 仓库车 的配对" })).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "删除 Beta 装卸车 的配对" }),
     );
@@ -2063,10 +2067,8 @@ describe("device unpairing", () => {
     );
     await act(async () => finishRefresh([ALPHA, BETA]));
     expect(screen.queryByRole("link", { name: /Beta/ })).toBeNull();
-    expect(link.connects).toEqual(["robot-alpha"]);
-    expect(
-      screen.getByRole("button", { name: "切换车辆" }).textContent,
-    ).toContain(ALPHA.name);
+    expect(link.connects).toEqual(["robot-beta"]);
+    expect(screen.getByRole("heading", { name: "还没有选择车辆" })).toBeTruthy();
   });
 
   it("hides deletion in demo mode", async () => {
@@ -2081,7 +2083,7 @@ describe("device unpairing", () => {
       .fn()
       .mockRejectedValue(new UnauthorizedError("expired"));
     mount(
-      "/robots",
+      "/robots/robot-alpha",
       Object.assign(new FakeApi(), { revokeRobot }),
       new FakeLink(),
     );
@@ -2172,6 +2174,7 @@ it("refreshes grid data within one reference without losing drafts or accepting 
   await waitFor(() =>
     expect(container.querySelector('[data-marker="robot"]')).not.toBeNull(),
   );
+  fireEvent.click(screen.getByRole("button", { name: "在地图上设置目标" }));
   fireEvent.change(screen.getByLabelText("X (m)"), {
     target: { value: "0.5" },
   });
@@ -2182,7 +2185,7 @@ it("refreshes grid data within one reference without losing drafts or accepting 
     screen.getByRole("button", { name: "确认目标" }) as HTMLButtonElement;
   fireEvent.click(confirm());
   expect(confirm().disabled).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: "刷新地图" }));
+  fireEvent.click(within(screen.getByRole("region", { name: "地图位姿选取" })).getByRole("button", { name: "刷新地图" }));
   await waitFor(() =>
     expect(
       link.requests.filter(({ type }) => type === "map.tile"),
@@ -2213,10 +2216,11 @@ it("refreshes grid data within one reference without losing drafts or accepting 
     releaseGoal({ ok: true });
     await goalReply;
   });
-  expect(confirm().disabled).toBe(false);
-  expect((screen.getByLabelText("X (m)") as HTMLInputElement).value).toBe(
-    "0.5",
-  );
+  expect(screen.queryByRole("button", { name: "确认目标" })).toBeNull();
+  expect(screen.getByRole("button", { name: "在地图上设置目标" })).toHaveProperty("disabled", false);
+  fireEvent.click(screen.getByRole("button", { name: "在地图上设置目标" }));
+  fireEvent.change(screen.getByLabelText("X (m)"), { target: { value: "0.5" } });
+  fireEvent.change(screen.getByLabelText("Y (m)"), { target: { value: "0.5" } });
   fireEvent.click(confirm());
   await waitFor(() =>
     expect(
@@ -2231,7 +2235,7 @@ it("refreshes grid data within one reference without losing drafts or accepting 
 it("V1/V2 starts with a central empty page and closes the anchored picker by outside, Escape and selection", async () => {
   const link = new FakeLink();
   mount("/robots", new FakeApi(), link);
-  await screen.findByRole("heading", { name: "选择车辆，开始工作" });
+  await screen.findByRole("heading", { name: "还没有选择车辆" });
   expect(screen.queryByRole("navigation", { name: "设备列表" })).toBeNull();
   expect(link.connects).toEqual([]);
   expect(screen.queryByRole("group", { name: "驾驶摇杆" })).toBeNull();
@@ -2250,7 +2254,7 @@ it("V1/V2 starts with a central empty page and closes the anchored picker by out
   expect(screen.queryByRole("navigation", { name: "设备列表" })).toBeNull();
   await openDevices();
   fireEvent.click(screen.getByRole("button", { name: "取消选择" }));
-  await screen.findByRole("heading", { name: "选择车辆，开始工作" });
+  await screen.findByRole("heading", { name: "还没有选择车辆" });
   expect(link.disconnects).toBeGreaterThan(0);
 });
 
@@ -2264,11 +2268,11 @@ it("V4/V6 keeps connection and first snapshot states in a single viewport withou
     });
   };
   const { container } = mount("/robots/robot-alpha", new FakeApi(), link);
-  await screen.findByRole("heading", { name: "正在建立控制通道…" });
+  await screen.findByRole("heading", { name: "正在连接车辆…" });
   const viewport = container.querySelector("[data-freshness]");
   expect(screen.queryByRole("group", { name: "驾驶摇杆" })).toBeNull();
   await act(async () => opened());
-  await screen.findByRole("heading", { name: "等待车端快照" });
+  await screen.findByRole("heading", { name: "正在同步车辆状态" });
   expect(container.querySelector("[data-freshness]")).toBe(viewport);
   expect(screen.queryByRole("button", { name: "取消等待" })).toBeNull();
   link.emit(snapshot("robot-alpha"));
@@ -2310,7 +2314,7 @@ it("keeps the approved login reveal, busy guard and successful device initializa
   ).toBe(true);
   api.failure = null;
   await act(async () => finish());
-  await screen.findByRole("heading", { name: "选择车辆，开始工作" });
+  await screen.findByRole("heading", { name: "还没有选择车辆" });
   expect(password.value).toBe("");
   await openDevices();
   expect(screen.getByRole("link", { name: /Alpha/ })).toBeTruthy();
@@ -2343,7 +2347,7 @@ it('V24 retains the uncertain calibration request across settings categories and
   await waitFor(()=>expect((start as HTMLButtonElement).disabled).toBe(false));
   await act(async()=>fireEvent.click(start));
   expect(starts).toBe(1);
-  fireEvent.click(screen.getByRole('button',{name:'驾驶操控'}));
+  fireEvent.click(screen.getByRole('button',{name:'驾驶与操控'}));
   fireEvent.click(screen.getByRole('button',{name:'日志'}));
   fireEvent.click(screen.getByRole('button',{name:'设置'}));
   fireEvent.click(screen.getByRole('button',{name:'状态与性能'}));

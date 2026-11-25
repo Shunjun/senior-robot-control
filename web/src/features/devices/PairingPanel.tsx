@@ -10,10 +10,62 @@ import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 import { IconButton } from "../../components/ui/IconButton";
 import { Button } from "../../components/ui/Button";
-import styles from "./Devices.module.css";
+
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  modal: [
+    "devices-modal absolute inset-0 z-[40] bg-none bg-devices-modal-background-color grid place-items-center",
+    "pt-5 pr-5 pb-5 pl-5 [body>&]:fixed"
+  ].join(" "),
+  pairingPanel: [
+    "devices-pairing-panel w-full max-w-[510px] max-h-[calc(100%_-_30px)] overflow-auto bg-none bg-card border",
+    "border-solid border-line rounded-card pt-[19px] pr-[19px] pb-[19px] pl-[19px] shadow-ui-card",
+    "backdrop-blur-[15px] [&_p]:mt-[11px] [&_p]:mr-0 [&_p]:mb-[11px] [&_p]:ml-0 [&_p]:leading-[1.9] [&>button]:w-full [&_.devices-pair-initial-hint]:text-[10px]",
+    "[&_.devices-pair-initial-hint]:mt-[15px] [&_.devices-pair-initial-hint]:text-muted"
+  ].join(" "),
+  listHead: [
+    "devices-list-head flex items-center justify-between gap-2.5 mb-[5px] [&>button]:border-0 [&>button]:border-none",
+    "[&>button]:border-current [&>button]:bg-none [&>button]:bg-transparent [&>button]:pt-1 [&>button]:pr-[7px] [&>button]:pb-1 [&>button]:pl-[7px] [&>button]:text-quiet"
+  ].join(" "),
+  pairingHeading: [
+    "devices-pairing-heading text-[17px] font-medium mt-0 mr-0 mb-3 ml-0"
+  ].join(" "),
+  pairSteps: [
+    "devices-pair-steps flex justify-between gap-2.5 text-devices-pair-steps-color text-[9px] mb-5 [&_[data-active=true]]:text-devices-pair-steps-color-2",
+    "max-[460.001px]:text-[8px] max-[460.001px]:gap-[5px]"
+  ].join(" "),
+  quiet: [
+    "devices-quiet mt-0 mr-0 mb-0 ml-0 text-muted text-[11px] leading-[1.8]"
+  ].join(" "),
+  pairError: [
+    "devices-pair-error text-devices-pair-error-color text-[11px] min-h-[22px] mt-2 mr-0 mb-2 ml-0"
+  ].join(" "),
+  pairingReceipt: [
+    "devices-pairing-receipt flex justify-between gap-3 items-center bg-none bg-devices-pairing-receipt-background-color border",
+    "border-solid border-devices-pairing-receipt-border-color pt-4 pr-4 pb-4 pl-4 rounded-lg mt-4.5",
+    "mr-0 mb-2 ml-0 [&_button]:text-[10px] [&_button]:pt-[7px] [&_button]:pr-2.5 [&_button]:pb-[7px] [&_button]:pl-2.5",
+    "max-[460.001px]:pt-[13px] max-[460.001px]:pr-[9px] max-[460.001px]:pb-[13px] max-[460.001px]:pl-[9px]"
+  ].join(" "),
+  pairingCode: [
+    "devices-pairing-code font-normal text-[25px] leading-[normal] font-code tracking-[3px] text-devices-pairing-code-color select-all",
+    "max-[460.001px]:text-[20px] max-[460.001px]:tracking-[1.5px]"
+  ].join(" "),
+  remaining: [
+    "devices-remaining text-devices-remaining-color text-[10px]"
+  ].join(" "),
+  pairingCommand: [
+    "devices-pairing-command block whitespace-pre-wrap [overflow-wrap:anywhere] bg-none bg-devices-pairing-command-background-color border border-solid",
+    "border-devices-pairing-command-border-color rounded-md pt-3 pr-3 pb-3 pl-3 mt-2.5 mr-0",
+    "mb-2.5 ml-0 font-normal text-[10px] leading-[1.8] font-code select-all"
+  ].join(" "),
+  pairInitialHint: [
+    "devices-pair-initial-hint"
+  ].join(" "),
+} as const;
 
 export interface PairingPanelProps {
   initiallyOpen?: boolean;
+  overlayTarget?: Element | null | undefined;
   onClose?: () => void;
   createCode: (signal: AbortSignal) => Promise<PairingCode>;
   onReauthenticate: () => void;
@@ -53,6 +105,7 @@ export function PairingPanel({
   createCode,
   onReauthenticate,
   initiallyOpen = false,
+  overlayTarget,
   onClose,
 }: PairingPanelProps): ReactElement {
   const panelId = useId();
@@ -184,7 +237,7 @@ export function PairingPanel({
   }
 
   return (
-    <div className={styles.pairing}>
+    <>
       {!initiallyOpen && (
         <Button
           type="button"
@@ -199,7 +252,7 @@ export function PairingPanel({
       {open &&
         createPortal(
           <div
-            className={styles.modal}
+            className={ui.modal}
             onPointerDown={(event) => {
               if (event.target === event.currentTarget) close();
             }}
@@ -209,34 +262,30 @@ export function PairingPanel({
               role="dialog"
               aria-modal="true"
               id={panelId}
-              className={styles.pairingPanel}
+              className={ui.pairingPanel}
               aria-labelledby={headingId}
             >
-              <div className={styles.listHead}>
-                <h3 id={headingId} className={styles.pairingHeading}>
-                  设备配对
+              <div className={ui.listHead}>
+                <h3 id={headingId} className={ui.pairingHeading}>
+                  {issued ? "设备配对" : "添加设备"}
                 </h3>
                 <IconButton label="关闭配对" onClick={close}>
                   <X size={16} />
                 </IconButton>
               </div>
-              <div className={styles.pairSteps}>
-                <span>01 网页生成配对码</span>
-                <span>02 车端输入</span>
+              <div className={ui.pairSteps}>
+                <span data-active={!issued}>01 网页生成配对码</span>
+                <span data-active={issued !== null}>02 车端输入</span>
                 <span>03 刷新设备</span>
               </div>
               {!issued && (
-                <p className={styles.quiet}>
+                <p className={ui.quiet}>
                   先在这里生成一次性配对码，再到车端完成配对。
                 </p>
               )}
-              {error !== null && (
-                <p role="alert" className={styles.failure}>
-                  {error.message}
-                </p>
-              )}
+              {!issued && <div role={error ? "alert" : undefined} className={ui.pairError}>{error?.message}</div>}
               {expired && (
-                <p role="status" className={styles.quiet}>
+                <p role="status" className={ui.quiet}>
                   配对码已过期。
                 </p>
               )}
@@ -263,33 +312,35 @@ export function PairingPanel({
                 </Button>
               ) : (
                 <>
-                  <div className={styles.pairingReceipt}>
-                    <code aria-label="配对码" className={styles.pairingCode}>
+                  <div className={ui.pairingReceipt}>
+                    <code aria-label="配对码" className={ui.pairingCode}>
                       {issued.code}
                     </code>
-                    <span className={styles.quiet}>剩余 {remaining} 秒</span>
                     <Button
                       type="button"
+                      aria-label="复制配对码"
                       onClick={() => void copy(issued.code)}
                     >
-                      复制配对码
+                      复制
                     </Button>
                   </div>
-                  <p className={styles.quiet}>
+                  <div className={ui.remaining}>剩余 {remaining} 秒</div>
+                  <p className={ui.quiet}>
                     在车端可写的目标目录运行以下命令，并在提示符中输入配对码。
                   </p>
-                  <code className={styles.pairingCommand}>{command}</code>
+                  <code className={ui.pairingCommand}>{command}</code>
                   <Button onClick={() => void copy(command)}>复制命令</Button>
                   {copyStatus && <p role="status">{copyStatus}</p>}
-                  <p className={styles.quiet}>
+                  <p className={ui.quiet}>
                     配对完成后可刷新列表。启动车端代理时使用同一凭据文件，连接后设备显示为在线。
                   </p>
                 </>
               )}
+              {!issued && <p className={ui.pairInitialHint}>配对码由云端签发，以返回的有效期为准。</p>}
             </section>
           </div>,
-          document.body,
+          overlayTarget ?? document.body,
         )}
-    </div>
+    </>
   );
 }

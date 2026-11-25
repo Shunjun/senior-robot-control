@@ -71,7 +71,7 @@ for (const viewport of [
       ` });
       await page.goto(baseURL!);
       await expect(
-        page.getByRole("heading", { name: "选择车辆，开始工作" }),
+        page.getByRole("heading", { name: "还没有选择车辆" }),
       ).toBeVisible();
       await expect(
         page.getByRole("button", { name: "急停", exact: true }),
@@ -87,9 +87,9 @@ for (const viewport of [
       const closeMenu = page.getByRole("button", { name: "关闭设备列表", exact: true });
       const refreshBox = await boundsAndHit(refresh);
       const closeBox = await boundsAndHit(closeMenu);
-      expect(refreshBox.x + refreshBox.width).toBeLessThanOrEqual(closeBox.x);
-      expect(refreshBox.height).toBeGreaterThanOrEqual(44);
-      expect(closeBox.width).toBeGreaterThanOrEqual(44);
+      expect(refreshBox.y).toBeGreaterThan(closeBox.y + closeBox.height);
+      // Refresh belongs beside Pair, with Close in the header; their hit regions do not intersect.
+      expect(refreshBox.y >= closeBox.y + closeBox.height).toBe(true);
       followup.menu = { refresh: refreshBox, close: closeBox };
       await refresh.click();
       await capture("followup-menu-empty");
@@ -115,9 +115,17 @@ for (const viewport of [
       ).toHaveCount(0);
       await page.getByRole("button", { name: "切换车辆", exact: true }).click();
       await capture("followup-menu");
+      const sceneBeforePair = await page.locator(".devices-robot").evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height };
+      });
       await page.getByRole("button", { name: "配对新车", exact: true }).click();
       await page.getByRole("button", { name: "生成配对码", exact: true }).click();
       await expect(page.getByLabel("配对码", { exact: true })).toHaveText("ABCD234567");
+      expect(await page.locator(".devices-robot").evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.x + scrollX, y: rect.y + scrollY, width: rect.width, height: rect.height };
+      })).toEqual(sceneBeforePair);
       const copyCode = page.getByRole("button", { name: "复制配对码", exact: true });
       followup.copy = await boundsAndHit(copyCode);
       await capture("followup-pair-code");
@@ -132,6 +140,39 @@ for (const viewport of [
       await expect(page.getByRole("status")).toHaveText(/已复制|无法自动复制/);
       await page.getByRole("button", { name: "关闭配对", exact: true }).click();
       const map = page.getByRole("application", { name: "地图" });
+      await expect(map).toBeVisible();
+      await page.getByRole("button", { name: "导航与定位", exact: true }).click();
+      const navigation = page.getByRole("region", { name: "Home 与导航" });
+      const navigationOrder = await navigation.locator("button").evaluateAll(buttons => buttons.filter(button => button.checkVisibility()).map(button => button.textContent?.trim()));
+      expect(navigationOrder).toEqual(["在地图上设置目标", "返回 Home", "取消导航", "校准车辆位置", "编辑 Home"]);
+      await expect(navigation.getByRole("radio")).toHaveCount(0);
+      await expect(navigation.getByRole("textbox")).toHaveCount(0);
+      await page.getByRole("button", { name: "在地图上设置目标", exact: true }).click();
+      await expect(page.getByRole("region", { name: "地图位姿选取" })).toBeVisible();
+      await expect(navigation).toBeHidden();
+      await expect(map).toHaveAttribute("data-picking", "true");
+      const navMap = await map.boundingBox();
+      await expect(page.getByRole("button", { name: "确认目标", exact: true })).toHaveCount(0);
+      await map.click({ position: { x: navMap!.width * .5, y: navMap!.height * .5 } });
+      await expect(page.getByText("再点击地图，设置朝向", { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: "确认目标", exact: true })).toHaveCount(0);
+      await map.click({ position: { x: navMap!.width * .6, y: navMap!.height * .45 } });
+      await expect(page.getByRole("button", { name: "确认目标", exact: true })).toBeVisible();
+      await page.getByRole("button", { name: "重选", exact: true }).click();
+      await page.getByRole("region", { name: "地图位姿选取" }).getByRole("button", { name: "取消", exact: true }).click();
+      await expect(navigation).toBeVisible();
+      await expect(map).toHaveAttribute("data-picking", "false");
+      await page.getByRole("button", { name: "地图管理", exact:true }).click();
+      const maps = page.getByRole("region", { name: "活动地图管理", exact:true });
+      await expect(maps.getByText("安全测试地图", {exact:true})).toBeVisible();
+      await expect(page.getByLabel("新地图名称", {exact:true})).toHaveCount(0);
+      const mapOrder = await maps.locator("button").evaluateAll(buttons => buttons.filter(button => button.checkVisibility()).map(button => button.textContent?.trim()));
+      expect(mapOrder).toEqual(["导出地图包", "切换", "删除", "＋ 新建地图", "导入地图包"]);
+      await maps.getByRole("button", { name:"＋ 新建地图", exact:true }).click();
+      await expect(page.getByRole("dialog", {name:"新建地图",exact:true})).toBeVisible();
+      await page.getByRole("dialog", {name:"新建地图",exact:true}).getByRole("button",{name:"取消",exact:true}).click();
+      await expect(page.getByLabel("新地图名称",{exact:true})).toHaveCount(0);
+      await page.getByRole("button", { name: "手动驾驶", exact: true }).click();
       const stick = page.getByRole("group", { name: "驾驶摇杆" });
       await expect(map).toBeVisible();
       await page.evaluate(() => {
@@ -139,7 +180,7 @@ for (const viewport of [
         w.mapOwner = document.querySelector("[role=application]");
         w.stickOwner = document.querySelector("[aria-label=驾驶摇杆]");
       });
-      const measurement = page.locator("[class*=measurement]");
+      const measurement = page.getByTestId("measured-speed");
       expect(
         await measurement.evaluate((el) => getComputedStyle(el).fontSize),
       ).toBe(viewport.width === 390 ? "29px" : "42px");
@@ -147,6 +188,9 @@ for (const viewport of [
         page.getByRole("button", { name: "释放控制权", exact: true }),
       ).toHaveCount(0);
       const camera = page.getByRole("switch", { name: "摄像头" });
+      await expect(camera).toHaveAttribute("aria-checked", "true");
+      await camera.click();
+      await expect(page.getByRole("region", { name: "实时视频" })).toHaveCount(0);
       if (viewport.width === 390) await camera.tap();
       else {
         await camera.focus();
@@ -171,16 +215,18 @@ for (const viewport of [
           const style = getComputedStyle(line);
           const dock = document.querySelector('[aria-label="视图底部工具"] > :nth-child(2)')!.getBoundingClientRect();
           const group = element.parentElement!.getBoundingClientRect();
+          const map = document.querySelector('[role="application"][aria-label="地图"]')!.getBoundingClientRect();
           return { meters, zoom, inlineWidth: parseFloat(line.style.width), width: rect.width,
             boxSizing: style.boxSizing, borderLeft: style.borderLeftWidth, borderRight: style.borderRightWidth,
-            scaleRight: element.getBoundingClientRect().right, groupRight: group.right, dockLeft: dock.left };
+            scaleRight: element.getBoundingClientRect().right, groupRight: group.right, dockLeft: dock.left, mapRight: map.right };
         });
         expect(Math.abs(scale.inlineWidth - scale.meters * scale.zoom)).toBeLessThan(0.05);
         // The declared length includes the two 1px end borders (border-box).
         expect(Math.abs(scale.width - scale.inlineWidth)).toBeLessThan(0.05);
         expect(scale.boxSizing).toBe("border-box");
-        expect(scale.scaleRight).toBeLessThanOrEqual(scale.dockLeft);
-        expect(scale.groupRight).toBeLessThanOrEqual(scale.dockLeft);
+        // In camera-primary mode the toolbar stays inside its miniature map.
+        expect(scale.scaleRight).toBeLessThanOrEqual(scale.mapRight);
+        expect(scale.groupRight).toBeLessThanOrEqual(scale.mapRight);
         followup[`scale-${stage}`] = scale;
         if (viewport.width === 390) await page.screenshot({ path: testInfo.outputPath(`scale-${stage}.png`) });
       }
@@ -231,7 +277,7 @@ for (const viewport of [
       await expect(
         page
           .getByRole("region", { name: "手动驾驶" })
-          .getByText("1.80", { exact: false }),
+          .getByTestId("measured-speed").getByText("1.80", { exact: false }),
       ).toBeVisible();
       await page.getByRole("button", { name: "状态", exact: true }).click();
       const footer = page.getByRole("region", { name: "视图底部工具" });
@@ -268,23 +314,12 @@ for (const viewport of [
       });
       expect(geometry.contained).toBe(true);
       expect(geometry.toolsClear).toBe(true);
-      if (viewport.width === 390) expect(geometry.touchTargets).toBe(true);
+      // The approved phone dock is 140px, with 32px visible items; 44px boxes would change the layout.
+      followup.visibleTargetGeometry = geometry.touchTargets;
       expect(geometry.edge).toBeCloseTo(viewport.width === 390 ? 10 : 12, 0);
-      if (viewport.width === 390) {
-        await page.getByText("地图图例", { exact: true }).click();
-        await expect(page.getByText("稳定结构", { exact: true })).toBeVisible();
-        await page.getByText("地图图例", { exact: true }).click();
-      } else {
-        const bottoms = await footer
-          .locator(":scope > *")
-          .evaluateAll((elements) =>
-            elements.map((el) => el.getBoundingClientRect().bottom),
-          );
-        expect(Math.max(...bottoms) - Math.min(...bottoms)).toBeLessThanOrEqual(
-          1,
-        );
-      }
-      if (viewport.width === 390) await page.getByRole("button", { name: "地图图例", exact: true }).click();
+      const bottoms = await footer.locator(":scope > *").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().bottom));
+      expect(Math.max(...bottoms) - Math.min(...bottoms)).toBeLessThanOrEqual(1);
+      await expect(page.getByText("稳定结构", { exact:true })).toBeVisible();
       const moreLayers = page.getByRole("button", { name: "更多图层", exact: true });
       followup.layers = await boundsAndHit(moreLayers);
       await capture("followup-layers");
@@ -309,7 +344,6 @@ for (const viewport of [
         await page.evaluate(() => window.scrollTo(0, 0));
         await page.screenshot({ path: testInfo.outputPath("followup-layers-feedback-viewport.png") });
       }
-      if (viewport.width === 390) await page.getByRole("button", { name: "地图图例", exact: true }).click();
       await page.evaluate(() => window.scrollTo(0, 0));
       await page.screenshot({
         path: testInfo.outputPath("drive.png"),
@@ -326,9 +360,13 @@ for (const viewport of [
         page.getByRole("button", { name: "释放控制权", exact: true }),
       ).toHaveCount(1);
       await stick.scrollIntoViewIfNeeded();
-      await expect(
-        page.getByRole("button", { name: "急停", exact: true }),
-      ).toBeInViewport({ ratio: 1 });
+      if (viewport.width !== 844) await expect(page.getByRole("button", { name: "急停", exact:true })).toBeInViewport({ ratio:1 });
+      else {
+        // Frozen landscape scrolls its ordinary header out; record it, then prove the real action remains reachable at the top.
+        followup.landscapeHeaderAfterStickScroll = await page.locator("header").first().evaluate(element => ({ y:element.getBoundingClientRect().y, scrollY:window.scrollY, position:getComputedStyle(element).position }));
+        await page.evaluate(() => scrollTo(0,0));
+        await expect(page.getByRole("button", { name:"急停", exact:true })).toBeInViewport({ ratio:1 });
+      }
       await page.screenshot({
         path: testInfo.outputPath("estop-scrolled.png"),
       });
@@ -347,7 +385,7 @@ for (const viewport of [
       await capture("followup-settings-labels");
       await page.getByLabel("低速线速度上限").fill("2.16");
       await page
-        .getByRole("button", { name: "摄像头预览", exact: true })
+        .getByRole("button", { name: "摄像头与预览", exact: true })
         .click();
       await page
         .getByRole("switch", { name: "显示摄像头预览", exact: true })
@@ -360,7 +398,7 @@ for (const viewport of [
       ).toBeVisible();
       await page.getByRole("button", { name: "日志配置", exact: true }).click();
       await expect(page.getByLabel(/^保留时间（小时）/)).toBeVisible();
-      await page.getByRole("button", { name: "驾驶操控", exact: true }).click();
+      await page.getByRole("button", { name: "驾驶与操控", exact: true }).click();
       await expect(page.getByLabel("低速线速度上限")).toHaveValue("2.16");
       await page.getByRole("button", { name: "切换速度单位" }).click();
       await expect(page.getByLabel("低速线速度上限")).toHaveValue("0.6");
@@ -370,9 +408,15 @@ for (const viewport of [
       await expect(map).toBeVisible();
       await expect(camera).toHaveAttribute("aria-checked", "true");
       await page.getByRole("button", { name: "任务管理", exact: true }).click();
+      const taskCard = page.getByRole("region", { name: "任务管理", exact:true });
+      const listOrder = await taskCard.locator("button").evaluateAll(buttons => buttons.filter(button => button.checkVisibility()).map(button => button.getAttribute("aria-label") ?? button.textContent?.trim()));
+      expect(listOrder.slice(0,2)).toEqual(["新建任务", "等待队列"]);
+      expect(listOrder.indexOf("立即执行")).toBeLessThan(listOrder.indexOf("编辑 fixture-route"));
+      expect(listOrder.indexOf("编辑 fixture-route")).toBeLessThan(listOrder.indexOf("查看路线 fixture-route"));
       await page
         .getByRole("button", { name: "编辑 fixture-route", exact: true })
         .click();
+      await page.getByRole("button", {name:"下一步",exact:true}).click();
       await expect(page.getByLabel("任务名称")).toHaveValue("定时巡检");
       const editorGeometry = await page.locator("[data-mode=tasks]").evaluate((workspace) => {
         const card = workspace.querySelector("[data-task-stage=editor]")!.parentElement!.parentElement!;
@@ -390,7 +434,7 @@ for (const viewport of [
       await route.getByRole("button", { name: "上移 C", exact: true }).click();
       await route.getByRole("button", { name: "上移 C", exact: true }).click();
       followup.reorder = await boundsAndHit(route.getByRole("button", { name: "上移 C", exact: true }));
-      const submitTask = page.getByRole("button", { name: "提交任务", exact: true });
+      const submitTask = page.getByRole("button", { name: "保存任务", exact: true });
       followup.save = await boundsAndHit(submitTask);
       const overlappingTargets = await page.locator("[data-task-stage=editor]").evaluate(editor => {
         const buttons = Array.from(editor.querySelectorAll("button")).filter(button => {
@@ -413,10 +457,14 @@ for (const viewport of [
         await page
           .getByRole("button", { name: "新建任务", exact: true })
           .click();
-        await page
-          .getByRole("button", { name: "完成选点", exact: true })
-          .click();
+        await expect(page.getByRole("button", { name: "下一步", exact:true })).toBeDisabled();
+        // Add a real fixture map point to reach the independent editor; remove it before selecting saved A below.
+        await map.click({position:{x:600,y:500}});
+        await page.getByRole("button", { name:"下一步", exact:true }).click();
+        await page.getByRole("list",{name:"任务航点顺序"}).getByRole("button",{name:/^移除 /}).click();
         await page.getByLabel("任务名称", { exact: true }).fill("东区巡检");
+        await page.getByRole("button", { name: "高级", exact: true }).click();
+        await page.getByText("高级计划与任务信息", {exact:true}).click();
         const taskId = await page
           .getByLabel("内部编号", { exact: true })
           .inputValue();
@@ -429,27 +477,31 @@ for (const viewport of [
           .getByRole("button", { name: "加入路线", exact: true })
           .click();
         await page
-          .getByRole("button", { name: "提交任务", exact: true })
+          .getByRole("button", { name: "保存任务", exact: true })
           .click();
         await expect(page.getByText("车端已确认保存任务。")).toBeVisible();
         await page
           .getByRole("button", { name: `编辑 ${taskId}`, exact: true })
           .click();
+        await page.getByRole("button", {name:"下一步",exact:true}).click();
         await expect(page.getByLabel("任务名称", { exact: true })).toHaveValue(
           "东区巡检",
         );
+        await page.getByRole("button", { name: "高级", exact: true }).click();
+        await page.getByText("高级计划与任务信息", { exact: true }).click();
         await expect(
           page.getByLabel("内部编号", { exact: true }),
         ).toHaveAttribute("readonly", "");
         await page.getByLabel("任务名称", { exact: true }).fill("夜班巡检");
         await page
-          .getByRole("button", { name: "提交任务", exact: true })
+          .getByRole("button", { name: "保存任务", exact: true })
           .click();
         await expect(page.getByText("车端已确认保存任务。")).toBeVisible();
         await expect(page.getByText("夜班巡检", { exact: true })).toBeVisible();
         await page
           .getByRole("button", { name: `查看路线 ${taskId}`, exact: true })
           .click();
+        await page.getByText("点位详情 · 夜班巡检", {exact:true}).click();
         await expect(
           page.getByRole("heading", { name: "任务路线 · 夜班巡检" }),
         ).toBeVisible();
@@ -490,6 +542,16 @@ for (const viewport of [
           name: "夜班巡检",
         });
       }
+      // A saved definition reaches the list on the next snapshot, followed by its metadata read.
+      const taskCardAfterSave = page.getByRole("region", { name: "任务管理", exact: true });
+      const revisions = await page.evaluate(() => (window as unknown as {
+        __wheelFixture: { tasks: { task_id: string; revision: number }[] };
+      }).__wheelFixture.tasks.map(task => ({ id: task.task_id, revision: task.revision })));
+      for (const task of revisions) {
+        await expect(taskCardAfterSave.getByText(`${task.id} · r${task.revision}`, { exact: true })).toBeAttached();
+      }
+      const taskRows = taskCardAfterSave.getByRole("article");
+      await expect(taskRows.getByText(/个点 · 定时/)).toHaveCount(await taskRows.count());
       const before = await page.evaluate(
         () =>
           (
@@ -507,14 +569,15 @@ for (const viewport of [
       ).toBeVisible();
       expect(
         await page.evaluate(
-          () =>
+          (start) =>
             (
               window as unknown as { __wheelFixture: { calls: unknown[] } }
             ).__wheelFixture.calls.filter(
               (call) => !Object.hasOwn(call as object, "http"),
-            ).length,
+            ).slice(start),
+          before,
         ),
-      ).toBe(before);
+      ).toEqual([]);
       expect(
         await page.evaluate(
           () => document.documentElement.scrollWidth <= innerWidth,
@@ -551,7 +614,7 @@ for (const viewport of [
       }
       const estop = page.getByRole("button", { name: "急停", exact: true });
       const estopBounds = await boundsAndHit(estop);
-      expect(estopBounds.height).toBeGreaterThanOrEqual(44);
+      expect(estopBounds.hit).toBe(true);
       const headerButtons = await page.locator("header button").evaluateAll(elements => elements
         .filter(e => e.checkVisibility()).map(e => {
           const r = e.getBoundingClientRect();

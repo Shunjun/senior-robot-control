@@ -8,7 +8,54 @@ import { ManualController, type ManualPhase } from "./ManualController";
 import { displaySpeed, useSpeedUnit } from "../../display/speedUnits";
 import { Button } from "../../components/ui/Button";
 import { SegmentedControl } from "../../components/ui/SegmentedControl";
-import styles from "./Drive.module.css";
+
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  drive: [
+    "drive-drive grid gap-0 max-[460.001px]:grid-cols-[minmax(0,_1fr)_146px] max-[460.001px]:gap-[5px_12px] max-[460.001px]:[&>.drive-quiet]:[grid-column:1/-1] max-[460.001px]:[&>.drive-quiet]:text-[9px] max-[460.001px]:[&>.drive-quiet]:leading-[1.5]",
+    "max-[460.001px]:[&>.drive-quiet]:mt-1"
+  ].join(" "),
+  driveHead: [
+    "drive-drive-head flex items-center justify-between gap-2.5 [&_h3]:text-[15px] [&_h3]:font-medium [&_h3]:mt-0",
+    "[&_h3]:mr-0 [&_h3]:mb-[5px] [&_h3]:ml-0 max-[460.001px]:[grid-column:1] max-[460.001px]:[&_h3]:text-[14px]"
+  ].join(" "),
+  english: [
+    "drive-english font-normal text-[9px] leading-[normal] font-mono tracking-[1px] text-english"
+  ].join(" "),
+  subtitle: [
+    "drive-subtitle text-[11px] leading-[1.8] text-muted mt-0 mr-0 mb-0 ml-0",
+    "max-[460.001px]:[grid-column:1] max-[460.001px]:text-[9px]"
+  ].join(" "),
+  measurement: [
+    "drive-measurement font-light text-[42px] leading-[normal] font-number tracking-[-1.4px] mt-[15px] mr-0",
+    "mb-[3px] ml-0 [&_small]:font-normal [&_small]:text-[11px] [&_small]:leading-[normal] [&_small]:font-ui [&_small]:tracking-[0] [&_small]:text-muted",
+    "max-[760.001px]:text-[32px] max-[760.001px]:mt-2.5 max-[460.001px]:[grid-column:1] max-[460.001px]:text-[29px] max-[460.001px]:mt-0 max-[460.001px]:mr-0 max-[460.001px]:mb-0 max-[460.001px]:ml-0"
+  ].join(" "),
+  gears: [
+    "drive-gears w-full max-[460.001px]:[grid-column:1]"
+  ].join(" "),
+  readings: [
+    "drive-readings flex justify-center gap-5.5 text-[10px] text-drive-readings-color whitespace-nowrap max-[460.001px]:[grid-column:2]",
+    "max-[460.001px]:text-[8px] max-[460.001px]:gap-[5px]"
+  ].join(" "),
+  leaseTag: [
+    "drive-lease-tag text-drive-lease-tag-color text-[10px] mt-[15px] mr-0 mb-2.5 ml-0 max-[760.001px]:mt-2.5",
+    "max-[760.001px]:mr-0 max-[760.001px]:mb-2.5 max-[760.001px]:ml-0 max-[460.001px]:[grid-column:1] max-[460.001px]:[grid-row:5] max-[460.001px]:mt-1 max-[460.001px]:mr-0 max-[460.001px]:mb-1",
+    "max-[460.001px]:ml-0 max-[460.001px]:text-[9px]"
+  ].join(" "),
+  authority: [
+    "drive-authority [&_button]:w-full max-[460.001px]:[grid-column:1] max-[460.001px]:[grid-row:6] max-[460.001px]:[&_button]:text-[11px] max-[460.001px]:[&_button]:pt-2 max-[460.001px]:[&_button]:pr-2 max-[460.001px]:[&_button]:pb-2",
+    "max-[460.001px]:[&_button]:pl-2"
+  ].join(" "),
+  quiet: [
+    "drive-quiet text-muted mt-2.5 mr-0 mb-0 ml-0 leading-[1.8] text-[11px]"
+  ].join(" "),
+  failure: [
+    "drive-failure text-warning-ink bg-none bg-red-wash pt-2 pr-2 pb-2 pl-2",
+    "rounded-md text-[11px] max-[460.001px]:[grid-column:1/-1] max-[460.001px]:text-[9px] max-[460.001px]:leading-[1.5] max-[460.001px]:mt-1"
+  ].join(" "),
+} as const;
+
 export interface DriveViewProps {
   robotId: string;
   link: RobotLink;
@@ -40,6 +87,12 @@ export function DriveView({
     [link, robotId],
   );
   const measured = useMeasuredSpeed(view);
+  const turn =
+    measured !== null &&
+    view.frame?.body_reference &&
+    !view.frame.body_reference.stale
+      ? view.frame.body_reference.average.wz
+      : null;
   const enabled = active && view.manual_connected;
   useEffect(() => {
     if (!enabled) {
@@ -108,19 +161,20 @@ export function DriveView({
   }
   return (
     <section
-      className={styles.drive}
+      className={ui.drive}
       data-compact={compact}
       aria-label="手动驾驶"
     >
-      <header className={styles.driveHead}>
+      <header className={ui.driveHead}>
         <h3>手动驾驶</h3>
+        <span className={ui.english}>DRIVE</span>
       </header>
-      <p className={styles.subtitle}>按住摇杆，控制方向与力度</p>
-      <p className={styles.measurement}>
+      <p className={ui.subtitle}>一个摇杆，控制速度与转向。</p>
+      <p data-testid="measured-speed" className={ui.measurement}>
         {measured === null ? "不可用" : displaySpeed(measured, unit).toFixed(2)}{" "}
         <small>{unit}</small>
       </p>
-      <div className={styles.gears}>
+      <div className={ui.gears}>
         <SegmentedControl
           label="档位"
           value={gear}
@@ -145,10 +199,25 @@ export function DriveView({
         onChange={change}
         onRelease={stopGesture}
       />
-      <p className={styles.leaseTag}>
+      <div className={ui.readings} aria-label="车辆测量读数">
+        <span>
+          速度{" "}
+          <b>
+            {measured === null
+              ? "不可用"
+              : displaySpeed(measured, unit).toFixed(2)}
+          </b>{" "}
+          {unit}
+        </span>
+        <span>
+          转向 <b>{turn === null ? "不可用" : turn.toFixed(2)}</b> rad/s
+        </span>
+      </div>
+      <p className={ui.leaseTag}>
+        <span aria-hidden="true">{phase === "none" ? "○ " : "● "}</span>
         {
           {
-            none: "未获取控制",
+            none: "未获取控制权",
             preparing: "等待车端准备",
             prepared: "已准备 · 等待新按压",
             active: "手动会话进行中",
@@ -156,7 +225,7 @@ export function DriveView({
           }[phase]
         }
       </p>
-      <div className={styles.authority}>
+      <div className={ui.authority}>
         {phase === "none" ? (
           <Button
             variant="primary"
@@ -174,9 +243,13 @@ export function DriveView({
           </Button>
         )}
       </div>
-      <p className={styles.quiet}>松杆停车；失焦或退出后释放控制。</p>
+      <p className={ui.quiet}>
+        靠近中轴自动吸附 · 松手归零
+        <br />
+        切换页面或操作卡片时释放控制权
+      </p>
       {error && (
-        <p role="alert" className={styles.failure}>
+        <p role="alert" className={ui.failure}>
           {error}
         </p>
       )}

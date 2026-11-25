@@ -1,105 +1,214 @@
-/* Industrial dashboard theme: graphite ground, warm-white ink, amber for controls,
-   teal for healthy state, one red reserved for the emergency stop and hard faults.
-   Only tokens and resets live here; component styles stay in CSS Modules. */
+@import "tailwindcss" source("./");
 
-:root {
-  --graphite-950: #202023;
-  --graphite-900: #252528;
-  --graphite-850: #2b2b2e;
-  --graphite-800: #303033;
-  --graphite-700: #414144;
-  --graphite-600: #646268;
-  --line: #ffffff20;
-  --line-soft: #ffffff12;
-  --ink: #eeeae3;
-  --ink-soft: #c7c0b9;
-  --ink-dim: #aaa49f;
-  --amber: #ff7532;
-  --amber-deep: #d35a25;
-  --amber-wash: #ff75321a;
-  --teal: #c9c0b1;
-  --teal-wash: #ffffff0a;
-  --red: #ec4f3c;
-  --red-deep: #a8342b;
-  --red-wash: #ec4f3c22;
+/* One shared palette and geometry vocabulary for every presentation. */
+@theme {
+  --color-graphite-950: #202023;
+  --color-graphite-900: #252528;
+  --color-graphite-850: #2b2b2e;
+  --color-graphite-800: #303033;
+  --color-graphite-700: #414144;
+  --color-graphite-600: #646268;
+  --color-line: #ffffff20;
+  --color-line-soft: #ffffff12;
+  --color-ink: #eeeae3;
+  --color-ink-soft: #c7c0b9;
+  --color-ink-dim: #aaa49f;
+  --color-muted: #aeadab;
+  --color-quiet: #bdbbb7;
+  --color-field: #b8bab2;
+  --color-amber: #ff7532;
+  --color-amber-deep: #d35a25;
+  --color-amber-wash: #ff75321a;
+  --color-teal: #c9c0b1;
+  --color-teal-wash: #ffffff0a;
+  --color-red: #ec4f3c;
+  --color-red-deep: #a8342b;
+  --color-red-wash: #ec4f3c22;
+  --color-control: #ffffff07;
+  --color-control-hover: #ffffff17;
+  --color-input: #171a1bcc;
+  --color-input-ink: #f2eee6;
+  --color-card: #2b2b2ef2;
+  --color-full-view: #24282bfa;
+  --color-settings-card: #2a2f30;
+  --color-map-unknown: #424449;
+  --color-map-structure: #6c6763;
+  --color-map-free: #d8d3cb;
+  --color-stick: #232326;
+  --color-release-line: #ff894b;
+  --color-release-ink: #ffb182;
+  --color-warning-ink: #ffc3a9;
+  --color-alert-ink: #ffbca4;
+  --color-online: #b7d19b;
+  --color-english: #9da595;
+  --color-map-tool: #303033ee;
+  --color-scale: #2d2d30e8;
+  --color-scale-ink: #eee6dc;
+  --color-selected: #e2ded1;
+  --color-selected-ink: #302b27;
+  --color-segmented: #1b1b1e66;
+  --color-switch-surface: #303033ed;
+  --color-switch-off: #656263;
+  --color-log-surface: #1d2223;
+  --color-log-caption: #a29b94;
+  --color-log-time: #8c8984;
+  --color-log-level: #c5b8a8;
+  --color-log-module: #a7b8c4;
+  --color-log-message: #d1d7ca;
+  --color-log-info: #adc3ae;
+  --color-log-warning-surface: #d78c3508;
+  --color-log-warning: #ffb16b;
+  --color-log-warning-message: #dec8ae;
+  --color-log-error: #ff8f78;
+  --color-log-error-message: #ffe0d6;
+  --color-log-connection: #8cbcaf;
+  --color-log-mapping: #b0a9d3;
+  --color-log-scheduler: #c5bb8f;
+  --color-log-safety: #f7ad8e;
+  --color-app-side-background-color: #272d2dfc;
+  --color-app-placeholder-background-color: #29292cd9;
+  --color-app-demo-background-color: #654524;
+  --color-app-header-color: #a8ad9f;
+  --color-app-empty-symbol-border-color: #ffffff18;
+  --color-app-empty-symbol-background-color: #ffffff04;
+  --color-app-empty-english-color: #a79583;
+  --color-app-empty-footnote-color: #8e8a85;
+  --color-app-footer-color: #b5b2ad;
+  --color-devices-item-border-color: #ffffff1c;
+  --color-devices-item-active-background-color: #ff75320b;
+  --color-devices-item-active-border-color: #ff753255;
+  --color-devices-vehicle-mark-color: #aaa5a0;
+  --color-devices-unpair-confirm-background-color: #ffffff06;
+  --color-devices-modal-background-color: #0007;
+  --color-devices-pair-steps-color: #858f7d;
+  --color-devices-pair-steps-color-2: #ffae77;
+  --color-devices-pairing-receipt-background-color: #171b1d;
+  --color-devices-pairing-receipt-border-color: #ffffff16;
+  --color-devices-pairing-code-color: #fff0de;
+  --color-devices-remaining-color: #f8b685;
+  --color-devices-pairing-command-background-color: #191d1f;
+  --color-devices-pairing-command-border-color: #ffffff15;
+  --color-devices-connection-notice-border-color: #ff753244;
+  --color-devices-connection-notice-background-color: #29292cf5;
+  --color-devices-pair-error-color: #ffa184;
+  --color-login-input-border-color: #ffffff25;
+  --color-login-password-field-color: #b5b0a8;
+  --color-login-failure-color: #ffad95;
+  --color-workspace-video-viewport-border-color: #ffffff40;
+  --color-workspace-view-name-color: #e6dfd8;
+  --color-workspace-view-name-background-color: #303032eb;
+  --color-workspace-badge-background-color: #ff753215;
+  --color-workspace-badge-color: #ffc69d;
+  --color-workspace-dock-border-color: #ffffff26;
+  --color-workspace-dock-color: #bebcba;
+  --color-workspace-legend-background-color: #27292ded;
+  --color-workspace-legend-border-color: #ffffff14;
+  --color-workspace-legend-color: #d5cec7;
+  --color-workspace-swap-border-color: #ffffff35;
+  --color-workspace-toast-background-color: #141b18f5;
+  --color-workspace-toast-border-color: #ffffff22;
+  --color-workspace-toast-color: #e8e8db;
+  --color-workspace-map-message-background-color: #29292cf0;
+  --color-performance-panel-metric-border-top-color: #ffffff0b;
+  --color-performance-panel-freshness-color: #a09a94;
+  --color-status-overlay-gauge-border-color: #ffffff1d;
+  --color-status-overlay-gauge-color: #d7cec4;
+  --color-status-overlay-gauge-color-2: #9a9289;
+  --color-status-overlay-attitude-caption-color: #bab2aa;
+  --color-drive-readings-color: #c1bbb4;
+  --color-drive-lease-tag-color: #c3bbb2;
+  --color-drive-estop-border-color: #bd655166;
+  --color-drive-estop-color: #ffd0c5;
+  --color-drive-estop-background-color: #5b3026d9;
+  --color-drive-recovery-actions-background-color: #2b2b2ef5;
+  --color-drive-single-stick-border-color: #ffffff1a;
+  --color-drive-single-stick-background-color: #ff914444;
+  --color-drive-axis-up-color: #9b9690;
+  --color-logs-caption-border-bottom-color: #ffffff0c;
+  --color-map-pose-banner-background-color: #24292cf2;
+  --color-map-pose-banner-border-color: #ff753266;
+  --color-map-route-dot-stroke: #ffe4cb;
+  --color-map-scan-hits-stroke: #ffb27a;
+  --color-map-scan-legend-color: #a78bfa;
+  --color-map-marker-robot-stroke: #fff7e9;
+  --color-map-map-details-color: #c7bfb6;
+  --color-map-map-details-background-color: #292b2fef;
+  --color-map-map-details-background-color-2: #292b2ff5;
+  --color-map-stale-banner-color: #ffc197;
+  --color-mapping-panel-color: #ffb4a1;
+  --color-mapping-panel-border-color: #bc5d4944;
+  --color-mapping-warning-background-color: #ff75320e;
+  --color-settings-card-color: #ffb180;
+  --color-settings-card-background-color: #ff753216;
+  --color-settings-feedback-border-color: #ff753233;
+  --color-tasks-queue-info-color: #c9c1b9;
+  --color-tasks-grip-color: #7e8978;
+  --color-tasks-map-background-color: #29292ce8;
+  --color-video-viewport-background-color: #070706;
+  --color-tone-26282ba8: #26282ba8;
+  --color-tone-1b1e2299: #1b1e2299;
+  --color-tone-0006: #0006;
+  --color-tone-0002: #0002;
+  --color-tone-0003: #0003;
+  --color-tone-0004: #0004;
+  --color-tone-0005: #0005;
+  --color-tone-ffc590: #ffc590;
   --font-display: "PingFang SC", "Microsoft YaHei", sans-serif;
   --font-data: "IBM Plex Mono", ui-monospace, monospace;
-  --chamfer: 12px;
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 40px;
-  --touch: 44px;
-  --viewport-height: calc(100svh - 116px);
-  --viewport-min: 640px;
-  color-scheme: dark;
+  --font-number: "Helvetica Neue", sans-serif;
+  --font-code: "SFMono-Regular", Consolas, monospace;
+  --font-mono: monospace;
+  --font-ui: sans-serif;
+  --font-log: "SFMono-Regular", Consolas, "Liberation Mono", "PingFang SC", monospace;
+  --radius-2xs: 2px;
+  --radius-xs: 5px;
+  --radius-sm: 6px;
+  --radius-input: 7px;
+  --radius-md: 8px;
+  --radius-control: 9px;
+  --radius-lg: 10px;
+  --radius-dock-item: 11px;
+  --radius-panel: 12px;
+  --radius-preview: 13px;
+  --radius-xl: 14px;
+  --radius-pill: 15px;
+  --radius-card: 16px;
+  --radius-dock: 17px;
+  --radius-scene: 18px;
+  --radius-2xl: 20px;
+  --radius-symbol: 24px;
+  --shadow-app-side: 0 16px 48px var(--color-tone-0006);
+  --shadow-app-empty-symbol: 0 12px 36px var(--color-tone-0002);
+  --shadow-ui-switch-track: 0 1px 2px var(--color-tone-0003);
+  --shadow-ui-card: 0 9px 30px var(--color-tone-0003);
+  --shadow-devices-robot: 0 20px 50px var(--color-tone-0002);
+  --shadow-login-login-panel: 0 15px 50px var(--color-tone-0003);
+  --shadow-workspace-video-viewport: 0 7px 24px var(--color-tone-0004);
+  --shadow-workspace-dock: 0 8px 28px var(--color-tone-0004);
+  --shadow-workspace-toast: 0 8px 20px var(--color-tone-0004);
+  --shadow-drive-single-knob: 0 4px 14px var(--color-tone-0005),
+    inset 0 1px var(--color-tone-ffc590);
+  --shadow-map-pose-banner: 0 4px 20px var(--color-tone-0002);
 }
 
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-html,
-body,
-#root {
-  min-height: 100%;
-}
-
-body {
-  margin: 0;
-  color: var(--ink);
-  font-family: var(--font-display);
-  font-size: 13px;
-  line-height: 1.5;
-  background:
-    linear-gradient(#11141645, #12151560),
-    url("./assets/concrete.jpg") center/cover fixed;
-  -webkit-font-smoothing: antialiased;
-}
-
-button,
-input {
-  font: inherit;
-  color: inherit;
-}
-
-a {
-  color: inherit;
-}
-
-:focus-visible {
-  outline: 2px solid var(--amber);
-  outline-offset: 2px;
-}
-
-::selection {
-  background: var(--amber);
-  color: var(--graphite-950);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.001ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.001ms !important;
-  }
-}
-
-@media (max-width: 760px) {
-  :root {
-    --viewport-height: calc(100svh - 118px);
-    --viewport-min: 680px;
-  }
-}
-@media (max-width: 460px) {
-  :root {
-    --viewport-height: calc(100svh - 143px);
-    --viewport-min: 660px;
-  }
+@layer base {
+  :root { color-scheme: dark; --viewport-height: calc(100svh - 116px); --viewport-min: 640px; }
+  html, body, #root { min-height: 100%; }
+  body { margin: 0; color: var(--color-ink); font-family: var(--font-display); font-size: 13px; line-height: 1.5; background: linear-gradient(#11141645, #12151560), url("./assets/concrete.jpg") center/cover fixed; -webkit-font-smoothing: antialiased; }
+  button, input, select { font: inherit; color: inherit; }
+  a { color: inherit; }
+  p { margin-block: 1em; }
+  h1 { font-size: 2em; font-weight: bold; margin-block: .67em; }
+  h2 { font-size: 1.5em; font-weight: bold; margin-block: .83em; }
+  h3 { font-size: 1.17em; font-weight: bold; margin-block: 1em; }
+  h4 { font-weight: bold; margin-block: 1.33em; }
+  ol, ul { margin-block: 1em; padding-inline-start: 40px; }
+  ol { list-style: decimal; }
+  ul { list-style: disc; }
+  legend { padding-inline: 2px; }
+  :focus-visible { outline: 2px solid var(--color-amber); outline-offset: 2px; }
+  ::selection { background: var(--color-amber); color: var(--color-graphite-950); }
+  @media (max-width: 760px) { :root { --viewport-height: calc(100svh - 118px); --viewport-min: 680px; } }
+  @media (max-width: 460px) { :root { --viewport-height: calc(100svh - 143px); --viewport-min: 660px; } }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; } }
 }

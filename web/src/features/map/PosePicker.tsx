@@ -2,7 +2,42 @@ import { useEffect, useState, type ReactElement } from "react";
 
 import type { MapRef, RobotSnapshot } from "../../api/protocol";
 import type { OccupancySnapshot, Pose } from "./MapCanvas";
-import styles from "./Map.module.css";
+
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  poseBanner: [
+    "map-pose-banner absolute top-[65px] left-[50%] [transform:translateX(-50%)] z-[14] w-[max-content] max-w-[90%]",
+    "pt-[11px] pr-[15px] pb-[11px] pl-[15px] bg-none bg-map-pose-banner-background-color border border-solid",
+    "border-map-pose-banner-border-color rounded-lg text-[12px] shadow-map-pose-banner max-[760.001px]:top-15 max-[760.001px]:text-[10px] max-[460.001px]:w-[max-content]"
+  ].join(" "),
+  bannerRow: [
+    "map-banner-row flex items-center gap-2.5 flex-wrap [&_button]:text-[11px] [&_button]:pt-1.5 [&_button]:pr-[9px]",
+    "[&_button]:pb-1.5 [&_button]:pl-[9px] max-[460.001px]:justify-center max-[460.001px]:gap-1.5"
+  ].join(" "),
+  primary: [
+    "map-primary pt-[9px] pr-[13px] pb-[9px] pl-[13px] border border-solid",
+    "rounded-control cursor-pointer bg-none bg-amber border-amber text-white [&:disabled]:opacity-[0.36] [&:disabled]:cursor-not-allowed"
+  ].join(" "),
+  tool: [
+    "map-tool pt-[9px] pr-[13px] pb-[9px] pl-[13px] text-ink bg-none",
+    "bg-control border border-solid border-devices-item-border-color rounded-control cursor-pointer [&:disabled]:opacity-[0.36] [&:disabled]:cursor-not-allowed"
+  ].join(" "),
+  quiet: [
+    "map-quiet text-muted text-[11px] leading-[1.8] mt-0 mr-0 mb-0 ml-0"
+  ].join(" "),
+  coordinateDetails: [
+    "map-coordinate-details mt-2 text-muted text-[9px] [&_summary]:cursor-pointer"
+  ].join(" "),
+  fields: [
+    "map-fields grid grid-cols-[repeat(3,_minmax(0,_1fr))] gap-3 mt-2 mr-0 mb-2 ml-0",
+    "max-[460.001px]:gap-1.5"
+  ].join(" "),
+  field: [
+    "map-field grid gap-[7px] text-[11px] text-field [&_input]:min-w-0 [&_input]:w-full [&_input]:pt-2.5",
+    "[&_input]:pr-2.5 [&_input]:pb-2.5 [&_input]:pl-2.5 [&_input]:text-input-ink [&_input]:bg-none [&_input]:bg-input [&_input]:border",
+    "[&_input]:border-solid [&_input]:border-login-input-border-color [&_input]:rounded-input max-[460.001px]:[&_input]:pt-1.5 max-[460.001px]:[&_input]:pr-1.5 max-[460.001px]:[&_input]:pb-1.5 max-[460.001px]:[&_input]:pl-1.5"
+  ].join(" "),
+} as const;
 
 /** A navigation goal. The map reference says which map the pose is in. */
 export interface MapGoal {
@@ -28,6 +63,10 @@ export interface PosePickerProps {
   onHint: (hint: PoseHint) => void;
   onHome?: (goal: MapGoal) => void;
   pending?: boolean;
+  orientationReady?: boolean;
+  selectionMode?: Mode;
+  onCancel?: () => void;
+  onRefresh?: () => void;
 }
 
 type Mode = "goal" | "hint" | "home";
@@ -126,9 +165,19 @@ export function PosePicker({
   onHint,
   onHome,
   pending = false,
+  orientationReady = true,
+  selectionMode,
+  onCancel,
+  onRefresh,
 }: PosePickerProps): ReactElement {
-  const [mode, setMode] = useState<Mode>("goal");
+  const mode = selectionMode ?? "goal";
   const [fields, setFields] = useState<Fields>(EMPTY);
+  useEffect(() => {
+    if (!onCancel) return;
+    const escape = (event: KeyboardEvent) => { if (event.key === "Escape") onCancel(); };
+    document.addEventListener("keydown", escape);
+    return () => document.removeEventListener("keydown", escape);
+  }, [onCancel]);
 
   // A pick on the map writes the fields; typing must not be reformatted under the cursor.
   useEffect(() => {
@@ -148,7 +197,7 @@ export function PosePicker({
   const pose = parseFields(fields);
   const reason = blockReason(snapshot, map, mode);
   const invalid = pose === null;
-  const blocked = reason !== null || invalid || pending;
+  const blocked = reason !== null || invalid || pending || !orientationReady;
   const mapRef = map.map_ref;
 
   function submit(): void {
@@ -159,113 +208,76 @@ export function PosePicker({
   }
 
   return (
-    <section className={styles.picker} aria-label="位姿设定">
-      <fieldset className={styles.modes}>
-        <legend className={styles.legend}>设定内容</legend>
-        <label className={styles.choice}>
-          <input
-            type="radio"
-            name="pose-mode"
-            checked={mode === "goal"}
-            onChange={() => setMode("goal")}
-          />
-          <span>目标点</span>
-        </label>
-        <label className={styles.choice}>
-          <input
-            type="radio"
-            name="pose-mode"
-            checked={mode === "hint"}
-            onChange={() => setMode("hint")}
-          />
-          <span>重定位提示</span>
-        </label>
-        {onHome !== undefined && (
-          <label className={styles.choice}>
-            <input
-              type="radio"
-              name="pose-mode"
-              checked={mode === "home"}
-              onChange={() => setMode("home")}
-            />
-            <span>Home 坐标</span>
-          </label>
-        )}
-      </fieldset>
-
-      <p className={styles.quiet}>
-        {draft
-          ? "已选择位置，可拖动设置朝向并确认。"
-          : "在地图上选择目标位置，拖动设置朝向。"}
-      </p>
-      <details open={draft !== null}>
-        <summary>坐标与朝向</summary>
-        <div className={styles.fields}>
-          <label className={styles.field}>
-            <span>X (m)</span>
-            <input
-              inputMode="decimal"
-              autoComplete="off"
-              value={fields.x}
-              onChange={(event) => edit({ x: event.target.value })}
-            />
-          </label>
-          <label className={styles.field}>
-            <span>Y (m)</span>
-            <input
-              inputMode="decimal"
-              autoComplete="off"
-              value={fields.y}
-              onChange={(event) => edit({ y: event.target.value })}
-            />
-          </label>
-          <label className={styles.field}>
-            <span>朝向 (°)</span>
-            <input
-              inputMode="decimal"
-              autoComplete="off"
-              value={fields.degrees}
-              onChange={(event) => edit({ degrees: event.target.value })}
-            />
-          </label>
+      <section className={ui.poseBanner} aria-label="地图位姿选取">
+        <div className={ui.bannerRow}>
+          <span>
+            {draft && !orientationReady
+              ? "再点击地图，设置朝向"
+              : draft
+              ? `${mode === "home" ? "Home" : mode === "hint" ? "校准位置" : "导航目标"}已选定`
+              : "先点击位置，再点击设置朝向"}
+          </span>
+          {orientationReady && (draft || fields.x !== "" || fields.y !== "") && (
+          <button
+            aria-label={mode === "home" ? "更新 Home 坐标" : mode === "hint" ? "提交定位提示" : "确认目标"}
+            type="button"
+            className={ui.primary}
+            disabled={blocked}
+            onClick={submit}
+          >
+            确认
+          </button>
+          )}
+          {draft && orientationReady && (
+            <button
+              type="button"
+              className={ui.tool}
+              disabled={pending}
+              onClick={() => {
+                setFields(EMPTY);
+                onDraftChange(null);
+              }}
+            >
+              重选
+            </button>
+          )}
+          {(!draft || !orientationReady) && <button type="button" className={ui.tool} onClick={onCancel}>取消</button>}
         </div>
-      </details>
-      {mapRef !== null && (
-        <p className={styles.mapRef}>
-          地图 {mapRef.map_id} · r{mapRef.reference_revision}
-        </p>
-      )}
-      {reason !== null && (
-        <p className={styles.blocked} role="note">
-          {reason}
-        </p>
-      )}
-      {reason === null && invalid && (
-        <p className={styles.quiet}>输入 X、Y 和朝向，或在地图上按下选点。</p>
-      )}
-      {mode === "hint" && (
-        <p className={styles.quiet}>
-          提示只是扫描匹配的起点，提交后不代表已经定位。
-        </p>
-      )}
+        {reason && <p className={ui.quiet}>{reason}</p>}
+        <details className={ui.coordinateDetails}>
+          <summary>精确坐标与朝向</summary>
+          <div className={ui.fields}>
+            {(
+              [
+                ["x", "X (m)"],
+                ["y", "Y (m)"],
+                ["degrees", "朝向 (°)"],
+              ] as const
+            ).map(([key, label]) => (
+              <label className={ui.field} key={key}>
+                {label}
+                <input
+                  inputMode="decimal"
+                  value={fields[key]}
+                  onChange={(event) => edit({ [key]: event.target.value })}
+                />
+              </label>
+            ))}
+          </div>
+          {onRefresh && (
+            <button type="button" className={ui.tool} onClick={onRefresh}>
+              刷新地图
+            </button>
+          )}
+          <p className={ui.quiet}>
+            {mode === "hint"
+              ? "提示只是扫描匹配的起点，提交后不代表已经定位。"
+              : mode === "home"
+                ? "Home 与车辆定位独立保存。"
+                : "确认后向当前地图下达目标。"}
+          </p>
+        </details>
+      </section>
+    );
 
-      {mode === "home" && (
-        <p className={styles.quiet}>
-          更新本地图 Home 的位置和朝向，车辆定位保持独立。
-        </p>
-      )}
-      <button
-        type="button"
-        className={styles.primary}
-        disabled={blocked}
-        onClick={submit}
-      >
-        {mode === "home"
-          ? "更新 Home 坐标"
-          : mode === "goal"
-            ? "确认目标"
-            : "提交定位提示"}
-      </button>
-    </section>
-  );
 }

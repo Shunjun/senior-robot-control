@@ -1,3 +1,4 @@
+import { newId } from "../../ids";
 import { useState, type ReactElement } from "react";
 
 import {
@@ -12,13 +13,60 @@ import type {
 } from "../../api/protocol";
 import { useVehicleView } from "../devices/useVehicleView";
 import type { TaskAction } from "../../api/vehicleState";
-import styles from "./Map.module.css";
+import { Button } from "../../components/ui/Button";
+
+// Complete utility strings keep the finite presentation states visible to Tailwind.
+const ui = {
+  home: [
+    "map-home relative bg-none bg-transparent [&_h3]:text-[15px] [&_h3]:font-medium [&_h3]:mt-0 [&_h3]:mr-0",
+    "[&_h3]:mb-[5px] [&_h3]:ml-0 max-[460.001px]:[&_h3]:text-[14px]"
+  ].join(" "),
+  navigationHead: [
+    "map-navigation-head flex items-center justify-between gap-2.5"
+  ].join(" "),
+  english: [
+    "map-english font-normal text-[9px] leading-[normal] font-mono tracking-[1px] text-english"
+  ].join(" "),
+  instruction: [
+    "map-instruction mt-3 mr-0 mb-3 ml-0 pt-2.5 pr-2.5 pb-2.5",
+    "pl-2.5 bg-none bg-control rounded-md text-[11px] leading-[1.8]"
+  ].join(" "),
+  goalAction: [
+    "map-goal-action w-full"
+  ].join(" "),
+  actions: [
+    "map-actions flex flex-wrap gap-1.5 mt-3 [&_button]:text-[11px]"
+  ].join(" "),
+  positionActions: [
+    "map-position-actions border-t [border-top-style:solid] border-t-line-soft pt-[13px] pr-0 pb-0 pl-0",
+    "mt-4 [&_.map-actions]:mt-3 [&_button]:text-[10px] [&_button]:mt-[9px] [&_button]:px-[9px] [&_button]:py-[7px]"
+  ].join(" "),
+  quiet: [
+    "map-quiet text-muted text-[11px] leading-[1.8] mt-0 mr-0 mb-0 ml-0"
+  ].join(" "),
+  navigationDetails: [
+    "map-navigation-details text-muted text-[9px] [&_summary]:cursor-pointer [&[open]>p]:mt-2"
+  ].join(" "),
+  failure: [
+    "map-failure mt-2 mr-0 mb-0 ml-0 pt-2 pr-2.5 pb-2",
+    "pl-2.5 rounded-md text-[11px] text-warning-ink bg-none bg-red-wash"
+  ].join(" "),
+  confirmed: [
+    "map-confirmed mt-2 mr-0 mb-0 ml-0 pt-2 pr-2.5 pb-2",
+    "pl-2.5 rounded-md bg-none bg-control text-[11px]"
+  ].join(" "),
+} as const;
 
 export interface HomeControlsProps {
   /** Null until the robot's first snapshot arrives. Nothing is enabled without a live one. */
   snapshot: RobotSnapshot | null;
   link: RobotLink;
   homeMapAvailable?: boolean;
+  onPickGoal?: () => void;
+  onCalibrate?: () => void;
+  onEditHome?: () => void;
+  onRefresh?: () => void;
+  goalAvailable?: boolean;
   navigationUnavailable?: string;
   directNavigation?: {
     onReturnHome: () => void;
@@ -79,6 +127,11 @@ export function HomeControls({
   homeMapAvailable = true,
   navigationUnavailable,
   directNavigation,
+  onPickGoal,
+  onCalibrate,
+  onEditHome,
+  onRefresh,
+  goalAvailable = false,
 }: HomeControlsProps): ReactElement {
   const [pending, setPending] = useState<ActionName | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
@@ -162,7 +215,7 @@ export function HomeControls({
     }
     setConfirmReplace(false);
     void run("home", "home.set", {
-      operation_id: crypto.randomUUID(),
+      operation_id: newId(),
       expected_revision: snapshot.home_revision,
       body: {},
     });
@@ -177,124 +230,132 @@ export function HomeControls({
         : "重新定位未完成：车辆还没有匹配到地图";
 
   return (
-    <section className={styles.home} aria-label="Home 与导航">
-      <h3>导航与定位</h3>
-      <dl className={styles.facts}>
-        <div>
-          <dt>Home</dt>
-          <dd>
-            {home === null
-              ? "未设置"
-              : home.status === "pending_confirmation"
-                ? `${home.waypoint_id} · 等待跨车导入确认（尚未采用）`
-                : `${home.waypoint_id} · ${home.status}`}
-          </dd>
-        </div>
-        <div>
-          <dt>定位</dt>
-          <dd>
-            <span
-              role="status"
-              aria-label="定位状态"
-              data-localized={snapshot?.localized === true}
-            >
-              {localization}
-            </span>
-          </dd>
-        </div>
-      </dl>
-
-      {blocks.length > 0 && (
-        <ul className={styles.blockedList}>
-          {blocks.map((reason) => (
-            <li key={reason} className={styles.blocked}>
-              {reason}
-            </li>
-          ))}
-        </ul>
-      )}
-
-      <div className={styles.actions}>
-        <button
-          type="button"
-          className={styles.primary}
+    <section className={ui.home} aria-label="Home 与导航">
+      <header className={ui.navigationHead}>
+        <h3>导航与定位</h3>
+        <span className={ui.english}>NAVIGATE</span>
+      </header>
+      <div className={ui.instruction}>
+        <span
+          role="status"
+          aria-label="定位状态"
+          data-localized={snapshot?.localized === true}
+        >
+          {snapshot?.localized ? "● 定位正常" : localization}
+        </span>
+        <br />
+        {directNavigation?.pending
+          ? "导航操作进行中，请等待车辆确认。"
+          : "在地图上选位置，再点击设置朝向。"}
+      </div>
+      <Button
+        variant="primary"
+        className={ui.goalAction}
+        disabled={!live || !goalAvailable || directNavigation?.pending === true}
+        onClick={onPickGoal}
+      >
+        在地图上设置目标
+      </Button>
+      <div className={ui.actions}>
+        <Button
           disabled={
-            !canNavigate ||
-            directNavigation === undefined ||
-            directNavigation.pending
+            !canNavigate || !directNavigation || directNavigation.pending
           }
+          title={blocks.join(" ")}
           onClick={directNavigation?.onReturnHome}
         >
-          返航
-        </button>
-        <button
-          type="button"
-          className={styles.tool}
-          disabled={!canTask("resume") || pending !== null}
-          onClick={() => void runTask("resume")}
-        >
-          继续导航
-        </button>
-        <button
-          type="button"
-          className={styles.tool}
+          返回 Home
+        </Button>
+        <Button
           disabled={!canTask("cancel") || pending !== null}
           onClick={() => void runTask("cancel")}
         >
           取消导航
-        </button>
-      </div>
-
-      <div className={styles.actions}>
-        {confirmReplace ? (
-          <>
-            <button
-              type="button"
-              className={styles.primary}
-              disabled={!canSetHome}
-              onClick={setHome}
-            >
-              确认替换 Home
-            </button>
-            <button
-              type="button"
-              className={styles.tool}
-              onClick={() => setConfirmReplace(false)}
-            >
-              保留原 Home
-            </button>
-          </>
-        ) : (
-          <button
-            type="button"
-            className={styles.tool}
-            disabled={!canSetHome || pending === "home"}
-            onClick={setHome}
+        </Button>
+        {canTask("resume") && (
+          <Button
+            disabled={pending !== null}
+            onClick={() => void runTask("resume")}
           >
-            设为 Home
-          </button>
+            继续导航
+          </Button>
         )}
       </div>
-      {homeWaiting && (
-        <p className={styles.quiet}>
-          该 Home 正在等待确认，控制台不会发送替换指令。
+      <div className={ui.positionActions}>
+        <p className={ui.quiet}>车辆位置与 Home 独立编辑</p>
+        <div className={ui.actions}>
+          <Button
+            disabled={!live || directNavigation?.pending === true}
+            onClick={onCalibrate}
+          >
+            校准车辆位置
+          </Button>
+          <Button
+            disabled={
+              !canSetHome || !onEditHome || directNavigation?.pending === true
+            }
+            onClick={onEditHome}
+          >
+            编辑 Home
+          </Button>
+        </div>
+      </div>
+      <details className={ui.navigationDetails}>
+        <summary>定位与 Home 详情</summary>
+        <p className={ui.quiet}>
+          Home：
+          {home === null ? "未设置" : `${home.waypoint_id} · ${home.status}`}
         </p>
-      )}
-      {live && !canSetHome && (
-        <p className={styles.quiet}>
-          {homeMapAvailable
-            ? "设置 Home 需要车辆已定位并具有实时地图。"
-            : "车端未开放当前地图的 Home 写入。"}
-        </p>
-      )}
-
-      {outcome?.kind === "error" && (
-        <p className={styles.failure} role="alert">
-          {outcome.text}
-        </p>
-      )}
-      {outcome?.kind === "ok" && (
-        <p className={styles.confirmed} role="status">
+        {blocks.map((reason) => (
+          <p className={ui.quiet} key={reason}>
+            {reason}
+          </p>
+        ))}
+        {homeWaiting && (
+          <p className={ui.quiet}>
+            该 Home 正在等待确认，控制台不会发送替换指令。
+          </p>
+        )}
+        {live && !canSetHome && (
+          <p className={ui.quiet}>
+            {homeMapAvailable
+              ? "设置 Home 需要车辆已定位并具有实时地图。"
+              : "车端未开放当前地图的 Home 写入。"}
+          </p>
+        )}
+        <div className={ui.actions}>
+          {confirmReplace ? (
+            <>
+              <Button
+                variant="outline"
+                disabled={!canSetHome}
+                onClick={setHome}
+              >
+                确认替换 Home
+              </Button>
+              <Button onClick={() => setConfirmReplace(false)}>
+                保留原 Home
+              </Button>
+            </>
+          ) : (
+            <Button
+              disabled={!canSetHome || pending === "home"}
+              onClick={setHome}
+            >
+              设为 Home
+            </Button>
+          )}
+          {!canTask("resume") && <Button disabled>继续导航</Button>}
+          {onRefresh && <Button onClick={onRefresh}>刷新地图</Button>}
+        </div>
+      </details>
+      {outcome && (
+        <p
+          className={
+            outcome.kind === "error" ? ui.failure : ui.confirmed
+          }
+          role={outcome.kind === "error" ? "alert" : "status"}
+        >
           {outcome.text}
         </p>
       )}

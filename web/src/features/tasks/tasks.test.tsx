@@ -122,7 +122,7 @@ describe("task schedules", () => {
       screen.getByRole("button", { name: "添加地图航点 gate" }),
       { key: "Enter" },
     );
-    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
     await screen.findByText("车端已确认保存任务。");
     const created = vi.mocked(robotLink.request).mock.calls[0]?.[1] as {
       body: {
@@ -165,10 +165,10 @@ describe("task schedules", () => {
     const robotLink = link();
     render(<TaskList snapshot={stale} link={robotLink} />);
     expect(
-      (screen.getByRole("button", { name: "提交任务" }) as HTMLButtonElement)
+      (screen.getByRole("button", { name: "保存任务" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
     await waitFor(() => expect(robotLink.request).not.toHaveBeenCalled());
   });
 });
@@ -232,7 +232,7 @@ describe("ordered task route", () => {
   const route = () =>
     Array.from(
       screen.getByRole("list", { name: "任务航点顺序" }).querySelectorAll("li"),
-    ).map((item) => item.querySelector("code")?.textContent);
+    ).map((item) => item.querySelector("[data-waypoint-id]")?.getAttribute("data-waypoint-id"));
 
   it("test_reorders_and_reopens_three_point_route", async () => {
     const robotLink = taskLink(["gate", "hall", "dock"]);
@@ -254,7 +254,7 @@ describe("ordered task route", () => {
     });
     fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
     expect(route()).toEqual(["gate", "dock", "hall"]);
-    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
     await screen.findByText("车端已确认保存任务。");
     expect(robotLink.request).toHaveBeenCalledWith(
       "task.update",
@@ -308,7 +308,7 @@ describe("ordered task route", () => {
       expect(screen.queryByRole("button", { name: "移除 gate" })).toBeNull(),
     );
     expect(
-      (screen.getByRole("button", { name: "提交任务" }) as HTMLButtonElement)
+      (screen.getByRole("button", { name: "保存任务" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
   });
@@ -331,11 +331,11 @@ describe("ordered task route", () => {
     openTask();
     await screen.findByRole("button", { name: "上移 hall" });
     fireEvent.click(screen.getByRole("button", { name: "上移 hall" }));
-    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
     const reload = await screen.findByRole("button", { name: "重载车端版本" });
     expect(route()).toEqual(["hall", "gate"]);
     expect(
-      (screen.getByRole("button", { name: "提交任务" }) as HTMLButtonElement)
+      (screen.getByRole("button", { name: "保存任务" }) as HTMLButtonElement)
         .disabled,
     ).toBe(true);
     fireEvent.click(reload);
@@ -354,7 +354,7 @@ describe("ordered task route", () => {
     openTask();
     await screen.findByRole("button", { name: "移除 gate" });
     expect(route()).toEqual(["gate"]);
-    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
     await screen.findByText("车端已确认保存任务。");
     expect(robotLink.request).toHaveBeenCalledWith(
       "task.update",
@@ -507,7 +507,7 @@ it("saves a picked point before exposing it as a selectable route waypoint", asy
   ).toHaveLength(0);
   fireEvent.click(screen.getByRole("button", { name: "加入路线" }));
   expect(
-    screen.getByRole("list", { name: "任务航点顺序" }).textContent,
+    screen.getByRole("list", { name: "任务航点顺序" }).querySelector("[data-waypoint-id]")?.getAttribute("data-waypoint-id"),
   ).toContain("new-point");
 });
 
@@ -678,7 +678,7 @@ it.each(["daily", "weekly", "interval"] as const)(
       screen.getByRole("button", { name: "添加地图航点 gate" }),
       { key: "Enter" },
     );
-    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
     await screen.findByText("车端已确认保存任务。");
     const expected =
       mode === "interval"
@@ -717,7 +717,7 @@ it.each(["daily", "weekly", "interval"] as const)(
     fireEvent.change(screen.getByLabelText("时区"), {
       target: { value: "Europe/Berlin" },
     });
-    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
     await screen.findByText("车端已确认保存任务。");
     expect(saved.schedule).toEqual(expected);
     expect(saved.timezone).toBe("Europe/Berlin");
@@ -755,7 +755,7 @@ it("keeps an existing complex cron unchanged when saving other task fields", asy
   fireEvent.change(screen.getByLabelText("时区"), {
     target: { value: "Europe/Berlin" },
   });
-  fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
   await screen.findByText("车端已确认保存任务。");
   expect(robotLink.request).toHaveBeenCalledWith(
     "task.update",
@@ -883,8 +883,8 @@ it.each([
     fireEvent.keyDown(surface, { key: "Enter" });
     fireEvent.keyDown(surface, { key: "ArrowRight" });
     fireEvent.keyDown(surface, { key: "Enter" });
-    fireEvent.click(screen.getByRole("button", { name: "完成选点" }));
-    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
     if (outcome === "succeeded") {
       await screen.findByText("车端已确认保存任务。");
       expect(creations).toHaveLength(2);
@@ -909,7 +909,7 @@ it.each([
       "value",
       stableTaskId,
     );
-    fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+    fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
     if (outcome === "failed") {
       await screen.findByText("车端已确认保存任务。");
       expect(creations[2]).not.toBe(failedOperation);
@@ -921,7 +921,7 @@ it.each([
       ).toHaveLength(0);
     }
     if (outcome !== "failed") {
-      expect(screen.getByRole("button", { name: "提交任务" })).toHaveProperty(
+      expect(screen.getByRole("button", { name: "保存任务" })).toHaveProperty(
         "disabled",
         false,
       );
@@ -971,10 +971,10 @@ it("persists drag order and a subsequent keyboard-accessible adjustment from the
   fireEvent.dragStart(items[2]!, { dataTransfer });
   fireEvent.drop(items[0]!, { dataTransfer });
   expect(
-    [...route.querySelectorAll("code")].map((node) => node.textContent),
+    [...route.querySelectorAll("[data-waypoint-id]")].map(node => node.getAttribute("data-waypoint-id")),
   ).toEqual(["dock", "gate", "hall"]);
   fireEvent.click(screen.getByRole("button", { name: "上移 hall" }));
-  fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
   await screen.findByText("车端已确认保存任务。");
   expect(robotLink.request).toHaveBeenCalledWith(
     "task.update",
@@ -994,7 +994,7 @@ it("keeps the saved-route preview read-only while retaining the current editable
     />,
   );
   fireEvent.click(screen.getByRole("button", { name: "查看路线 daily" }));
-  const preview = await screen.findByRole("region", { name: "所选任务路线" });
+  const preview = await screen.findByLabelText("所选任务路线");
   expect(
     [...preview.querySelectorAll("li")].some((item) => item.draggable),
   ).toBe(false);
@@ -1034,7 +1034,7 @@ it("N7 creates an independent stable ID then renames without changing the accept
   fireEvent.keyDown(screen.getByRole("button", { name: "添加地图航点 gate" }), {
     key: "Enter",
   });
-  fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
   await screen.findByText("车端已确认保存任务。");
   expect(stored).toMatchObject({
     task_id: id,
@@ -1062,7 +1062,7 @@ it("N7 creates an independent stable ID then renames without changing the accept
   fireEvent.change(screen.getByLabelText("任务名称"), {
     target: { value: " \u0085夜班巡检\uFEFF " },
   });
-  fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
   await screen.findByText("车端已确认保存任务。");
   expect(stored).toEqual({ ...original, name: "夜班巡检" });
   expect(robotLink.request).toHaveBeenLastCalledWith(
@@ -1117,7 +1117,7 @@ it("N9 locks names on an old empty vehicle and preserves non-name editing", asyn
     "disabled",
     true,
   );
-  expect(screen.getByRole("button", { name: "提交任务" })).toHaveProperty(
+  expect(screen.getByRole("button", { name: "保存任务" })).toHaveProperty(
     "disabled",
     true,
   );
@@ -1125,7 +1125,7 @@ it("N9 locks names on an old empty vehicle and preserves non-name editing", asyn
   await waitFor(() =>
     expect(screen.getByLabelText("内部编号")).toHaveProperty("value", "daily"),
   );
-  fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
   await screen.findByText("车端已确认保存任务。");
   const body = (
     vi.mocked(robotLink.request).mock.calls.at(-1)?.[1] as { body: object }
@@ -1183,7 +1183,7 @@ it("N10 trims names preserving internal spaces and identifies duplicate names by
   });
   for (const value of ["   ", "\uFEFF", "\u0085"]) {
     fireEvent.change(screen.getByLabelText("任务名称"), { target: { value } });
-    expect(screen.getByRole("button", { name: "提交任务" })).toHaveProperty(
+    expect(screen.getByRole("button", { name: "保存任务" })).toHaveProperty(
       "disabled",
       true,
     );
@@ -1191,7 +1191,7 @@ it("N10 trims names preserving internal spaces and identifies duplicate names by
   fireEvent.change(screen.getByLabelText("任务名称"), {
     target: { value: "  东区  巡检  " },
   });
-  fireEvent.click(screen.getByRole("button", { name: "提交任务" }));
+  fireEvent.click(screen.getByRole("button", { name: "保存任务" }));
   await screen.findByText("车端已确认保存任务。");
   expect(robotLink.request).toHaveBeenCalledWith(
     "task.create",
@@ -1231,7 +1231,7 @@ it('V15 separates the list, multi-point banner and editor while retaining one or
   expect(screen.getByText(/已选 2 点/)).toBeTruthy();
   const order = Array.from(container.querySelectorAll('[data-route-index]')).map(node => node.getAttribute('data-route-index'));
   expect(order).toEqual(['1','2']);
-  fireEvent.click(screen.getByRole('button',{name:'完成选点'}));
+  fireEvent.click(screen.getByRole('button',{name:'下一步'}));
   expect(container.querySelector('[data-task-stage]')?.getAttribute('data-task-stage')).toBe('editor');
   expect(screen.queryByRole('button',{name:'撤销上一点'})).toBeNull();
   expect(screen.getByRole('list',{name:'任务航点顺序'}).querySelectorAll('li')).toHaveLength(2);
