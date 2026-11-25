@@ -61,9 +61,6 @@ const ui = {
     "status-overlay-track h-[4px] rounded-2xs bg-none bg-workspace-legend-border-color mt-2 mr-0 mb-2",
     "ml-0 [&_i]:block [&_i]:h-[4px] [&_i]:bg-none [&_i]:bg-amber [&_i]:rounded-2xs"
   ].join(" "),
-  source: [
-    "status-overlay-source mt-2.5 text-xs text-performance-panel-freshness-color [&_summary]:cursor-pointer [&_p]:text-xs [&_p]:leading-[1.8]"
-  ].join(" "),
 } as const;
 
 interface StatusOverlayProps {
@@ -257,13 +254,6 @@ export function StatusOverlay({
           <div className={ui.track}>
             {cpu !== null && <i style={{ width: `${cpu}%` }} />}
           </div>
-          <details className={ui.source}>
-            <summary>测量来源</summary>
-            <p>
-              真实测量速度 · {body && !body.stale ? body.source : "轮速里程计"}
-              ；俯仰与横滚尚未由车端提供。
-            </p>
-          </details>
         </div>
       )}
     </FloatingCard>
