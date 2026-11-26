@@ -5,6 +5,7 @@ pairing and truth-based permission are retired with that production reference.
 """
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import ModuleType
@@ -41,6 +42,8 @@ def reference(monkeypatch):
     ref._pose_stamp_ns = -1
     ref._pose_sequence = 0
     ref._retired_pose_sources = set()
+    logs = []
+    ref._node = N(get_logger=lambda: N(info=logs.append))
     ref._pose_topic = "/amcl_pose"
     ref.config.pose_publisher = "amcl"
     sources = {"gid": b"pose-a"}
@@ -82,7 +85,7 @@ def reference(monkeypatch):
             "receipt_sequence": receipt_sequence,
         }
 
-    return N(ref=ref, clock=clock, sources=sources, message=message)
+    return N(ref=ref, clock=clock, sources=sources, message=message, logs=logs)
 
 
 def test_original_age_duplicate_and_queued_delivery_cannot_renew_pose(reference):
@@ -215,3 +218,185 @@ def test_standard_reference_pose_reply_satisfies_existing_home_ipc_schema(refere
     assert reply.v == 1 and reply.map_id == "map"
     assert reply.map_generation == "generation-a"
     assert reply.sampled_at == pytest.approx(99.8)
+
+
+def test_pose_diagnostics_preserve_receipt_deadline_and_bound_repetition(reference):
+    r = reference
+    message, info = r.message(received_ns=10_200_000_000)
+    r.ref._on_pose(message, info)
+    accepted = json.loads(r.logs[-1].split(" ", 1)[1])
+    assert accepted["reason"] == "accepted"
+    assert accepted["receipt_sequence"] == 1
+    assert accepted["stamp_ns"] == 10_000_000_000
+    assert accepted["sample_steady_ns"] == 99_800_000_000
+    assert accepted["covariance"] == [0.1, 0.1, 0.1]
+    assert accepted["frame"] == "map"
+    assert accepted["publisher_gid"] == b"pose-a".hex()
+    r.clock.ns += 300_000_000
+    assert r.ref.pose() is None
+    assert json.loads(r.logs[-1].split(" ", 1)[1])["reason"] == "age"
+    before = len(r.logs)
+    for _ in range(100):
+        assert r.ref.pose() is None
+    assert len(r.logs) == before
+    assert r.ref._pose_time is info["sample_time"]
+    assert r.ref._pose_at == 99.8
+
+
+@pytest.mark.parametrize("failure", ["frame", "covariance", "map", "source", "receipt"])
+def test_pose_diagnostics_name_rejected_boundary_without_accepting(reference, failure):
+    r = reference
+    message, info = r.message()
+    if failure == "frame":
+        message.header.frame_id = "odom"
+    elif failure == "covariance":
+        message.pose.covariance[7] = 0.3
+    elif failure == "map":
+        r.ref.grid = lambda: None
+    elif failure == "source":
+        r.ref._source = lambda *args: None
+    else:
+        info.pop("sample_time")
+    r.ref._on_pose(message, info)
+    assert r.ref._pose is None
+    assert json.loads(r.logs[-1].split(" ", 1)[1])["reason"] == failure
+
+
+@pytest.mark.parametrize("snapshot_mode", ["state", "error", "pending"])
+async def test_static_service_timeout_preserves_failure_and_observes_state(
+    monkeypatch, tmp_path, snapshot_mode
+):
+    import asyncio
+
+    from shared_layers_native_fixture import NativeFixture
+
+    msg, srv = ModuleType("lifecycle_msgs.msg"), ModuleType("lifecycle_msgs.srv")
+    msg.State = N(PRIMARY_STATE_ACTIVE=3)
+    srv.GetState = N(Request=lambda: None)
+    monkeypatch.setitem(sys.modules, msg.__name__, msg)
+    monkeypatch.setitem(sys.modules, srv.__name__, srv)
+    fixture = NativeFixture(tmp_path)
+    rows, destroyed, settled = [], [], []
+    fixture.trace = N(emit=lambda stage, **fields: rows.append(dict(stage=stage, **fields)))
+    service = N(service_is_ready=lambda: False)
+    fixture.node = N(create_client=lambda *args: service, destroy_client=destroyed.append)
+    failure = AssertionError("original service timeout")
+
+    async def wait(predicate):
+        for _ in range(4):
+            await asyncio.sleep(0)
+        raise failure
+
+    async def request(kind):
+        assert kind == "state.get"
+        try:
+            if snapshot_mode == "pending":
+                await asyncio.Future()
+            if snapshot_mode == "error":
+                raise OSError("snapshot unavailable")
+            return {"ok": True, "navigation_ready": False, "localized": False}
+        finally:
+            settled.append(True)
+
+    fixture.wait = wait
+    with pytest.raises(AssertionError) as caught:
+        await fixture.static_ready(N(request=request))
+    assert caught.value is failure
+    assert destroyed == [service]
+    phases = [r["phase"] for r in rows if r["stage"] == "static_service"]
+    assert phases == ["begin", "wait_error"]
+    assert all(
+        r["service"] == "/map_server/get_state" for r in rows if r["stage"] == "static_service"
+    )
+    assert settled == [True]
+    snapshots = [r for r in rows if r["stage"] == "static_diagnostic_state"]
+    if snapshot_mode == "state":
+        assert snapshots[0]["record"]["navigation_ready"] is False
+    elif snapshot_mode == "error":
+        assert snapshots[0]["error_type"] == "OSError"
+    else:
+        assert snapshots == []
+
+
+@pytest.mark.parametrize("failure", [None, "source", "frame", "geometry", "cells"])
+def test_map_diagnostics_observe_exact_match_without_qualifying_rejection(reference, failure):
+    r = reference
+    r.ref.config.map_publisher = "map_server"
+    r.ref._grid = N(width=2, height=1, resolution=0.1, cells=(0, 100), origin=N(x=0, y=0, yaw=0))
+    message = N(
+        header=N(frame_id="map", stamp=N(sec=1, nanosec=0)),
+        info=N(
+            width=2,
+            height=1,
+            resolution=0.1,
+            origin=N(position=N(x=0, y=0, z=0), orientation=N(x=0, y=0, z=0, w=1)),
+        ),
+        data=[0, 100],
+    )
+    if failure == "source":
+        r.ref._source = lambda *args: None
+    elif failure == "frame":
+        message.header.frame_id = "odom"
+    elif failure == "geometry":
+        message.info.width = 3
+    elif failure == "cells":
+        message.data[1] = 0
+    r.ref._on_map(message, {"publisher_gid": b"map-writer"})
+    row = json.loads(r.logs[-1].split(" ", 1)[1])
+    assert row["reason"] == (failure or "accepted")
+    assert (r.ref._map_gid is not None) == (failure is None)
+    assert r.ref._map_serial == 2
+    assert r.ref._pose is None
+    if failure is None or failure == "cells":
+        assert row["cells_match"] is (failure is None)
+
+
+@pytest.mark.parametrize("active", [True, False])
+async def test_static_service_observation_retains_active_assertion(monkeypatch, tmp_path, active):
+    import asyncio
+
+    from shared_layers_native_fixture import NativeFixture
+
+    msg, srv = ModuleType("lifecycle_msgs.msg"), ModuleType("lifecycle_msgs.srv")
+    msg.State = N(PRIMARY_STATE_ACTIVE=3)
+    srv.GetState = N(Request=lambda: None)
+    monkeypatch.setitem(sys.modules, msg.__name__, msg)
+    monkeypatch.setitem(sys.modules, srv.__name__, srv)
+    fixture = NativeFixture(tmp_path)
+    rows, names, destroyed = [], [], []
+    fixture.trace = N(emit=lambda stage, **fields: rows.append(dict(stage=stage, **fields)))
+    future = N(done=lambda: True, result=lambda: N(current_state=N(id=3 if active else 2)))
+    service = N(service_is_ready=lambda: True, call_async=lambda request: future)
+
+    def create(kind, name):
+        names.append(name)
+        return service
+
+    fixture.node = N(create_client=create, destroy_client=destroyed.append)
+
+    async def wait(predicate):
+        await asyncio.sleep(0)
+        assert predicate()
+
+    async def request(kind):
+        return {"ok": True, "navigation_ready": True}
+
+    fixture.wait = wait
+    result = await fixture.static_ready(N(request=request))
+    assert bool(result) is active
+    assert names == (
+        [
+            "/map_server/get_state",
+            "/amcl/get_state",
+            "/planner_server/get_state",
+            "/controller_server/get_state",
+            "/bt_navigator/get_state",
+        ]
+        if active
+        else ["/map_server/get_state"]
+    )
+    assert len(destroyed) == len(names)
+    for name in names:
+        events = [r for r in rows if r.get("service") == name]
+        assert [r["phase"] for r in events] == ["begin", "ready", "request", "response"]
+        assert events[-1]["state_id"] == (3 if active else 2)

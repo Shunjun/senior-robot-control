@@ -204,8 +204,12 @@ class NativeFixture:
             )
         }
         self.input_metadata = dict(
-            source_commit=version[0], source_tree=version[1], asset_sha256=digests,
-            host_boot_id=self.host, world=str(world), urdf=str(urdf),
+            source_commit=version[0],
+            source_tree=version[1],
+            asset_sha256=digests,
+            host_boot_id=self.host,
+            world=str(world),
+            urdf=str(urdf),
         )
         self.trace = TraceWriter(
             self.root / "system-trace.jsonl",
@@ -598,19 +602,67 @@ class NativeFixture:
         from lifecycle_msgs.msg import State
         from lifecycle_msgs.srv import GetState
 
-        for name in ("map_server", "amcl", "planner_server", "controller_server", "bt_navigator"):
-            service = self.node.create_client(GetState, f"/{name}/get_state")
-            try:
-                await self.wait(service.service_is_ready)
-                future = service.call_async(GetState.Request())
-                await self.wait(future.done)
-                if future.result().current_state.id != State.PRIMARY_STATE_ACTIVE:
-                    return None
-            finally:
-                self.node.destroy_client(service)
-        state = await client.request("state.get")
-        self.trace.emit("static_state", record=state)
-        return state.get("navigation_ready") and state
+        from vehicle_core.ipc import IpcError
+
+        observing = True
+
+        async def snapshot():
+            # Independent read while the original service wait runs. Never gates readiness.
+            while observing:
+                try:
+                    state = await asyncio.wait_for(client.request("state.get"), timeout=1)
+                    self.trace.emit("static_diagnostic_state", record=state)
+                except (asyncio.TimeoutError, OSError, IpcError) as exc:
+                    self.trace.emit(
+                        "static_diagnostic_state",
+                        error_type=type(exc).__name__,
+                        error=str(exc)[:256],
+                    )
+                # wait_for may return a just-completed result during cancellation.
+                if observing:
+                    await asyncio.sleep(2)
+
+        observation = asyncio.create_task(snapshot())
+        try:
+            names = ("map_server", "amcl", "planner_server", "controller_server", "bt_navigator")
+            for name in names:
+                service_name = f"/{name}/get_state"
+                service = self.node.create_client(GetState, service_name)
+                phase = "begin"
+                self.trace.emit("static_service", service=service_name, phase=phase)
+                try:
+                    await self.wait(service.service_is_ready)
+                    phase = "ready"
+                    self.trace.emit("static_service", service=service_name, phase=phase)
+                    future = service.call_async(GetState.Request())
+                    phase = "request"
+                    self.trace.emit("static_service", service=service_name, phase=phase)
+                    await self.wait(future.done)
+                    state_id = future.result().current_state.id
+                    self.trace.emit(
+                        "static_service", service=service_name, phase="response", state_id=state_id
+                    )
+                    if state_id != State.PRIMARY_STATE_ACTIVE:
+                        return None
+                except BaseException as exc:
+                    self.trace.emit(
+                        "static_service",
+                        service=service_name,
+                        phase="wait_error",
+                        waiting_phase=phase,
+                        error_type=type(exc).__name__,
+                        error=str(exc)[:256],
+                    )
+                    raise
+                finally:
+                    self.node.destroy_client(service)
+            state = await client.request("state.get")
+            self.trace.emit("static_state", record=state)
+            return state.get("navigation_ready") and state
+        finally:
+            observing = False
+            observation.cancel()
+            await asyncio.gather(observation, return_exceptions=True)
 
     async def native_watermark(self):
         from senior_interfaces.srv import ReadGraph

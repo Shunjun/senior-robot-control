@@ -815,12 +815,39 @@ def main() -> None:
                 assert controller is not None
                 while not exiting:
                     try:
-                        if (
-                            not preparing_live
-                            and reference is not None
-                            and reference.pose() is not None
-                        ):
+                        pose_available = (
+                            reference.pose() is not None
+                            if not preparing_live and reference is not None
+                            else None
+                        )
+                        diagnostic = dict(
+                            steady_ns=time.monotonic_ns(),
+                            reference_mode=(
+                                "live" if getattr(reference, "enabled", False) else "static"
+                            ),
+                            preparing_live=preparing_live,
+                            pose_available=pose_available,
+                            controller_available=controller.available(),
+                            controller_owned=len(controller._owned),
+                            controller_closing=controller._closing,
+                        )
+                        node.get_logger().info("warmer_diagnostic " + json.dumps(diagnostic))
+                        if pose_available:
+                            node.get_logger().info(
+                                "warmer_diagnostic "
+                                + json.dumps(dict(diagnostic, phase="warm_begin"))
+                            )
                             await controller.warm()
+                            node.get_logger().info(
+                                "warmer_diagnostic "
+                                + json.dumps(
+                                    dict(
+                                        diagnostic,
+                                        phase="warm_return",
+                                        steady_ns=time.monotonic_ns(),
+                                    )
+                                )
+                            )
                     except (RuntimeError, OSError) as exc:
                         node.get_logger().warning(f"Scoped Nav2 warm-up failed: {exc}")
                     await asyncio.sleep(2)

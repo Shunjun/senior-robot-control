@@ -229,6 +229,29 @@ episode 及四核性能均未验。磁盘屏障只证明 Python checkpoint 段�
 重建插件需要新的 startup run 的原限制保留，harness 不代签 permit。synthetic-admitted
 只改原 synthetic_profile 的 profile_id，其数值与 evidence_digest 不改，不是部署几何证据。
 
+首次整合启动 RED 的新增只读观测复用原 ROS logger 和 `system-trace.jsonl`：
+`reference_diagnostic` 记录原 HardwareReference map/pose 接受或首个拒绝原因、
+唯一 writer 拓扑（最多列四个）、GID、native receipt generation/sequence、原 stamp、
+receipt/sample steady 时刻、年龄、frame、三个协方差值和 map_serial；map `cells_match`
+仅在实际逐格检查后给 true/false，提前拒绝为 null。每个固定事件/原因最多每秒一条，
+下一条附 suppressed 数；pose stamp_interval_ns 是相邻回调的原 stamp 差，限流日志
+不能当完整发布序列或用来证明未发布。`pose_query` 记录 warmer 实际查询时的门槛结果，
+`warmer_diagnostic` 每轮记录模式、preparing_live、pose 有无、controller available/owned/
+closing，以及 warm_begin/warm_return，原 warning 保留异常；begin 无 return 只能定位
+到原 warm 调用内部，不能据此认定具体 lifecycle 阶段。
+
+夹具 `static_service` 对完整 `/NAME/get_state` 记录 begin/ready/request/response（原
+state_id）和 wait_error（原等待阶段、异常类型），trace 自带 steady_ns；原30秒服务等待、
+外层60秒和退出45秒均不变。同时并行轮询只读 `state.get`，每次最多1秒、间隔2秒，记录为
+`static_diagnostic_state` 或读取错误；不会用快照替代原服务 active/ready 断言，离开
+static_ready 时取消并结算该诊断任务。未出现合格 pose、快照失败及服务超时都保持 RED，
+不得更改0.5秒年龄/协方差门槛、自签 ready/stopped/permit 或注入假定位来通过验证。
+
+运行真实验证的外部 subreaper 必须在 pytest 存活期间持续收割已收养子孙，并保留
+PID/starttime/收割记录；主 pytest 仍由原 Popen 唯一 wait owner 处理。不得等 pytest
+退出才收割，也不得让 waitpid 抢主进程，或将 zombie 从夹具结算义务中排除。
+外部工具修复由其原 owner 负责；本改动未修改工具、VM 或 native context-invalid 退出。
+
 以下是**后续 VM 派单命令**，不是本机已执行命令。先将负责人最终正常集成后的准确 commit
 冻结到私有源码/独立 build/install/log；禁止混 T6 未提交源。先复核 Humble/ABI、磁盘、空闲
 localhost domain 和原 dependency report，再进入源码根目录。原 12+5 Python prefix 仅是
