@@ -140,6 +140,7 @@ class WebSocketLink(_WebSocketLink[RobotSnapshot, HeartbeatFrame]):
             ports=WebSocketPorts(
                 heartbeat=HeartbeatFrame,
                 snapshot=snapshot_envelope,
+                snapshot_sequence=lambda value: value.publication_sequence,
                 send_lock=lambda: DiagnosticLock("websocket.send_wait"),
                 receive_diagnostic=_receive_diagnostic,
             ),

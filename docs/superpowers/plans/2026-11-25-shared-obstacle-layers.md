@@ -256,6 +256,10 @@ cloud仅维护显示缓存年龄：在`cloud/src/cloud/snapshots.py`按接收mon
 
 **2026-11-26 T6 定向返修 F2：** 独立审核的可接纳序列 `R1/Q1 → R2/Q1 → 已退休R1无scan_layer → R2/Q1重复` 已通过原 strict wire 与真实 SnapshotCache 复现：原 deadline 从100.4误改100.05。现仅在无层分支区分已知退休R，保留当前R无层撤销、新R无Q退休旧R、同Q取早、低seq/source/boot及连接epoch保护。新增原序列回归断言deadline保持100.4、重复时剩余0.35秒并在100.4清空，另验证当前R无层后同Q仍失效；原cloud文件23项通过，ruff与Web typecheck通过。实际范围为产品M1、测试M1、本文M1（A0/M3/D0），未改hook/relay/client或其他产品路径。F1退休集合无界仍未修复：容量溢出后长期停用显示方案未获批准；可信采集/发布顺序及有限状态方案只读提交负责人裁决，不能据此签整T6或S15。证据与精确nodeids见`/tmp/shared-obstacle-t6-review-repair-2026-11-26.md`，F1提案见`/tmp/shared-obstacle-t6-bounded-ordering-proposal-2026-11-26.md`。
 
+**2026-11-26 F1顺序方案批准边界：** 负责人已亲阅并批准原Agent每link共享采集串行区，在启动collect前分配ordinal，锁仅覆盖完整collect、不覆盖网络/心跳/命令/手动控制，旧link context不得阻塞新link；复用原Envelope.seq由cloud可信session/cache水位到browser原socket generation/agent epoch/order校验后再给hook内部元信息，以常数current Q/水位替代退休集合。cloud新epoch先撤旧缓存Q资格，store/push/newcontroller不重编号，同Q仍取更早deadline；seq0仅兼容legacy无合格层，正序模式不允许seq0影响当前Q（//Compatible），不增wire字段、IPC/provider/导航权限或UI提示。JS safe seq用尽关闭真实原link并由原supervisor重连恢复，不能keepalive静默return；epoch原数域边界只记录、不私自回绕。预计产品M10/测试M7/本文M1共A0/M18/D0；先记录此边界，再按真实两个collect/延迟send/重连旧缓存及1023/1024/1025以后持续显示与旧wire拒绝的定向RED/GREEN实施，不新增一般异常矩阵或长期停用门槛。完整输入/nodeid、有限状态及未验回填原返修报告；批准不等于已实现或整T6验收。
+
+**F1本地实施证据（2026-11-26，待负责人独立复核）：** 已在上述18个原路径实施，未增wire/IPC字段或改导航权限。每link仅一个采集context，采集前ordinal经原WebSocketPorts/Envelope.seq进入cache与browser可信内部元信息，cache和hook各持常数当前状态，取消三个退休集合。真实Agent→serializer→relay/cache连续1026次合法R/source/boot切换，在1023/1024/1025/1026处仍显示且六个cache表各一项；同批实际下行帧进入真实RobotClient/renderHook，hook五个状态字段、退休项0，旧wire重放和旧socket回调不生效，同Q/重连/旧timer保持原期限。e737822原hook同输入在1023处实测退休项3066，新增采集顺序与browser拒旧断言均有原RED。极值序号最后一帧后真实link关闭、原supervisor正常重连从1恢复；不设长期显示停用。当前定向Python124 passed、Web五文件194 passed，另真实帧client/hook探针1 passed，typecheck/ruff通过；精确输入、nodeids、命令、锁序及证据在`/tmp/shared-obstacle-t6-review-repair-2026-11-26.md`。测试使用受控StatePort/内存socket和真实产品owner，不冒称ROS/实车物理输入或Task7全链；未测性能和跨机延迟上界，不签整T6。
+
 ### Task 7：生产闭环、安装态离线及四核资源收口（负责人协调，原各owner修自己模块）
 
 **Files:** manifest T7。**Consumes:** 已合T1–T6及Task 0版本/profile、同一S01–S16输入集。**Produces:** 分层证据、失败边界、测量报告；不是一套新测试矩阵或新生产调度框架。

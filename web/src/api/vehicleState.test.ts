@@ -1,8 +1,9 @@
 import { renderHook, act, cleanup } from "@testing-library/react";
 import { useCurrentScan } from "../features/map/useCurrentScan";
+import { RobotClient, type SocketLike } from "./client";
 import type { RobotSnapshot } from "./protocol";
 import { parseInbound } from "./protocol";
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { decodeVehicleFrame, isTaskName, normalizeTaskName, VehicleTransport } from './vehicleState';
 
 export const frame = {
@@ -160,6 +161,31 @@ it('decodes the approved scan identity and rejects unsafe or inconsistent displa
   ]) expect(parse({ ...layer, ...patch })).toBeNull();
 });
 
+const scanClients: RobotClient[] = [];
+afterEach(() => { for (const client of scanClients.splice(0)) client.disconnect(); });
+
+function scanProjection() {
+  const socket: SocketLike = { readyState: 1, bufferedAmount: 0, onopen: null,
+    onclose: null, onmessage: null, onerror: null, send() {}, close() {} };
+  const client = new RobotClient({ socketFactory: () => socket });
+  scanClients.push(client);
+  void client.connect('robot'); socket.onopen?.();
+  socket.onmessage?.({ data: JSON.stringify({ v: 1, type: 'control.connection',
+    robot_id: 'robot', connection_epoch: 1 }) });
+  let sequence = 0;
+  return (value: RobotSnapshot): RobotSnapshot => {
+    let projected: RobotSnapshot | undefined;
+    const stop = client.subscribe(next => { projected = next; });
+    const { robot_id, display_order: _order, ...payload } = value;
+    socket.onmessage?.({ data: JSON.stringify({ v: 1, type: 'snapshot', robot_id,
+      session_id: 'cloud-cache', connection_epoch: 1, request_id: 'snapshot',
+      seq: ++sequence, expires_at: 1000, payload }) });
+    stop();
+    if (projected === undefined) throw new Error('snapshot was not accepted by original client');
+    return projected;
+  };
+}
+
 const scanSnapshot = () => ({
   robot_id: 'robot', connected: true, localized: true, stale: false,
   map_ref: { map_id: 'map', reference_revision: 1 }, map_generation: 'R1',
@@ -176,14 +202,15 @@ const scanSnapshot = () => ({
 
 it('expires a repeated scan without renewing its local deadline', () => {
   vi.useFakeTimers();
-  const scan = scanSnapshot();
+  const project = scanProjection();
+  const scan = project(scanSnapshot());
   try {
     const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
       initialProps: { value: scan },
     });
     expect(result.current).toEqual(scan.scan_points);
     act(() => vi.advanceTimersByTime(100));
-    rerender({ value: { ...scan, scan_layer: { ...scan.scan_layer, remaining_s: .5 } } });
+    rerender({ value: project({ ...scan, scan_layer: { ...scan.scan_layer!, remaining_s: .5 } }) });
     act(() => vi.advanceTimersByTime(101));
     expect(result.current).toEqual([]);
   } finally { cleanup(); vi.useRealTimers(); }
@@ -191,14 +218,15 @@ it('expires a repeated scan without renewing its local deadline', () => {
 
 it('cancels an older Q timer without clearing the newer Q', () => {
   vi.useFakeTimers();
-  const scan = scanSnapshot();
+  const project = scanProjection();
+  const scan = project(scanSnapshot());
   try {
     const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
       initialProps: { value: scan },
     });
     act(() => vi.advanceTimersByTime(100));
-    const next = { ...scan, scan_layer: { ...scan.scan_layer, sequence: 2, remaining_s: .5 } };
-    rerender({ value: next });
+    const next = { ...scan, scan_layer: { ...scan.scan_layer!, sequence: 2, remaining_s: .5 } };
+    rerender({ value: project(next) });
     act(() => vi.advanceTimersByTime(101));
     expect(result.current).toEqual(scan.scan_points);
     act(() => vi.advanceTimersByTime(400));
@@ -207,45 +235,50 @@ it('cancels an older Q timer without clearing the newer Q', () => {
 });
 
 it('keeps a known source retired', () => {
-  const scan = scanSnapshot();
+  const project = scanProjection();
+  const scan = project(scanSnapshot());
   const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
     initialProps: { value: scan },
   });
-  const next = { ...scan, scan_layer: { ...scan.scan_layer, source_id: 'b'.repeat(64) } };
+  const late = project({ ...scan, scan_layer: { ...scan.scan_layer!, sequence: 10 } });
+  const next = project({ ...scan, scan_layer: { ...scan.scan_layer!, source_id: 'b'.repeat(64) } });
   rerender({ value: next });
   expect(result.current).toEqual(scan.scan_points);
-  rerender({ value: { ...scan, scan_layer: { ...scan.scan_layer, sequence: 10 } } });
+  rerender({ value: late });
   expect(result.current).toEqual([]);
   cleanup();
 });
 
 it('retires an old reference before the new reference has Q', () => {
-  const scan = scanSnapshot();
+  const project = scanProjection();
+  const scan = project(scanSnapshot());
   const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
     initialProps: { value: scan as RobotSnapshot },
   });
-  const next = { ...scan, map_generation: 'R2', scan_layer: { ...scan.scan_layer, map_generation: 'R2' } };
+  const next = { ...scan, map_generation: 'R2', scan_layer: { ...scan.scan_layer!, map_generation: 'R2' } };
   const { scan_layer: _pendingLayer, ...pending } = next;
-  rerender({ value: pending });
-  rerender({ value: { ...scan, scan_layer: { ...scan.scan_layer, sequence: 2 } } });
+  rerender({ value: project(pending) });
+  rerender({ value: scan });
   expect(result.current).toEqual([]);
-  rerender({ value: next });
+  const admitted = project(next);
+  rerender({ value: admitted });
   expect(result.current).toEqual(scan.scan_points);
   rerender({ value: scan });
   expect(result.current).toEqual([]);
-  rerender({ value: next });
+  rerender({ value: admitted });
   expect(result.current).toEqual(scan.scan_points);
   cleanup();
 });
 
 it('revokes a Q on invalid and never restores that same identity', () => {
-  const scan = scanSnapshot();
+  const project = scanProjection();
+  const scan = project(scanSnapshot());
   const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
     initialProps: { value: scan },
   });
-  rerender({ value: { ...scan, scan_points: [], scan_layer: {
-    ...scan.scan_layer, valid: false, preview_count: 0, remaining_s: 0,
-  } } });
+  rerender({ value: project({ ...scan, scan_points: [], scan_layer: {
+    ...scan.scan_layer!, valid: false, preview_count: 0, remaining_s: 0,
+  } }) });
   expect(result.current).toEqual([]);
   rerender({ value: scan });
   expect(result.current).toEqual([]);
@@ -253,24 +286,26 @@ it('revokes a Q on invalid and never restores that same identity', () => {
 });
 
 it('rejects a lower scan sequence without changing the newer lease', () => {
-  const scan = scanSnapshot();
-  const next = { ...scan, scan_layer: { ...scan.scan_layer, sequence: 2 } };
+  const project = scanProjection();
+  const scan = project(scanSnapshot());
+  const next = project({ ...scan, scan_layer: { ...scan.scan_layer!, sequence: 2 } });
   const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
     initialProps: { value: next },
   });
-  rerender({ value: scan });
+  rerender({ value: project(scan) });
   expect(result.current).toEqual([]);
-  rerender({ value: next });
+  rerender({ value: project(next) });
   expect(result.current).toEqual(scan.scan_points);
   cleanup();
 });
 
 it('keeps a known backend boot retired', () => {
-  const scan = scanSnapshot();
+  const project = scanProjection();
+  const scan = project(scanSnapshot());
   const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
     initialProps: { value: scan },
   });
-  rerender({ value: { ...scan, scan_layer: { ...scan.scan_layer, backend_boot: 'new' } } });
+  rerender({ value: project({ ...scan, scan_layer: { ...scan.scan_layer!, backend_boot: 'new' } }) });
   expect(result.current).toEqual(scan.scan_points);
   rerender({ value: scan });
   expect(result.current).toEqual([]);
@@ -282,4 +317,41 @@ it('never treats legacy scan points as qualified Q', () => {
   const { result } = renderHook(() => useCurrentScan(legacy));
   expect(result.current).toEqual([]);
   cleanup();
+});
+
+it('rejects unsafe publication ordinals without changing other envelope integer domains', () => {
+  const value = { v: 1, robot_id: 'robot', session_id: 'cloud', connection_epoch: 1,
+    request_id: 'snapshot', seq: 2 ** 53, expires_at: 1000, type: 'snapshot',
+    payload: scanSnapshot() };
+  // Use only wire payload fields, not the client-owned robot id.
+  const { robot_id: _robot, ...payload } = value.payload;
+  expect(parseInbound(JSON.stringify({ ...value, payload }))).toBeNull();
+});
+
+it('ignores an older reference withdrawal without shortening the current Q deadline', () => {
+  vi.useFakeTimers();
+  const project = scanProjection();
+  const raw = scanSnapshot();
+  raw.scan_layer.remaining_s = .4;
+  const first = project(raw);
+  const { scan_layer: _layer, ...noLayer } = raw;
+  const oldWithdrawal = project({ ...noLayer, scan_points: [] });
+  const next = project({ ...raw, map_generation: 'R2', scan_layer: {
+    ...raw.scan_layer, map_generation: 'R2',
+  } });
+  try {
+    const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
+      initialProps: { value: first },
+    });
+    rerender({ value: next });
+    act(() => vi.advanceTimersByTime(50));
+    rerender({ value: oldWithdrawal });
+    expect(result.current).toEqual([]);
+    rerender({ value: next });
+    expect(result.current).toEqual(next.scan_points);
+    act(() => vi.advanceTimersByTime(349));
+    expect(result.current).toEqual(next.scan_points);
+    act(() => vi.advanceTimersByTime(1));
+    expect(result.current).toEqual([]);
+  } finally { cleanup(); vi.useRealTimers(); }
 });

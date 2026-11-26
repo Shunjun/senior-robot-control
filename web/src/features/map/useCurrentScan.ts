@@ -3,71 +3,63 @@ import type { MapPoint, RobotSnapshot } from "../../api/protocol";
 
 interface Lease {
   robot: string;
-  reference?: string;
-  mapReference?: string;
-  source?: string;
-  boot?: string;
+  order?: NonNullable<RobotSnapshot["display_order"]>;
+  scope?: string;
   sequence: number;
   deadline: number;
-  retiredReferences: Set<string>;
-  retiredSources: Set<string>;
-  retiredBoots: Set<string>;
 }
 
 function lease(robot: string): Lease {
-  return { robot, sequence: -1, deadline: 0, retiredReferences: new Set(),
-    retiredSources: new Set(), retiredBoots: new Set() };
+  return { robot, sequence: -1, deadline: 0 };
 }
 
-/** Display-only, local residence deadline. Vehicle monotonic timestamps are identities here. */
+/** Display-only residence lease, after the original client fences transport and publication. */
 export function useCurrentScan(snapshot: RobotSnapshot): readonly MapPoint[] {
   const current = useRef<Lease>(lease(snapshot.robot_id));
   const [, tick] = useState(0);
   if (current.current.robot !== snapshot.robot_id) current.current = lease(snapshot.robot_id);
   const state = current.current;
   const layer = snapshot.scan_layer;
+  const order = snapshot.display_order;
+  const previous = state.order;
   const now = performance.now();
   let visible = false;
-  const displayedReference = snapshot.map_ref === null || snapshot.map_generation === undefined
-    ? undefined : JSON.stringify([snapshot.map_ref.map_id, snapshot.map_ref.reference_revision,
-      snapshot.map_generation]);
-  const retiredReference = displayedReference !== undefined && state.retiredReferences.has(displayedReference);
-  // Reference retirement is observable even while the new reference has no Q yet.
-  if (displayedReference !== undefined && !retiredReference) {
-    if (state.mapReference !== undefined && state.mapReference !== displayedReference)
-      state.retiredReferences.add(state.mapReference);
-    state.mapReference = displayedReference;
-  }
-  if (retiredReference || layer === undefined || !snapshot.connected || snapshot.stale || !snapshot.localized ||
-      snapshot.map_ref === null || snapshot.map_generation !== layer.map_generation ||
-      snapshot.map_ref.map_id !== layer.map_ref.map_id ||
-      snapshot.map_ref.reference_revision !== layer.map_ref.reference_revision) {
-    if (!retiredReference) state.deadline = Math.min(state.deadline, now);
-  } else {
-    const reference = JSON.stringify([layer.map_ref.map_id, layer.map_ref.reference_revision,
-      layer.map_generation]);
-    const source = JSON.stringify([layer.backend_boot, layer.source_id]);
-    const same = reference === state.reference && source === state.source;
-    const rejected = state.retiredReferences.has(reference) || state.retiredSources.has(source) ||
-      state.retiredBoots.has(layer.backend_boot) || (same && layer.sequence < state.sequence);
+  const older = order !== undefined && previous !== undefined && order.client === previous.client && (
+    order.generation < previous.generation || (order.generation === previous.generation && (
+      order.epoch < previous.epoch || (order.epoch === previous.epoch && order.sequence < previous.sequence)
+    ))
+  );
+  if (order !== undefined && !older && order.sequence > 0) {
+    const samePublication = previous !== undefined && order.client === previous.client &&
+      order.generation === previous.generation && order.epoch === previous.epoch &&
+      order.sequence === previous.sequence;
+    const scope = layer === undefined ? undefined : JSON.stringify([
+      layer.map_ref.map_id, layer.map_ref.reference_revision, layer.map_generation,
+      layer.backend_boot, layer.source_id,
+    ]);
+    const same = scope === state.scope;
+    const rejected = layer !== undefined && (
+      (same && layer.sequence < state.sequence) ||
+      (samePublication && (!same || layer.sequence !== state.sequence))
+    );
+    state.order = order;
     if (!rejected) {
-      const deadline = layer.valid ? now + layer.remaining_s * 1000 : now;
-      if (same && layer.sequence === state.sequence) {
-        state.deadline = Math.min(state.deadline, deadline);
+      if (layer === undefined || !snapshot.connected || snapshot.stale || !snapshot.localized ||
+          snapshot.map_ref === null || snapshot.map_generation !== layer.map_generation ||
+          snapshot.map_ref.map_id !== layer.map_ref.map_id ||
+          snapshot.map_ref.reference_revision !== layer.map_ref.reference_revision) {
+        state.deadline = Math.min(state.deadline, now);
       } else {
-        if (state.reference !== undefined && state.reference !== reference)
-          state.retiredReferences.add(state.reference);
-        if (state.source !== undefined && state.source !== source) state.retiredSources.add(state.source);
-        if (state.boot !== undefined && state.boot !== layer.backend_boot) state.retiredBoots.add(state.boot);
-        state.reference = reference;
-        state.source = source;
-        state.boot = layer.backend_boot;
+        const deadline = layer.valid ? now + layer.remaining_s * 1000 : now;
+        state.deadline = same && layer.sequence === state.sequence
+          ? Math.min(state.deadline, deadline) : deadline;
+        state.scope = scope!;
         state.sequence = layer.sequence;
-        state.deadline = deadline;
+        visible = layer.valid && state.deadline > now;
       }
-      visible = layer.valid && state.deadline > now;
     }
   }
+  // //Compatible: legacy snapshots have no trusted display order and cannot grant Q.
   const deadline = state.deadline;
   useEffect(() => {
     if (deadline <= performance.now()) return;

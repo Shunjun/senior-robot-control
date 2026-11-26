@@ -27,6 +27,7 @@ class WebSocketPorts(Generic[SnapshotT, HeartbeatT]):
     snapshot: Callable[..., SnapshotEnvelope]
     send_lock: Callable[[], asyncio.Lock]
     receive_diagnostic: Callable[[object], None]
+    snapshot_sequence: Callable[[SnapshotT], int]
 
 
 @dataclass(frozen=True)

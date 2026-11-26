@@ -97,6 +97,8 @@ class RobotSnapshot:
     map_grid_id: str | None = None
     performance: PerformancePayload | None = None
     mapping_protocol_version: Literal[1, 2] | None = None
+    # //Compatible: local/legacy snapshots have no ordered uplink publication.
+    publication_sequence: int = 0
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:

@@ -2030,3 +2030,112 @@ def test_scan_layer_strict_contract_keeps_safe_integer_boundary_and_original_tim
         ScanLayerPayload.model_validate(
             {**base, "map_ref": dict(map_id="map", reference_revision=2**53)}
         )
+
+
+async def test_snapshot_collect_order_precedes_completion_and_delayed_send(snapshot_polls):
+    runtime = snapshot_polls
+    runtime.state.hold = asyncio.Event()
+    release = runtime.state.hold
+    await runtime.resume()
+    await asyncio.wait_for(runtime.state.entered.wait(), 1)
+    calls = runtime.state.calls
+    runtime.state.generation = "R2"
+    newer = asyncio.create_task(runtime.agent.publish_snapshot(ROBOT))
+    runtime.tasks.append(newer)
+    # Let the public entry reach the same collection gate as the periodic entry.
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert runtime.state.calls == calls
+    release.set()
+    fresh = await asyncio.wait_for(newer, 1)
+    assert fresh.map_generation == "R2"
+    assert fresh.publication_sequence > runtime.link.snapshots[-2].publication_sequence > 0
+
+
+async def test_new_link_collect_does_not_wait_for_retired_link_context(snapshot_polls):
+    runtime = snapshot_polls
+    runtime.state.hold = asyncio.Event()
+    release = runtime.state.hold
+    old = asyncio.create_task(runtime.agent.publish_snapshot(ROBOT))
+    runtime.tasks.append(old)
+    await asyncio.wait_for(runtime.state.entered.wait(), 1)
+    replacement = runtime.new_link(2)
+    runtime.agent._link, runtime.agent._epoch = replacement, replacement.epoch
+    runtime.state.generation = "R2"
+    fresh = await asyncio.wait_for(runtime.agent.publish_snapshot(ROBOT), 1)
+    assert fresh.publication_sequence == 1 and fresh.map_generation == "R2"
+    release.set()
+    await old
+    assert replacement.snapshots == [fresh]
+
+
+async def test_delayed_snapshot_send_keeps_original_collect_ordinal(rig):
+    from cloud.limits import CloudLimits
+    from cloud.runtime_relay import Hub
+    from heartbeat_test_support import RelaySocket
+    from vehicle_manager.agent.production_bindings import WebSocketLink
+
+    hub = Hub(CloudLimits())
+    socket = RelaySocket(hub, ROBOT)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class DelayedLink(WebSocketLink):
+        async def send_snapshot(self, snapshot):
+            if snapshot.publication_sequence == 1:
+                entered.set()
+                await release.wait()
+            await super().send_snapshot(snapshot)
+
+    link = DelayedLink(socket, ROBOT, socket.connection.epoch)
+    rig.agent._link, rig.agent._epoch = link, link.epoch
+    old = asyncio.create_task(rig.agent.publish_snapshot(ROBOT))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        fresh = await asyncio.wait_for(rig.agent.publish_snapshot(ROBOT), 1)
+        assert fresh.publication_sequence == 2
+        assert hub.snapshots.get(ROBOT).sequence == 2
+        release.set()
+        previous = await asyncio.wait_for(old, 1)
+        assert previous.publication_sequence == 1
+        frames = [frame for frame in socket.sent if frame["type"] == "snapshot"]
+        assert [frame["seq"] for frame in frames] == [2, 1]
+        assert hub.snapshots.get(ROBOT).sequence == 2
+    finally:
+        release.set()
+        await asyncio.gather(old, return_exceptions=True)
+        rig.agent._link = None
+        await link.close()
+
+
+async def test_snapshot_sequence_exhaustion_closes_real_link_and_supervisor_reconnects(rig):
+    from cloud.limits import CloudLimits
+    from cloud.runtime_relay import Hub
+    from heartbeat_test_support import RelaySocket
+    from vehicle_manager.agent.production_bindings import WebSocketLink
+
+    hub = Hub(CloudLimits())
+    first_socket = RelaySocket(hub, ROBOT)
+    first = WebSocketLink(first_socket, ROBOT, first_socket.connection.epoch)
+    second_socket = None
+    task = await start(rig, first)
+    try:
+        await until(lambda: hub.snapshots.get(ROBOT) is not None)
+        context = rig.agent._snapshot_collection
+        assert context.link is first
+        context.sequence = 2**53 - 2
+        last = await rig.agent.publish_snapshot(ROBOT)
+        assert last.publication_sequence == 2**53 - 1
+        assert hub.snapshots.get(ROBOT).sequence == 2**53 - 1
+        # Supply the next connector result after exhaustion closes the current socket.
+        with pytest.raises(ConnectionError, match="sequence"):
+            await rig.agent.publish_snapshot(ROBOT)
+        assert first_socket.closed
+        second_socket = RelaySocket(hub, ROBOT)
+        second = WebSocketLink(second_socket, ROBOT, second_socket.connection.epoch)
+        rig.connector.add(second)
+        await until(lambda: rig.agent._link is second and hub.snapshots.get(ROBOT).sequence > 0)
+        assert second.epoch > first.epoch
+        assert rig.agent._snapshot_collection.sequence < 2**53 - 1
+        assert hub.snapshots.get(ROBOT).sequence == 1
+    finally:
+        await finish(task, rig)

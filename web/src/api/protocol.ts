@@ -308,6 +308,8 @@ export type InboundEnvelope = SnapshotEnvelope | ResponseEnvelope;
  */
 export interface RobotSnapshot extends SnapshotPayload {
   robot_id: string;
+  /** Client-owned transport evidence; never decoded from a wire payload. */
+  display_order?: { client: object; generation: number; epoch: number; sequence: number };
 }
 
 /** One row of `GET /api/robots`. */
@@ -596,6 +598,7 @@ export function parseInbound(raw: unknown): InboundEnvelope | null {
     expires_at: data["expires_at"],
   };
   if (data["type"] === "snapshot") {
+    if (!Number.isSafeInteger(base.seq)) return null;
     const payload = parseSnapshotPayload(data["payload"]);
     return payload === null ? null : { ...base, type: "snapshot", payload };
   }

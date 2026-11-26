@@ -6,6 +6,7 @@ import logging
 import signal
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Generic, Literal
 
@@ -98,6 +99,15 @@ def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
         snapshot.navigation_block_reason,
         repr(snapshot.vehicle_ui),
     )
+
+
+@dataclass
+class _SnapshotCollection:
+    """Only one current link is retained; retired collectors keep their own gate."""
+
+    link: Link
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    sequence: int = 0
 
 
 class Agent(Generic[ResultT]):
@@ -193,6 +203,7 @@ class Agent(Generic[ResultT]):
             waypoint_create=workspace.create_waypoint if workspace is not None else None,
         )
         self._link: Link | None = None
+        self._snapshot_collection: _SnapshotCollection | None = None
         self._revoked_link: Link | None = None
         self._epoch = 0
         self._last_epoch = 0
@@ -504,7 +515,7 @@ class Agent(Generic[ResultT]):
         if self._link is not link:
             return
         try:
-            snapshot = await self._collect()
+            snapshot = await self._collect_for_link(link)
             if self._link is not link:
                 return
             key = _snapshot_change_key(snapshot)
@@ -517,7 +528,7 @@ class Agent(Generic[ResultT]):
             if self._link is not link:
                 return
             try:
-                snapshot = await self._collect()
+                snapshot = await self._collect_for_link(link)
             except Exception:
                 # Any failed read, ``OSError`` and a timeout included, only skips this round: the
                 # link is still up, so the next successful collect must keep the cloud fresh.
@@ -1127,10 +1138,36 @@ class Agent(Generic[ResultT]):
         if robot_id != self.robot_id:
             raise self._ports.error(ErrorCode.VALIDATION, "snapshot is for another robot")
         link, epoch = self._link, self._epoch
-        snapshot = await self._collect()
+        snapshot = await self._collect_for_link(link)
         if link is not None and self._link is link and self._epoch == epoch:
             await link.send_snapshot(snapshot)
         return snapshot
+
+    async def _collect_for_link(self, link: Link | None) -> RobotSnapshot:
+        if link is None:
+            return await self._collect()
+        context = self._snapshot_collection
+        if context is None or context.link is not link:
+            context = _SnapshotCollection(link)
+            if self._link is link:
+                self._snapshot_collection = context
+        async with context.lock:
+            if self._link is not link:
+                # The public caller may still read locally, but must not send across epochs.
+                return await self._collect()
+            if context.sequence == 2**53 - 1:
+                # A waiter may have consumed the last ordinal. Close outside the gate below.
+                sequence = None
+                snapshot = None
+            else:
+                context.sequence += 1
+                sequence = context.sequence
+                snapshot = await self._collect()
+        if sequence is None:
+            await link.close()
+            raise ConnectionError("snapshot sequence exhausted")
+        assert snapshot is not None
+        return replace(snapshot, publication_sequence=sequence)
 
     async def _collect(self) -> RobotSnapshot:
         live, home_revision = await asyncio.wait_for(

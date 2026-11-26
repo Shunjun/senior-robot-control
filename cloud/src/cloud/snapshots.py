@@ -52,6 +52,7 @@ class CloudSnapshot:
     snapshot: SnapshotPayload
     last_synced_at: float
     stale: bool
+    sequence: int = 0
 
 
 class SnapshotCache:
@@ -69,19 +70,44 @@ class SnapshotCache:
         self._stale_after = stale_after
         self._clock = clock
         self._monotonic = monotonic
-        self._current_reference: dict[str, tuple] = {}
+        self._session_epoch: dict[str, int] = {}
+        self._snapshot_sequence: dict[str, int] = {}
         self._scan_scope: dict[str, tuple] = {}
         self._scan_sequence: dict[str, int] = {}
         self._scan_deadline: dict[str, float] = {}
-        self._retired_references: dict[str, set[tuple]] = {}
-        self._retired_sources: dict[str, set[tuple]] = {}
-        self._retired_boots: dict[str, set[str]] = {}
         self._entries: dict[str, tuple[SnapshotPayload, float]] = {}
         self._offline: set[str] = set()
 
-    def store(self, envelope: SnapshotEnvelope) -> CloudSnapshot:
+    def begin_session(self, robot_id: str, epoch: int) -> None:
+        """Called only after the relay replaces its authenticated agent Connection."""
+        self._session_epoch[robot_id] = epoch
+        self._snapshot_sequence[robot_id] = 0
+        self._scan_deadline[robot_id] = self._monotonic()
+        entry = self._entries.get(robot_id)
+        if entry is not None:
+            payload, synced = entry
+            payload = payload.model_copy(deep=True)
+            payload.scan_points = []
+            if payload.scan_layer is not None:
+                payload.scan_layer = payload.scan_layer.model_copy(
+                    update=dict(valid=False, remaining_s=0.0, preview_count=0)
+                )
+            self._entries[robot_id] = payload, synced
+
+    def store(self, envelope: SnapshotEnvelope) -> CloudSnapshot | None:
         robot_id = envelope.robot_id
         payload = envelope.payload
+        if robot_id not in self._session_epoch:
+            self.begin_session(robot_id, envelope.connection_epoch)
+        if envelope.connection_epoch != self._session_epoch[robot_id]:
+            return self._view(robot_id)
+        sequence = envelope.seq
+        previous_sequence = self._snapshot_sequence[robot_id]
+        if sequence > 2**53 - 1 or (previous_sequence > 0 and sequence <= previous_sequence):
+            return self._view(robot_id)
+        # //Compatible: seq0 is an unordered legacy scalar snapshot, never qualified Q.
+        if sequence == 0 and payload.scan_layer is not None:
+            return self._view(robot_id)
         # //Compatible: the former vehicle projection rejected blank map identities.
         references = (payload.map_ref, None if payload.home is None else payload.home.map_ref)
         for reference in references:
@@ -89,6 +115,7 @@ class SnapshotCache:
                 raise ValueError("invalid map reference")
         stored = payload.model_copy(deep=True)
         self._accept_scan(robot_id, stored)
+        self._snapshot_sequence[robot_id] = sequence
         self._entries[robot_id] = (stored, self._clock())
         self._offline.discard(robot_id)
         view = self._view(robot_id)
@@ -98,34 +125,14 @@ class SnapshotCache:
     def _accept_scan(self, robot_id: str, payload: SnapshotPayload) -> None:
         now = self._monotonic()
         layer = payload.scan_layer
-        retired_refs = self._retired_references.setdefault(robot_id, set())
-        retired_reference = False
-        if payload.map_ref is not None and payload.map_generation is not None:
-            observed_ref = (
-                payload.map_ref.map_id,
-                payload.map_ref.reference_revision,
-                payload.map_generation,
-            )
-            retired_reference = observed_ref in retired_refs
-            if not retired_reference:
-                previous_ref = self._current_reference.get(robot_id)
-                if previous_ref is not None and previous_ref != observed_ref:
-                    retired_refs.add(previous_ref)
-                self._current_reference[robot_id] = observed_ref
         if layer is None:
-            # Only a current reference's missing observation revokes its display lease.
-            if not retired_reference:
-                self._scan_deadline[robot_id] = now
+            self._scan_deadline[robot_id] = now
             return
         ref = (layer.map_ref.map_id, layer.map_ref.reference_revision, layer.map_generation)
         source = (layer.backend_boot, layer.source_id)
         scope = (ref, source)
         previous = self._scan_scope.get(robot_id)
-        retired_sources = self._retired_sources.setdefault(robot_id, set())
-        retired_boots = self._retired_boots.setdefault(robot_id, set())
-        rejected = (
-            ref in retired_refs or source in retired_sources or layer.backend_boot in retired_boots
-        )
+        rejected = False
         if previous == scope and layer.sequence < self._scan_sequence[robot_id]:
             rejected = True
         if payload.map_ref != layer.map_ref or payload.map_generation != layer.map_generation:
@@ -140,13 +147,6 @@ class SnapshotCache:
         if previous == scope and layer.sequence == self._scan_sequence[robot_id]:
             deadline = min(deadline, self._scan_deadline[robot_id])
         else:
-            if previous is not None:
-                if previous[0] != ref:
-                    retired_refs.add(previous[0])
-                if previous[1] != source:
-                    retired_sources.add(previous[1])
-                if previous[1][0] != layer.backend_boot:
-                    retired_boots.add(previous[1][0])
             self._scan_scope[robot_id] = scope
             self._scan_sequence[robot_id] = layer.sequence
         if not payload.connected or not payload.localized or payload.stale:
@@ -191,4 +191,4 @@ class SnapshotCache:
             )
         if "navigation_ready" in snapshot.model_fields_set:
             shown.navigation_ready = snapshot.navigation_ready and not stale
-        return CloudSnapshot(shown, synced, stale)
+        return CloudSnapshot(shown, synced, stale, self._snapshot_sequence.get(robot_id, 0))

@@ -326,6 +326,8 @@ export class RobotClient implements RobotLink {
   private readonly statusListeners = new Set<(status: LinkStatus) => void>();
   private readonly videoListeners = new Set<(frame: VideoSignalEnvelope) => void>();
   private readonly pending = new Map<string, Pending>();
+  private readonly displayClient = {};
+  private snapshotSequence = 0;
   private generation = 0;
   private socket: SocketLike | null = null;
   private robotId: string | null = null;
@@ -355,6 +357,7 @@ export class RobotClient implements RobotLink {
     this.robotId = robotId;
     this.sessionId = `web-${newId()}`;
     this.epoch = 0;
+    this.snapshotSequence = 0;
     this.epochFrontier = 0;
     this.retiredEpoch = 0;
     this.seq = 0;
@@ -590,17 +593,41 @@ export class RobotClient implements RobotLink {
     if (incomingEpoch > 0 && (incomingEpoch < this.epochFrontier || incomingEpoch <= this.retiredEpoch)) return;
     if (incomingEpoch === 0) this.retiredEpoch = Math.max(this.retiredEpoch, this.epochFrontier);
     else this.epochFrontier = Math.max(this.epochFrontier, incomingEpoch);
-    if (incomingEpoch !== this.epoch) this.vehicle.fenceManual();
+    if (incomingEpoch !== this.epoch) {
+      this.vehicle.fenceManual();
+      this.snapshotSequence = 0;
+      if (this.latest?.scan_layer !== undefined) {
+        this.latest = { ...this.latest, scan_points: [], scan_layer: {
+          ...this.latest.scan_layer, valid: false, remaining_s: 0, preview_count: 0,
+        } };
+        this.snapshotListeners.forEach(listener => listener(this.latest as RobotSnapshot));
+      }
+    }
     this.epoch = incomingEpoch;
     this.vehicle.setManualConnection(incomingEpoch > 0);
   }
   private onSnapshot(envelope: SnapshotEnvelope): void {
     // Runtime report timing cannot grant or retire the transport's manual identity.
     if (envelope.connection_epoch !== this.epoch) return;
+    if (envelope.seq < this.snapshotSequence) return;
+    // //Compatible: unordered legacy scalar reports cannot establish or replace Q.
+    if (envelope.seq === 0 && (this.snapshotSequence > 0 || envelope.payload.scan_layer?.valid)) return;
+    if (envelope.seq > 0 && envelope.seq === this.snapshotSequence && this.latest !== null) {
+      const identity = (value: SnapshotEnvelope["payload"]) => JSON.stringify([
+        value.map_ref, value.map_generation, value.scan_layer?.backend_boot,
+        value.scan_layer?.source_id, value.scan_layer?.sequence,
+        value.scan_layer?.sampled_at, value.scan_layer?.expires_at,
+      ]);
+      if (identity(envelope.payload) !== identity(this.latest)) return;
+    }
+    this.snapshotSequence = envelope.seq;
     const payload = envelope.connection_epoch === 0
       ? { ...envelope.payload, stale: true, connected: false }
       : envelope.payload;
-    this.latest = { robot_id: envelope.robot_id, ...payload };
+    this.latest = { robot_id: envelope.robot_id, ...payload, display_order: {
+      client: this.displayClient, generation: this.generation,
+      epoch: this.epoch, sequence: envelope.seq,
+    } };
     this.clearStaleTimer();
     if (!this.latest.stale) {
       this.staleTimer = setTimeout(() => this.markStale(), this.staleAfterMs);

@@ -62,6 +62,31 @@ afterEach(cleanup);
 
 // ---------------------------------------------------------------- fakes
 
+let projectScan: (value: RobotSnapshot) => RobotSnapshot;
+let closeScanProjection: () => void;
+beforeEach(() => {
+  const socket: SocketLike = { readyState: 1, bufferedAmount: 0, onopen: null,
+    onclose: null, onmessage: null, onerror: null, send() {}, close() {} };
+  const client = new RobotClient({ socketFactory: () => socket });
+  void client.connect("robot-alpha"); socket.onopen?.();
+  socket.onmessage?.({ data: JSON.stringify({ v: 1, type: "control.connection",
+    robot_id: "robot-alpha", connection_epoch: 1 }) });
+  let sequence = 0;
+  projectScan = value => {
+    let projected: RobotSnapshot | undefined;
+    const stop = client.subscribe(next => { projected = next; });
+    const { robot_id, display_order: _order, ...payload } = value;
+    socket.onmessage?.({ data: JSON.stringify({ v: 1, type: "snapshot", robot_id,
+      session_id: "cloud-cache", connection_epoch: 1, request_id: "snapshot",
+      seq: ++sequence, expires_at: 2000, payload }) });
+    stop();
+    if (projected === undefined) throw new Error("scan snapshot failed original client projection");
+    return projected;
+  };
+  closeScanProjection = () => client.disconnect();
+});
+afterEach(() => closeScanProjection());
+
 const ALPHA: RobotSummary = {
   id: "robot-alpha",
   name: "Alpha 仓库车",
@@ -77,7 +102,7 @@ function snapshot(
   robotId: string,
   overrides: Partial<RobotSnapshot> = {},
 ): RobotSnapshot {
-  return {
+  const value: RobotSnapshot = {
     robot_id: robotId,
     connected: true,
     localized: true,
@@ -92,6 +117,7 @@ function snapshot(
     home_revision: 0,
     ...overrides,
   };
+  return value.scan_layer === undefined ? value : projectScan(value);
 }
 
 class FakeLink implements RobotLink {
@@ -127,6 +153,7 @@ class FakeLink implements RobotLink {
     return () => this.statusListeners.delete(listener);
   }
   emit(value: RobotSnapshot): void {
+    if (value.scan_layer !== undefined) value = projectScan(value);
     act(() => this.snapshotListeners.forEach((listener) => listener(value)));
   }
   emitStatus(value: LinkStatus): void {
