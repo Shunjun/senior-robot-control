@@ -99,20 +99,23 @@ class SnapshotCache:
         now = self._monotonic()
         layer = payload.scan_layer
         retired_refs = self._retired_references.setdefault(robot_id, set())
+        retired_reference = False
         if payload.map_ref is not None and payload.map_generation is not None:
             observed_ref = (
                 payload.map_ref.map_id,
                 payload.map_ref.reference_revision,
                 payload.map_generation,
             )
-            if observed_ref not in retired_refs:
+            retired_reference = observed_ref in retired_refs
+            if not retired_reference:
                 previous_ref = self._current_reference.get(robot_id)
                 if previous_ref is not None and previous_ref != observed_ref:
                     retired_refs.add(previous_ref)
                 self._current_reference[robot_id] = observed_ref
         if layer is None:
-            # A missing/invalid observation revokes the current local display lease.
-            self._scan_deadline[robot_id] = now
+            # Only a current reference's missing observation revokes its display lease.
+            if not retired_reference:
+                self._scan_deadline[robot_id] = now
             return
         ref = (layer.map_ref.map_id, layer.map_ref.reference_revision, layer.map_generation)
         source = (layer.backend_boot, layer.source_id)

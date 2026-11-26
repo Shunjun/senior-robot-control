@@ -315,3 +315,41 @@ def test_scan_cache_keeps_known_boot_retired():
     )
     assert store(newer).scan_layer.valid
     assert not store(original).scan_layer.valid
+
+
+def test_retired_reference_without_layer_preserves_current_scan_deadline():
+    from dataclasses import replace
+
+    rig = Rig()
+    steady = [100.0]
+    cache = SnapshotCache(clock=lambda: rig.now[0], monotonic=lambda: steady[0])
+
+    def store(snapshot):
+        return cache.store(validate_frame(rig.frame(snapshot), ROBOT)).snapshot
+
+    first = scan_snapshot(remaining=0.4)
+    current = scan_snapshot(generation="R2", remaining=0.4)
+    assert store(first).scan_layer.valid
+    assert store(current).scan_layer.valid
+    deadline = cache._scan_deadline[ROBOT]
+    steady[0] = 100.05
+    store(replace(first, scan_layer=None, scan_points=()))
+    assert cache._scan_deadline[ROBOT] == deadline == 100.4
+    repeated = store(current)
+    assert repeated.scan_layer.valid and len(repeated.scan_points) == 1
+    assert repeated.scan_layer.remaining_s == pytest.approx(0.35)
+    assert cache._scan_deadline[ROBOT] == deadline
+    steady[0] = deadline
+    expired = cache.get(ROBOT).snapshot
+    assert not expired.scan_layer.valid and expired.scan_points == []
+
+
+def test_current_reference_without_layer_still_revokes_same_scan():
+    from dataclasses import replace
+
+    store = scan_cache_store()
+    current = scan_snapshot()
+    assert store(current).scan_layer.valid
+    store(replace(current, scan_layer=None, scan_points=()))
+    repeated = store(current)
+    assert not repeated.scan_layer.valid and repeated.scan_points == []

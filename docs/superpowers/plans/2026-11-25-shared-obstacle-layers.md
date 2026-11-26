@@ -254,6 +254,8 @@ cloud仅维护显示缓存年龄：在`cloud/src/cloud/snapshots.py`按接收mon
 
 **本地验证：** Python指定agent/mapping/cloud/geometry/wire回归214 passed，原IPC版本/长度边界1 passed；Web四文件177 passed，独立typecheck与build通过，ruff通过。冻结steady=100的2048实际hit输入：full Q=2048、preview=96、完整最终body=6182/含头6186字节；唯一近预算输入包含实际runtime/manual/route/版本字段及ensure_ascii非ASCII长度，原9354字节重分桶至preview=71后body=8152/含头8156字节，安全字段逐项保持。上述为原bridge/reference/adapter/IPC编码解码/manager DTO及projection/wire的同进程调用与页面输入测试，不冒充Task7真实IPC/DDS同scan跨进程、Nav2安装态、整导航或性能验收。原断连地图不可用语义、DEMO/e2e数据、世界范围/车辆asset/字号/布局保留；TTL仅各跳本地驻留与重复不续期，无跨机物理精确0.5秒承诺。完整diff、输入/nodeid和环境来源见`/tmp/shared-obstacle-t6-ui-protocol-delivery-2026-11-26.md`；独立审核、负责人亲阅及正常merge待执行。
 
+**2026-11-26 T6 定向返修 F2：** 独立审核的可接纳序列 `R1/Q1 → R2/Q1 → 已退休R1无scan_layer → R2/Q1重复` 已通过原 strict wire 与真实 SnapshotCache 复现：原 deadline 从100.4误改100.05。现仅在无层分支区分已知退休R，保留当前R无层撤销、新R无Q退休旧R、同Q取早、低seq/source/boot及连接epoch保护。新增原序列回归断言deadline保持100.4、重复时剩余0.35秒并在100.4清空，另验证当前R无层后同Q仍失效；原cloud文件23项通过，ruff与Web typecheck通过。实际范围为产品M1、测试M1、本文M1（A0/M3/D0），未改hook/relay/client或其他产品路径。F1退休集合无界仍未修复：容量溢出后长期停用显示方案未获批准；可信采集/发布顺序及有限状态方案只读提交负责人裁决，不能据此签整T6或S15。证据与精确nodeids见`/tmp/shared-obstacle-t6-review-repair-2026-11-26.md`，F1提案见`/tmp/shared-obstacle-t6-bounded-ordering-proposal-2026-11-26.md`。
+
 ### Task 7：生产闭环、安装态离线及四核资源收口（负责人协调，原各owner修自己模块）
 
 **Files:** manifest T7。**Consumes:** 已合T1–T6及Task 0版本/profile、同一S01–S16输入集。**Produces:** 分层证据、失败边界、测量报告；不是一套新测试矩阵或新生产调度框架。
