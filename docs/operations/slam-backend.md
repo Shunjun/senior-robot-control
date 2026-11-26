@@ -200,3 +200,175 @@ Nav2 安装或实机通过；可运行 `SENIOR_SHARED_LAYERS_PROCESS=1` 的
 资源限制保留：dense bytes、G、三态验证和部分 staging 仍 O(N)，support/free 和 tracker
 stage 会同时持有旧/新有界结构，部分 legacy mask 仍整份复制。当前局部查询、dirty tiles
 及有界记录不等于端到端 O(dirty)，也不构成 CPU/RSS/Hz 已达标的承诺。
+
+## Task7 真实链 harness 与记录入口（2026-11-26，实施交付，未运行 ROS）
+
+`ros2/tests/test_shared_layers_process.py` 现在可自行组合真实 LaunchService、原
+`_NavigationStartup`、planner/localization ExecuteProcess、agent_adapter 与
+DedicatedController。它使用私有 catalog/socket、真实 robot_state_publisher/原 URDF、
+普通 `/scan`、`/wheel/odom`、`/imu/data` 和同 stamp odom→base_link；没有第二个
+Q、authorization、coverage 或 motion-runtime writer。静态资产由原 world_reference
+从同一 motion_qualification.sdf 生成，扫描直接 raycast 原 collision box 和原 S02 曲面。
+原 launch 仅抽取 `motion_stack_actions(context, *, before_navigation, after_navigation) -> MotionStackActions`，原入口仍依原顺序
+插入 environment/physics/camera，默认参数、startup 状态机未改；两个必需的输入动作工厂在原列表位置调用，保留构造及
+Launch 执行顺序。原入口固定传原 physics/environment 和 camera 工厂，没有默认新开关。
+
+功能 episode 检查 static→live 两旧 group exit0、同 overlay 路径、新原 planner 启动；
+manager/catalog 真实选 R/install 后，由原 global/local 插件写 coverage，最后 state.get
+ready。两 coverage 可用同源不同有效 sequence，各自回找原 Q/TF，不要求同帧。S05
+用原 PublishFiles 屏障与原 capture RPC，一次 A→B，核 native/manager graph 水位不变、
+同 anchor evidence/fixed 推进；S07 包含原支持撤销、墙保留、真实保存/close/restore、
+ProductionMappingRequests.map.export（map-transfer 边界）及逐格 O/F/U/原重grid核验。
+S09 保留真实旧 Q/slot 与 late fixed IPC 输入，停 scan 后不能续期，新 backend/R/source
+只能靠新完整 capture 与原授权恢复。R4 从原 route 的 running 状态正常 Launch shutdown，
+以 PID+starttime（含 zombie）核实际退出，未确认时保留证据，不以目录清理冒充退出。
+
+本机仅 helper/语法/相关 portable 检查；完整十包、ROS/Launch、实际双 costmap、上述真实
+episode 及四核性能均未验。磁盘屏障只证明 Python checkpoint 段；capture RPC 起止是
+可得上界，没有 native SaveToFile 子阶段时刻，不能声称该慢调用与 Q 已重叠。global 内部
+重建插件需要新的 startup run 的原限制保留，harness 不代签 permit。synthetic-admitted
+只改原 synthetic_profile 的 profile_id，其数值与 evidence_digest 不改，不是部署几何证据。
+
+以下是**后续 VM 派单命令**，不是本机已执行命令。先将负责人最终正常集成后的准确 commit
+冻结到私有源码/独立 build/install/log；禁止混 T6 未提交源。先复核 Humble/ABI、磁盘、空闲
+localhost domain 和原 dependency report，再进入源码根目录。原 12+5 Python prefix 仅是
+依赖：`/tmp/navigation-final-python-20261126/prefix` 与
+`/tmp/navigation-candidate-5d929e-20261126/python-prefix`，不能复用后者旧产品源码。
+
+```bash
+source /opt/ros/humble/setup.bash
+source /tmp/navigation-costmap-a097-lethal-first-20261126/install/local_setup.bash
+source /tmp/nav2-s13-unknown-cost-20261126/install-mppi/local_setup.bash
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="/tmp/navigation-final-python-20261126/prefix:/tmp/navigation-candidate-5d929e-20261126/python-prefix:${PYTHONPATH}"
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+# task_run 指本次新建的 0700 私有目录；不覆盖旧 prefix/build。
+export CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1
+colcon --log-base "$task_run/log" build --base-paths ros2/src \
+  --build-base "$task_run/build" --install-base "$task_run/install" \
+  --packages-up-to senior_mapping senior_navigation senior_robot senior_sim \
+  --executor sequential --parallel-workers 1
+source "$task_run/install/local_setup.bash"
+export PYTHONPATH="$PWD:$PWD/contracts/src:$PWD/senior_control/src:$PWD/ros2/src/senior_mapping:$PWD/ros2/src/senior_localization:$PWD/ros2/src/senior_robot:$PWD/ros2/src/senior_navigation:$PWD/ros2/src/senior_perception:$PWD/ros2/src/senior_motion_estimation:$PWD/ros2/src/senior_motion_control:$PWD/ros2/src/senior_sensor_ingress:$PYTHONPATH"
+colcon --log-base "$task_run/test-log" test --build-base "$task_run/build" \
+  --install-base "$task_run/install" --packages-select senior_mapping senior_navigation senior_interfaces
+colcon test-result --test-result-base "$task_run/build" --verbose
+# ROS_DOMAIN_ID 由 VM owner 核空闲后指定，不在此猜一个已空闲域。
+export ROS_LOCALHOST_ONLY=1 SENIOR_SHARED_LAYERS_PROCESS=1
+python3 -m pytest -p pytest_asyncio.plugin \
+  ros2/tests/test_shared_layers_process.py::test_owner_adapter_native_capture_restore_and_retirement \
+  --basetemp "$task_run/functional-pytest" -vv -s
+```
+
+十包闭包为 interfaces/localization/mapping/motion_control/motion_estimation/navigation/
+perception/robot/sensor_ingress/sim。先核真实导入、生成 typesupport、插件 XML/.so、ELF/maps
+及实际消费者参数；fixture 会查询 controller_server 的 batch=400、vx_max=.22、vx_min=-.15、
+wz_max=.4，并记录 overlay/实际 descendant argv。不能用旧 S13 的 batch=2000 结果替代。
+build 使用 CMAKE_BUILD_PARALLEL_LEVEL/MAKEFLAGS 请求单编译；VM 须核实际编译并发，不能将此文本当构建证据。
+
+Stationary-only sensor/SLAM reference 输入仅生成一次（不满足持续 MPPI/S16）：
+
+```bash
+python3 ros2/tests/shared_layers_sensor_source.py \
+  --freeze "$task_run/reference-input.jsonl" \
+  --world ros2/src/senior_sim/worlds/motion_qualification.sdf \
+  --urdf ros2/src/senior_sim/urdf/senior.urdf.xacro
+# 冻结文件通过同一 schema/hash 后供两版各用一次，不重新抽样或以控制输出改输入。
+export SENIOR_SHARED_LAYERS_REFERENCE_TRACE="$task_run/reference-input.jsonl"
+python3 -m pytest -p pytest_asyncio.plugin \
+  ros2/tests/test_shared_layers_process.py::test_frozen_stationary_system_reference \
+  --basetemp "$task_run/reference-pytest" -vv -s
+# TRACE 指对应 pytest 私有目录内的 native/system-trace.jsonl 或 reference/system-trace.jsonl。
+python3 tools/occupancy_replay_benchmark.py --system-trace "$TRACE" --output "$task_run/summary.json"
+```
+
+执行 reference pytest 前，由 VM owner 在独立 transient **task-only** scope 内核实际
+`cpu.max=400000 100000`、四 CPU affinity/cpuset、`memory.max=4294967296`、swap 策略和
+MemAvailable≥6GiB；不要改用户/system slice，不在 Bot1 创建 scope。两版串行、同输入/hash、
+同包络，scope 内包括 recorder。若需 taskset fallback，逐 descendant 核继承。历史产品基线
+`11a26906c9831b000b09e2279ad7ef4ea514d903` 的旧装配没有新 factory/Q/coverage，不能把
+当前 pytest 原样当作旧版 runner；其原入口适配及缺项 N/A 仍需后续 VM 对照 owner 核实，
+本轮没有构建/取得可比旧版栈或补写旧版产品。
+
+stationary-only reference 是 60s/300×5Hz×2048 的物体 stable A→motion→stable B，原曲面从3.0m到+0.4m，
+第150帧一次显式 save，第299帧结束后原 restore/export；20Hz wheel/TF 固定零轨迹，普通
+IMU 与原 mount 一致。参考 stamp 按冻结偏移与每次运行记录的 epoch 形成，不以晚到回调
+重新盖新鲜时间；实际 lateness 另记。bootstrap/postlude 不计入300帧，恢复 postlude 为同一 B。
+功能模式的原 SE2 则仅跟随最终 `/cmd_vel`。冻结模式仅发起同一原 route 观察其生命周期，
+不跟随私有 MPPI Twist，也不伪造车动；零 odom 无法满足原 progress 的 .2m/10s，不能提供健康持续60s控制；真实失败时测试
+保留失败并 RED，不重复发任务、调超时或把记录成功当导航成功。restore/export/close
+可能按原 lifecycle 必须再 capture，不能把它们藏成“只有一次 native SaveToFile”。
+
+trace schema=1：metadata（run/commit/tree/host、输入/地图/URDF/profile/params hash）、
+stage/steady_ns、完整 host+ScanKey、原 stamp/sample/deadline、原契约 R/G/role/authority/
+permit/plugin_instance/cycle、进程 PID/starttime/PPID/PGID/cgroup、resource/file/DDS 观察。
+CPU 200ms，PSS/RSS/IO/context-switch 1s；JSONL writer 队列4096、单行262144 bytes，
+capture 索引512，summary capture 窗4096、进程512，overflow/eviction/error 明记。
+控制回调只入队；磁盘 writer 与资源采样独立 task-owned 线程，结尾有 drop/queue高水位/
+writer CPU/emit耗时，开销不冒称零。summary 的 complete 仅表示存在 trace_end，不能当
+功能通过；无 footer、丢 trace、未配对 coverage 分列。接收/周期延迟是观测上界，Twist
+没有 capture key，只能窗口关联；未导出的 native 发布时刻、锁等待、DDS queue/match/loop
+指标 N/A，sequence gap 不是 DDS 纯丢包。最终 T6 UI 未集成前不能签完整 S16/实车。
+
+VM reference scope 可直接用以下命令包住上面的 reference pytest（仅 VM 执行 owner 在功能
+门槛、prefix/输入 hash、swap 与原 warm-chain 资源亲核后执行）。作用域是本次唯一任务，
+标准库 preflight 在任何 ROS 导入/启动前核实际 cgroup/affinity/可用内存，失败即停；
+cpuset 不支持时由 VM owner 记录失败与批准的 taskset 继承核验，不改系统 slice。
+
+```bash
+systemd-run --scope --unit=navigation-task7-reference-20261126 \
+  --property=CPUQuota=400% --property=MemoryMax=4G --property=AllowedCPUs=0-3 \
+  python3 -c '
+import os, pathlib, sys
+line = next(s for s in pathlib.Path("/proc/self/cgroup").read_text().splitlines() if s.startswith("0::"))
+root = pathlib.Path("/sys/fs/cgroup") / line[3:].lstrip("/")
+assert line != "0::/", "task-only cgroup required"
+quota, period = root.joinpath("cpu.max").read_text().split()
+assert int(quota) == 4 * int(period)
+assert root.joinpath("memory.max").read_text().strip() == "4294967296"
+assert os.sched_getaffinity(0) == {0, 1, 2, 3}
+available = next(int(s.split()[1]) for s in pathlib.Path("/proc/meminfo").read_text().splitlines() if s.startswith("MemAvailable:"))
+assert available >= 6 * 1024 * 1024
+print("task cgroup", root, "swap.max", root.joinpath("memory.swap.max").read_text().strip(), flush=True)
+os.execv(sys.executable, [sys.executable, "-m", "pytest", "-p", "pytest_asyncio.plugin", "ros2/tests/test_shared_layers_process.py::test_frozen_stationary_system_reference", "--basetemp", os.environ["TASK7_REFERENCE_BASETEMP"], "-vv", "-s"])
+'
+```
+
+`TASK7_REFERENCE_BASETEMP` 指新的私有 pytest 目录，须在执行前显式 export；scope unit 名称也
+应为本次唯一且未占用名称。上面没有设置 MemorySwapMax，也没有把历史 scope 的25%/256MiB
+探针当作车辆规格。完整基线/UI 并发与最终 S16 仍由负责人另派，不能只跑这段就签通过。
+
+
+### 八项独立审核返修边界（2026-11-26）
+
+当前入口名称含 `stationary`，仅记录静止 sensor/SLAM；采满300帧不代表全负载成功，
+终态/idle之后MPPI指标N/A，真实failed/missing等仍保留并使pytest RED。运动参考仅有
+仓库外提案，未实现/运行；短原route不能承诺一次健康60s，T6 UI未集成仍不签完整S16。
+
+coverage contract的schema=1与trace envelope的schema=1独立：完整payload置于record，
+拒未知contract schema；解码兼容原file.record和原扁平helper。原async pump每100ms只读
+slot与两coverage，即使主loop在save/restore await仍观察；磁盘读在IO worker，capture
+索引只由asyncio owner访问，控制回调只入队。每角色各自按完整host/ScanKey回Q/TF/slot，
+不要求双角色同sequence，不续原sample+500ms。summary按bootstrap/stationary_reference/
+save/restore_export列样本数、缺角色N/A与缺Q/TF/slot；bootstrap不能冒充主窗60s。
+
+原navigation.task_status按execution_id/task_epoch观察starting/running/cancel_pending/
+failed/succeeded/canceled/missing，accepted不算active。原私有controller Twist与最终
+cmd_vel仅按窗口关联；输出只在最近200ms内确有running及ready观察时计入该窗口，查询
+阻塞/缺样时未知，不外推负载时长。终态/失格时刻是观察上界，分开保留。取消仅发一次，
+按同effect_id/sequence/epoch查询原revoke，须accepted/output_exited/fenced-through及
+原progress退出同时确认；ok本身不够，未确认失败留trace，不造退休file。
+
+CPU ticks另带实际identity读取前后的monotonic区间，完成时刻作为统一的采样端点上界，
+不采用full字段读完后的入队时间。两次CPU读区间之间或区间内触及phase边界的差分标
+straddling，不分配阶段CPU；同名phase往返也不合并。阶段按CPU读区间归属，整次平均
+同样用CPU读完成端点；这是有界分次观察，非原子快照。旧trace缺CPU读取区间则CPU
+指标缺项（N/A），不从入队时间猜端点；非CPU字段仍为原入队观察口径。IO/上下文切换为
+同PID:starttime整次first-last差分，不称阶段计数。cgroup按字段保留最近实际值及时间，
+轻量cpu行不抹内存/events/peak/max；kernel memory.peak与sampled current max口径不同。
+RSS不相加异时峰值，PSS没有异时求和；task cgroup含producer/recorder，不称产品独占。
+
+发现后代时将原starttime及父身份带到register复核，full采样前后复核incarnation/cgroup；
+不符丢弃并记unconfirmed。stat/cgroup为同incarnation内的有界分次观察，不是原子内核
+快照。受控读取序列覆盖竞态分支，未在Linux现场制造PID复用；无按名字补认/进程控制。
+本次仅本child定向helper/summary/factory及必要旧回归；Humble/十包/真实链仍留后续VM。

@@ -314,3 +314,35 @@ source "$T5_MPPI_OVERLAY/install/setup.bash"
 ldd、源码或包版本签通过。原核心 `.so`、系统安装和车端 profile 均不在本 child 修改范围。
 本次新评分补丁、两个评分对照和追加断言的 ROS 编译/加载/RED/GREEN/S13 结果仍未取得，
 也不构成车辆安装、ABI 或 VM 模拟树莓派性能验收。
+
+### Task7 生产链验证入口（2026-11-26，尚待 VM 执行）
+
+`ros2/tests/shared_layers_native_fixture.py` 复用 simulation_motion 的原 action factory，
+以真实 LaunchService/Event、原 planner/localization ExecuteProcess、agent_adapter /
+DedicatedController 和真实 RSP 组合。`test_shared_layers_process.py` 用普通 raw/odom/IMU
+经原资格与共用运动链，覆盖 static→live、双 coverage/state.get ready、S05/S07/S09 和活动
+route 正常退出的 R4 PID 结算断言；无 AST 抽类/fake event/Process/killpg 或自签许可。
+`motion_stack_actions` 仅拆原 actions 供复用，原 `_simulation_nodes` 默认动作执行顺序、
+MPPI overlay（400、.22/-.15/.4）及状态机保留；实际参数由真实 consumer 服务与 argv 记录。
+
+完整命令、十包构建/依赖顺序、冻结输入与 schema 见
+[SLAM 操作文档](../../../docs/operations/slam-backend.md)。
+`tools/occupancy_replay_benchmark.py --system-trace PATH --output PATH` 是新增实际解析入口；
+原 `--baseline` 纯算法模式仍保留。完整 capture key 配对修复了原 current[-1] 对另一帧 slot
+的 deadline 比较，global/local 可各用同源的不同仍有效 sequence，不会续原500ms截止。
+
+Bot1 只有 portable/helper/语法检查，不能据此声称真实 Launch/Nav2/整链/性能已通过。
+PublishFiles 与 capture RPC 日志不能证明 native 慢 SaveToFile 已重叠；global 插件内部重建
+仍需 new startup run，harness 不代发 permit。冻结零 odom 对照保留原 route 的失败，不调
+progress checker 求通过；UI、物理几何、实车、原始历史对定位/loop影响及完整 S16 待后续
+准确集成版本验证。异常/未知结算保留 run 证据，不能当垃圾清除。
+
+
+Task7八项审核返修后，`test_frozen_stationary_system_reference`明确只作stationary
+sensor/SLAM参考，零odom不满足原progress .2m/10s，终态后的MPPI指标N/A，不能签持续
+60s控制或完整S16。单execution由原task_status按原epoch观察，accepted不作active；
+私有controller输出和最终cmd_vel只作新鲜running/ready窗口关联。取消须原effect查询、
+输出退出与fenced-through确认，未确认留trace。pump持续只读slot/双coverage，完整key
+各回原Q/TF/slot；trace envelope/contract schema独立且payload完整保留。summary分开
+bootstrap/主stationary窗/save/restore，缺角色/配对明确N/A；资源阶段跨界CPU不误归属，
+cgroup逐字段保留最近值/时刻。实际Humble/Launch、PID现场和T6 UI仍未验。

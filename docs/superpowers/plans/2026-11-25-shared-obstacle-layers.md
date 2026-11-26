@@ -423,3 +423,40 @@ A=新增，M=修改，D=删除；每行一个去重路径，任务列即逐任�
 - **独立运动工作：** 统一速度alpha/k与来源无关反向ramp由原共同运动owner另行实施/审核；本计划不增加来源分支、不顺手修、不作为共享层必需条件。只有其既有失格/安全输出已影响S16实验可执行性时记录该真实依赖，仍不把整项运动需求并入共享层。
 
 交接执行方式已经确定为Orca分阶段开发/审核。本次worker到精确两文档本地commit及交付为止，不操作T1并发产品成果、不推送/PR、不派helper；产品实施已获批准并由负责人分阶段派发。
+
+## Task7 实际实施分解（2026-11-26，1775119 child）
+
+本次仅实施已选 static→live/R4、S05、S07、S09 和 S16 记录入口，执行者自己顺序实施，不派 helper。需求/执行方式已由负责人批准，不重新开启需求或计划审批。基点 commit `17751193545fe2c681e3444d4da08d561ac9a96c` / tree `f02a46a4576b88d5467dc2ac69c85334b3659f18`；child `feat/frontier-navigation-validation`。Bot1 无 ROS/colcon，以下 native/Launch 检查留 VM，skip 不能签通过。
+
+**文件依赖：** 产品只改 `ros2/src/senior_sim/launch/simulation_motion.launch.py` 抽取原动作工厂；A `ros2/tests/shared_layers_sensor_source.py` 负责普通 scan/wheel/IMU/exact TF 与原 SE2；A `ros2/tests/shared_layers_native_fixture.py` 负责真实 LaunchService/原 startup、RSP/私有资产、观察和结算；M `ros2/tests/test_shared_layers_process.py` 消费以上工厂与完整 capture 索引；A `tools/shared_layers_system_trace.py` 只做有界异步 JSONL、task-owned proc/cgroup/file 观测；M 原 benchmark 增 system-trace decode/summary，保留纯算法；M 本计划、操作文档、navigation README 记实际结果与未验边界。合计最多 A3/M6/D0，不改配置/build/lock，不写 bridge/reference/adapter 或 Nav2/运动算法。
+
+**冻结接口：** `motion_stack_actions(context, *, before_navigation, after_navigation)` 返回原 startup/actions，两个必需输入工厂在原列表位置调用，原 `_simulation_nodes` 固定传原环境/camera 工厂；fixture 导入完整模块，不抽 AST、不替换事件/Process。`SensorSource` 只发布普通消息，功能模式最终 `/cmd_vel` 驱动 `compose/exponential`；性能输入生成 300×2048、200ms 间隔的冻结描述，重放不受控制输出影响。`CaptureIndex` 有界保存 host/backend/bridge/source/capture/clock/raw GID/bridge GID/sequence，Q/slot/qualified/TF 与 coverage 各按自己的完整 key 回找，绝不以接收时间更新期限。`TraceWriter.emit(stage, **fields)` 只入有界队列，磁盘写入由独立 writer 进行；资源采样 CPU 200ms、PSS/RSS/IO 1s，未导出 queue/lockwait=N/A，drop 单列。
+
+- [x] 1. 保留原 process 异步触发证据，先用纯 helper 检查乱序/不同 sequence 不可混配，再实现完整 key 配对和原 stamp/绝对500ms校验。
+- [x] 2. 抽取原 factory，原 simulation 行为/顺序不变；fixture 用真实 LaunchService、原 planner/localization ExecuteProcess、adapter/DedicatedController 和真实 RSP/原 URDF，场景资产来自原 world/reference owner。记录实际 overlay batch400、vx .22/-.15、wz .4 及 consumer argv。
+- [x] 3. 实现普通输入 A→B→invalid 及 stable→motion→restable；原 raw receipt/safety/scan_motion/common motion owner 保留。只在隔离 manager 将原 synthetic_profile 的 profile_id 换 synthetic-admitted，其余值原样。
+- [x] 4. process 沿真实 catalog create/activate/install/双 coverage/state.get ready；一次原 save+PublishFiles 屏障，记录真实 capture RPC 时段；若无 native SaveToFile 重叠明确缺观测。S07 逐格与 supports/removals、hash、真实 map.export/map-transfer、重grid/重新选图；S09 stop/newbackend/newraw、原 floors、旧 Q/slot/late fixed 不恢复授权。R4 活动 route 正常取消/退出，实际 PID/starttime 未退出前不回收 run。
+- [x] 5. trace recorder/summary 定向检查 malformed/drop/身份复用/缺字段；冻结同输入重放，S16 性能不在 Bot1 执行，无新成功阈值，无 UI 完整验收承诺。
+- [x] 6. 语法/纯 helper/现有 portable 定向回归；交付精确 diff、行数/输入对应、VM 10包命令、所有未验边界；普通本地提交，核前后 index/tree clean，不 push/merge/清 child。
+
+复核重点均来自上述原输入：Q/slot 异步错帧、同源两 coverage 可不同 sequence、raw 旧 A 不复活、无 scan 的退休、R4 未确认退出必须保留证据。native global 内部重启需新 startup run 的既有边界保留，不在 harness 代签 permit。
+
+实际本机记录：原始异步触发（Q1/slot2 截止不同）在 portable helper 固定，按完整 key 配对后通过；相关 portable 191 passed/4 skipped，最终 factory 定向33 passed/2 skipped。原第一次回归的2项 perception 子进程 import 失败由 runner 未继承本 child PYTHONPATH 引起，未改产品/断言，显式同 child 路径后全组通过。factory 静态对比确认原 startup 类、参数生成与展开动作 AST 一致，不执行抽出的 AST，不当真实 Launch 证据。Bot1 无 ROS/colcon，两个新增真实入口均未执行，完整 S05/S07/S09/R4/S16/十包/物理/UI 仍待 VM；最终提交/精确 diff/行数与命令证据放指定仓库外交付报告。
+
+
+### Task7 八项独立审核定向返修（2026-11-26，a612588 child）
+
+本轮严格A0/M6/D0：仅原fixture、process test、system trace及本计划/operations/navigation
+README，不改factory默认、producer、原生产owner/T6三接点、wire/config/build/lock/依赖。
+R1完整coverage payload与envelope schema分界；R2把bounded只读观察从ready拆到原pump，
+IO worker不碰索引，主窗口/save/restore持续配完整key，file.record正确解码且分phase缺数可见；
+R3按原task_status/epoch核同一执行，私有/最终Twist窗口与终态/失格观察分开；R5同一
+cancel effect/sequence查询原accepted/输出退出/fence与progress，不把ok当退休；R6跨阶段
+CPU差分straddling且保留整次区间；R7逐字段cgroup最近值/时刻与各内存口径；R8发现时
+绑定原starttime/父身份，register及full读后复核，受控读取回归不冒称现场PID复用。
+
+R4当前入口改名stationary-only sensor/SLAM：固定零odom无法满足原.2m/10s保护，300帧
+不是全负载成功，真实failed/missing保留RED，idle/终态后MPPI N/A。运动参考仅仓库外
+提案，不改安全/资格/progress、不重复发route、不实现/运行新负载；短原route的可得active
+窗口须负责人选择，不能承诺一次健康60s。以上是源码/定向helper修正，非native、整T7、
+性能或完整S16通过；Humble VM、同输入基线及T6集成仍由负责人亲阅/独立复核后另派。

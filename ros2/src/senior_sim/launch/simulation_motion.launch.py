@@ -8,11 +8,13 @@ import secrets
 import shutil
 import signal
 import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 
 from ament_index_python.packages import get_package_prefix
-from launch import LaunchDescription
+from launch import Action, LaunchContext, LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
@@ -293,7 +295,12 @@ class _NavigationStartup:
         return []
 
 
-def _simulation_nodes(context):
+def motion_stack_actions(
+    context: LaunchContext,
+    *,
+    before_navigation: Callable[[LaunchContext, dict[str, ParameterValue]], list[Action]],
+    after_navigation: Callable[[LaunchContext, dict[str, ParameterValue]], list[Action]],
+) -> "MotionStackActions":
     sim = FindPackageShare("senior_sim")
     nav = FindPackageShare("senior_navigation")
     sim_time = ParameterValue(LaunchConfiguration("use_sim_time"), value_type=bool)
@@ -323,37 +330,13 @@ def _simulation_nodes(context):
     )
     startup = _NavigationStartup(context, Path(controller_params.perform(context)))
     controller_params = str(startup.parameters)
-    return [
+    actions = [
         RegisterEventHandler(OnProcessExit(on_exit=report_ros_exit)),
         RegisterEventHandler(OnShutdown(on_shutdown=[OpaqueFunction(function=startup.cleanup)])),
         OpaqueFunction(function=startup.listen),
-        OpaqueFunction(function=environment_assets, condition=navigation),
-        IncludeLaunchDescription(
-            PythonLaunchDescriptionSource(
-                PathJoinSubstitution([sim, "launch", "simulation.launch.py"])
-            ),
-            launch_arguments={
-                "headless": LaunchConfiguration("headless"),
-                "world": LaunchConfiguration("world"),
-                "rear_attachment": "false",
-                "use_sim_time": LaunchConfiguration("use_sim_time"),
-            }.items(),
-        ),
+        *before_navigation(context, common),
         OpaqueFunction(function=startup.start_groups, condition=navigation),
-        Node(
-            package="senior_sim",
-            executable="simulation_camera",
-            prefix=restart_prefix(),
-            condition=IfCondition(LaunchConfiguration("video_enabled")),
-            parameters=[
-                common,
-                {
-                    "frame_path": ParameterValue(
-                        LaunchConfiguration("video_frame_path"), value_type=str
-                    )
-                },
-            ],
-        ),
+        *after_navigation(context, common),
         *[
             Node(
                 package=package,
@@ -411,6 +394,60 @@ def _simulation_nodes(context):
             )
         ),
     ]
+
+    return MotionStackActions(startup, actions)
+
+
+@dataclass(frozen=True)
+class MotionStackActions:
+    """Original actions grouped only to substitute ordinary environment inputs."""
+
+    startup: _NavigationStartup
+    actions: list[Action]
+
+
+def _simulation_inputs(context: LaunchContext, common: dict[str, ParameterValue]) -> list[Action]:
+    sim = FindPackageShare("senior_sim")
+    navigation = IfCondition(LaunchConfiguration("navigation_enabled"))
+    return [
+        OpaqueFunction(function=environment_assets, condition=navigation),
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(
+                PathJoinSubstitution([sim, "launch", "simulation.launch.py"])
+            ),
+            launch_arguments={
+                "headless": LaunchConfiguration("headless"),
+                "world": LaunchConfiguration("world"),
+                "rear_attachment": "false",
+                "use_sim_time": LaunchConfiguration("use_sim_time"),
+            }.items(),
+        ),
+    ]
+
+
+def _simulation_camera(context: LaunchContext, common: dict[str, ParameterValue]) -> list[Action]:
+    return [
+        Node(
+            package="senior_sim",
+            executable="simulation_camera",
+            prefix=restart_prefix(),
+            condition=IfCondition(LaunchConfiguration("video_enabled")),
+            parameters=[
+                common,
+                {
+                    "frame_path": ParameterValue(
+                        LaunchConfiguration("video_frame_path"), value_type=str
+                    )
+                },
+            ],
+        ),
+    ]
+
+
+def _simulation_nodes(context):
+    return motion_stack_actions(
+        context, before_navigation=_simulation_inputs, after_navigation=_simulation_camera
+    ).actions
 
 
 def _localization_members(context):
