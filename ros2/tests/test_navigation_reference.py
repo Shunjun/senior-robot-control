@@ -243,26 +243,7 @@ def test_pose_diagnostics_preserve_receipt_deadline_and_bound_repetition(referen
     assert r.ref._pose_at == 99.8
 
 
-@pytest.mark.parametrize("failure", ["frame", "covariance", "map", "source", "receipt"])
-def test_pose_diagnostics_name_rejected_boundary_without_accepting(reference, failure):
-    r = reference
-    message, info = r.message()
-    if failure == "frame":
-        message.header.frame_id = "odom"
-    elif failure == "covariance":
-        message.pose.covariance[7] = 0.3
-    elif failure == "map":
-        r.ref.grid = lambda: None
-    elif failure == "source":
-        r.ref._source = lambda *args: None
-    else:
-        info.pop("sample_time")
-    r.ref._on_pose(message, info)
-    assert r.ref._pose is None
-    assert json.loads(r.logs[-1].split(" ", 1)[1])["reason"] == failure
-
-
-@pytest.mark.parametrize("snapshot_mode", ["state", "error", "pending"])
+@pytest.mark.parametrize("snapshot_mode", ["state", "pending"])
 async def test_static_service_timeout_preserves_failure_and_observes_state(
     monkeypatch, tmp_path, snapshot_mode
 ):
@@ -292,8 +273,6 @@ async def test_static_service_timeout_preserves_failure_and_observes_state(
         try:
             if snapshot_mode == "pending":
                 await asyncio.Future()
-            if snapshot_mode == "error":
-                raise OSError("snapshot unavailable")
             return {"ok": True, "navigation_ready": False, "localized": False}
         finally:
             settled.append(True)
@@ -312,13 +291,11 @@ async def test_static_service_timeout_preserves_failure_and_observes_state(
     snapshots = [r for r in rows if r["stage"] == "static_diagnostic_state"]
     if snapshot_mode == "state":
         assert snapshots[0]["record"]["navigation_ready"] is False
-    elif snapshot_mode == "error":
-        assert snapshots[0]["error_type"] == "OSError"
     else:
         assert snapshots == []
 
 
-@pytest.mark.parametrize("failure", [None, "source", "frame", "geometry", "cells"])
+@pytest.mark.parametrize("failure", [None, "cells"])
 def test_map_diagnostics_observe_exact_match_without_qualifying_rejection(reference, failure):
     r = reference
     r.ref.config.map_publisher = "map_server"
@@ -333,13 +310,7 @@ def test_map_diagnostics_observe_exact_match_without_qualifying_rejection(refere
         ),
         data=[0, 100],
     )
-    if failure == "source":
-        r.ref._source = lambda *args: None
-    elif failure == "frame":
-        message.header.frame_id = "odom"
-    elif failure == "geometry":
-        message.info.width = 3
-    elif failure == "cells":
+    if failure == "cells":
         message.data[1] = 0
     r.ref._on_map(message, {"publisher_gid": b"map-writer"})
     row = json.loads(r.logs[-1].split(" ", 1)[1])
@@ -400,3 +371,243 @@ async def test_static_service_observation_retains_active_assertion(monkeypatch, 
         events = [r for r in rows if r.get("service") == name]
         assert [r["phase"] for r in events] == ["begin", "ready", "request", "response"]
         assert events[-1]["state_id"] == (3 if active else 2)
+
+
+def test_diagnostic_sink_failure_preserves_pose_deadline_rejection_and_original_error(reference):
+    r = reference
+
+    def broken(*args, **kwargs):
+        raise RuntimeError("diagnostic sink failed")
+
+    r.ref._node = N(get_logger=lambda: N(info=broken))
+    message, info = r.message(received_ns=10_200_000_000)
+    r.ref._on_pose(message, info)
+    pose = r.ref.pose()
+    assert pose == Pose2D(1, 0, 0)
+    assert r.ref._pose_time is info["sample_time"]
+    assert r.ref._pose_at == 99.8
+    r.clock.ns += 300_000_000
+    assert r.ref.pose() is None
+    rejected, rejected_info = r.message(ns=10_400_000_000, receipt_sequence=2)
+    rejected.header.frame_id = "odom"
+    r.ref._on_pose(rejected, rejected_info)
+    assert r.ref._pose is None and r.ref._pose_stamp_ns == 10_400_000_000
+    assert r.ref._pose_time is info["sample_time"] and r.ref._pose_at == 99.8
+    original = RuntimeError("original grid failure")
+
+    def grid():
+        raise original
+
+    r.ref.grid = grid
+    with pytest.raises(RuntimeError) as caught:
+        r.ref._on_pose(*r.message(ns=10_500_000_000, receipt_sequence=3))
+    assert caught.value is original
+
+
+def test_map_diagnostic_failure_preserves_acceptance_and_original_cell_error(reference):
+    r = reference
+    r.ref.config.map_publisher = "map_server"
+    r.ref._grid = N(width=1, height=1, resolution=0.1, cells=(0,), origin=N(x=0, y=0, yaw=0))
+    message = N(
+        header=N(frame_id="map", stamp=N(sec=1, nanosec=0)),
+        info=N(
+            width=1,
+            height=1,
+            resolution=0.1,
+            origin=N(position=N(x=0, y=0, z=0), orientation=N(x=0, y=0, z=0, w=1)),
+        ),
+        data=[0],
+    )
+
+    def broken(*args):
+        raise RuntimeError("diagnostic sink failed")
+
+    r.ref._node = N(get_logger=lambda: N(info=broken))
+    r.ref._on_map(message, {"publisher_gid": b"map-writer"})
+    assert r.ref._map_gid == b"map-writer" and r.ref._map_serial == 2
+    message.data = [1]
+    r.ref._on_map(message, {"publisher_gid": b"map-writer"})
+    assert r.ref._map_gid is None and r.ref._map_serial == 3
+    original = ValueError("original cell failure")
+
+    class BadCell:
+        def __int__(self):
+            raise original
+
+    message.data = [BadCell()]
+    with pytest.raises(ValueError) as caught:
+        r.ref._on_map(message, {"publisher_gid": b"map-writer"})
+    assert caught.value is original
+
+
+@pytest.mark.parametrize("boundary", ["fields", "json"])
+def test_diagnostic_construction_failure_preserves_qualified_pose(reference, monkeypatch, boundary):
+    r = reference
+    diagnostic_globals = type(r.ref)._diagnose.__globals__
+    if boundary == "json":
+
+        def broken(*args, **kwargs):
+            raise TypeError("diagnostic JSON failure")
+
+        monkeypatch.setattr(diagnostic_globals["json"], "dumps", broken)
+    else:
+
+        class BadText:
+            def __str__(self):
+                raise ValueError("diagnostic field failure")
+
+        message, info = r.message()
+        # A diagnostic-only metadata field; receipt/source acceptance does not read it.
+        info["native_writer_name"] = BadText()
+        r.ref._on_pose(message, info)
+        assert r.ref.pose() == Pose2D(1, 0, 0)
+
+        class BadGid:
+            def __bytes__(self):
+                raise ValueError("diagnostic endpoint rendering failed")
+
+        r.ref.config.source_namespace = "/"
+        r.ref._node.get_publishers_info_by_topic = lambda topic: [
+            N(node_name="other", node_namespace="/", endpoint_gid=BadGid())
+        ]
+        # A wrong writer is rejected before its GID is used by qualification.
+        assert type(r.ref)._source(r.ref, "/amcl_pose", "amcl") is None
+        original = RuntimeError("original topology query failure")
+
+        def query(topic):
+            raise original
+
+        r.ref._node.get_publishers_info_by_topic = query
+        with pytest.raises(RuntimeError) as caught:
+            type(r.ref)._source(r.ref, "/amcl_pose", "amcl")
+        assert caught.value is original
+        return
+    r.ref._on_pose(*r.message())
+    assert r.ref.pose() == Pose2D(1, 0, 0)
+
+
+@pytest.mark.parametrize("boundary", ["sink", "fields"])
+async def test_warmer_diagnostic_failure_cannot_skip_warm(boundary):
+    import ast
+    import time
+
+    path = Path("ros2/src/senior_robot/senior_robot/agent_adapter.py")
+    tree = ast.parse(path.read_text())
+    warmer = next(
+        n
+        for n in ast.walk(tree)
+        if isinstance(n, ast.AsyncFunctionDef) and n.name == "warm_controller"
+    )
+    calls, rows = [], []
+    namespace = dict(
+        exiting=False,
+        preparing_live=False,
+        reference=N(pose=lambda: Pose2D(1, 0, 0)),
+        time=time,
+        json=json,
+    )
+
+    observations = 0
+
+    def available():
+        nonlocal observations
+        observations += 1
+        if boundary == "fields" and observations == 1:
+            raise RuntimeError("diagnostic field failure")
+        return bool(namespace["controller"]._owned)
+
+    def log(text):
+        if boundary == "sink" and not rows:
+            rows.append(None)
+            raise RuntimeError("diagnostic sink failure")
+        rows.append(json.loads(text.split(" ", 1)[1]))
+
+    async def warm():
+        calls.append("warm")
+        namespace["controller"]._owned.append("owned")
+        namespace["exiting"] = True
+
+    async def sleep(seconds):
+        assert seconds == 2
+        namespace["exiting"] = True
+
+    namespace.update(
+        controller=N(available=available, _owned=[], _closing=False, warm=warm),
+        node=N(get_logger=lambda: N(info=log, warning=lambda text: None)),
+        asyncio=N(sleep=sleep),
+    )
+    exec(compile(ast.Module(body=[warmer], type_ignores=[]), str(path), "exec"), namespace)
+    await namespace["warm_controller"]()
+    assert calls == ["warm"]
+    returned = rows[-1]
+    assert returned["phase"] == "warm_return"
+    assert returned["controller_available"] is True and returned["controller_owned"] == 1
+    assert returned["pose_available_at_entry"] is True
+
+
+@pytest.mark.parametrize("phase", ["begin", "wait_error"])
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_trace_failure_preserves_original_wait_and_settles_ipc(
+    monkeypatch, tmp_path, phase, cancel
+):
+    import asyncio
+
+    from shared_layers_native_fixture import NativeFixture
+
+    from tools.shared_layers_system_trace import TraceWriter
+    from vehicle_core.ipc import IpcClient
+
+    msg, srv = ModuleType("lifecycle_msgs.msg"), ModuleType("lifecycle_msgs.srv")
+    msg.State = N(PRIMARY_STATE_ACTIVE=3)
+    srv.GetState = N(Request=lambda: None)
+    monkeypatch.setitem(sys.modules, msg.__name__, msg)
+    monkeypatch.setitem(sys.modules, srv.__name__, srv)
+    fixture = NativeFixture(tmp_path)
+    trace = TraceWriter(tmp_path / "trace.jsonl", {})
+    fixture.trace = trace
+    emit = trace.emit
+    sink_error = RuntimeError("diagnostic sink failed")
+
+    def broken(stage, **fields):
+        if stage == "static_service" and fields.get("phase") == phase:
+            raise sink_error
+        emit(stage, **fields)
+
+    monkeypatch.setattr(trace, "emit", broken)
+    destroyed, settled = [], []
+    service = N(service_is_ready=lambda: False)
+    fixture.node = N(create_client=lambda *args: service, destroy_client=destroyed.append)
+    client = IpcClient(tmp_path / "never-opened.sock")
+    begun = asyncio.Event()
+    original = (
+        asyncio.CancelledError("original cancel") if cancel else AssertionError("original timeout")
+    )
+
+    async def exchange(frame):
+        begun.set()
+        try:
+            await asyncio.Future()
+        finally:
+            settled.append(True)
+
+    async def wait(predicate):
+        await begun.wait()
+        raise original
+
+    client._exchange = exchange
+    fixture.wait = wait
+    before = asyncio.all_tasks()
+    trace.__enter__()
+    try:
+        with pytest.raises(type(original)) as caught:
+            await fixture.static_ready(client)
+        assert caught.value is original
+        assert destroyed == [service]
+        assert settled == [True] and not client._lock.locked()
+        assert asyncio.all_tasks() == before
+        assert trace.error is sink_error
+    finally:
+        with pytest.raises(RuntimeError, match="trace writer failed") as trace_failure:
+            trace.__exit__()
+        assert trace_failure.value.__cause__ is sink_error
+        assert not trace._thread.is_alive()

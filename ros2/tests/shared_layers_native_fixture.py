@@ -604,6 +604,17 @@ class NativeFixture:
 
         from vehicle_core.ipc import IpcError
 
+        def observe(stage, *, exception=None, **fields):
+            try:
+                if exception is not None:
+                    fields.update(error_type=type(exception).__name__, error=str(exception)[:256])
+                self.trace.emit(stage, **fields)
+            except Exception as exc:
+                # Preserve the service result/exception, but keep trace settlement
+                # failed. Never recursively emit an error through a broken sink.
+                if getattr(self.trace, "error", None) is None:
+                    self.trace.error = exc
+
         observing = True
 
         async def snapshot():
@@ -611,12 +622,11 @@ class NativeFixture:
             while observing:
                 try:
                     state = await asyncio.wait_for(client.request("state.get"), timeout=1)
-                    self.trace.emit("static_diagnostic_state", record=state)
+                    observe("static_diagnostic_state", record=state)
                 except (asyncio.TimeoutError, OSError, IpcError) as exc:
-                    self.trace.emit(
+                    observe(
                         "static_diagnostic_state",
-                        error_type=type(exc).__name__,
-                        error=str(exc)[:256],
+                        exception=exc,
                     )
                 # wait_for may return a just-completed result during cancellation.
                 if observing:
@@ -627,31 +637,30 @@ class NativeFixture:
             names = ("map_server", "amcl", "planner_server", "controller_server", "bt_navigator")
             for name in names:
                 service_name = f"/{name}/get_state"
-                service = self.node.create_client(GetState, service_name)
                 phase = "begin"
-                self.trace.emit("static_service", service=service_name, phase=phase)
+                service = self.node.create_client(GetState, service_name)
                 try:
+                    observe("static_service", service=service_name, phase=phase)
                     await self.wait(service.service_is_ready)
                     phase = "ready"
-                    self.trace.emit("static_service", service=service_name, phase=phase)
+                    observe("static_service", service=service_name, phase=phase)
                     future = service.call_async(GetState.Request())
                     phase = "request"
-                    self.trace.emit("static_service", service=service_name, phase=phase)
+                    observe("static_service", service=service_name, phase=phase)
                     await self.wait(future.done)
                     state_id = future.result().current_state.id
-                    self.trace.emit(
+                    observe(
                         "static_service", service=service_name, phase="response", state_id=state_id
                     )
                     if state_id != State.PRIMARY_STATE_ACTIVE:
                         return None
                 except BaseException as exc:
-                    self.trace.emit(
+                    observe(
                         "static_service",
                         service=service_name,
                         phase="wait_error",
                         waiting_phase=phase,
-                        error_type=type(exc).__name__,
-                        error=str(exc)[:256],
+                        exception=exc,
                     )
                     raise
                 finally:

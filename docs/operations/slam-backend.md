@@ -235,16 +235,27 @@ episode 及四核性能均未验。磁盘屏障只证明 Python checkpoint 段�
 receipt/sample steady 时刻、年龄、frame、三个协方差值和 map_serial；map `cells_match`
 仅在实际逐格检查后给 true/false，提前拒绝为 null。每个固定事件/原因最多每秒一条，
 下一条附 suppressed 数；pose stamp_interval_ns 是相邻回调的原 stamp 差，限流日志
-不能当完整发布序列或用来证明未发布。`pose_query` 记录 warmer 实际查询时的门槛结果，
-`warmer_diagnostic` 每轮记录模式、preparing_live、pose 有无、controller available/owned/
-closing，以及 warm_begin/warm_return，原 warning 保留异常；begin 无 return 只能定位
-到原 warm 调用内部，不能据此认定具体 lifecycle 阶段。
+不能当完整发布序列或用来证明未发布。`pose_query` 可来自 state/qualification/warmer，
+同原因共享限流，不能将单条日志唯一绑定某轮 warmer。`warmer_diagnostic` 每轮记录模式、
+preparing_live、`pose_available_at_entry`（本轮原查询结果），以及 controller available/owned/
+closing；pose_check/warm_begin/warm_return 各自重新读取无副作用的 controller 字段，
+warm_return 的 controller 字段是返回后的快照，pose 字段仍仅为进入时的查询结果。
+原 warning 保留 warm 异常；begin 无 return 不能认定具体 lifecycle 阶段，日志也可能丢失。
+新增诊断的字段构造/JSON/ROS sink 异常被局部隔离，不改变原接收、资格或 warm 调用；
+原拓扑/receipt/接收异常仍按原路径处理，不以诊断失败重入日志。
+
+这些产品日志默认 always-on，无新增开关；INFO 被过滤也仍有字段构造和 JSON 成本。
+reference 仅限制输出频率，warmer 原2秒 sleep 每轮最多3条；同步输出耗时可能影响墙钟节奏。
+没有测量 CPU、延迟或调度开销，不能将本地回归签作性能通过。
 
 夹具 `static_service` 对完整 `/NAME/get_state` 记录 begin/ready/request/response（原
 state_id）和 wait_error（原等待阶段、异常类型），trace 自带 steady_ns；原30秒服务等待、
 外层60秒和退出45秒均不变。同时并行轮询只读 `state.get`，每次最多1秒、间隔2秒，记录为
 `static_diagnostic_state` 或读取错误；不会用快照替代原服务 active/ready 断言，离开
-static_ready 时取消并结算该诊断任务。未出现合格 pose、快照失败及服务超时都保持 RED，
+static_ready 时取消并结算该诊断任务。快照与末尾 state.get 共用原 IPC 锁，取消仍走原锁结算。
+新增 trace emit 失败保留首个 trace.error，使原 TraceWriter 退出检查仍失败；不替换原
+GetState 超时/取消对象，所有已建立的 service client 仍走原 destroy finally。
+trace 错误不能签为观测完整或运行成功。未出现合格 pose、快照失败及服务超时都保持 RED，
 不得更改0.5秒年龄/协方差门槛、自签 ready/stopped/permit 或注入假定位来通过验证。
 
 运行真实验证的外部 subreaper 必须在 pytest 存活期间持续收割已收养子孙，并保留

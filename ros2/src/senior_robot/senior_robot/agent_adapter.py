@@ -813,6 +813,27 @@ def main() -> None:
 
             async def warm_controller() -> None:
                 assert controller is not None
+
+                def diagnose(phase, pose_available):
+                    try:
+                        diagnostic = dict(
+                            phase=phase,
+                            steady_ns=time.monotonic_ns(),
+                            reference_mode=(
+                                "live" if getattr(reference, "enabled", False) else "static"
+                            ),
+                            preparing_live=preparing_live,
+                            pose_available_at_entry=pose_available,
+                            controller_available=controller.available(),
+                            controller_owned=len(controller._owned),
+                            controller_closing=controller._closing,
+                        )
+                        node.get_logger().info("warmer_diagnostic " + json.dumps(diagnostic))
+                    except Exception:
+                        # Only new observations are optional; never skip warm or
+                        # retry a failing diagnostic through the same logger.
+                        pass
+
                 while not exiting:
                     try:
                         pose_available = (
@@ -820,34 +841,11 @@ def main() -> None:
                             if not preparing_live and reference is not None
                             else None
                         )
-                        diagnostic = dict(
-                            steady_ns=time.monotonic_ns(),
-                            reference_mode=(
-                                "live" if getattr(reference, "enabled", False) else "static"
-                            ),
-                            preparing_live=preparing_live,
-                            pose_available=pose_available,
-                            controller_available=controller.available(),
-                            controller_owned=len(controller._owned),
-                            controller_closing=controller._closing,
-                        )
-                        node.get_logger().info("warmer_diagnostic " + json.dumps(diagnostic))
+                        diagnose("pose_check", pose_available)
                         if pose_available:
-                            node.get_logger().info(
-                                "warmer_diagnostic "
-                                + json.dumps(dict(diagnostic, phase="warm_begin"))
-                            )
+                            diagnose("warm_begin", pose_available)
                             await controller.warm()
-                            node.get_logger().info(
-                                "warmer_diagnostic "
-                                + json.dumps(
-                                    dict(
-                                        diagnostic,
-                                        phase="warm_return",
-                                        steady_ns=time.monotonic_ns(),
-                                    )
-                                )
-                            )
+                            diagnose("warm_return", pose_available)
                     except (RuntimeError, OSError) as exc:
                         node.get_logger().warning(f"Scoped Nav2 warm-up failed: {exc}")
                     await asyncio.sleep(2)
