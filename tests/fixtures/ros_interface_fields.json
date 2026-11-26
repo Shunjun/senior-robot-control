@@ -32,5 +32,7 @@
   "srv/ReadLoadedGraph.srv": "635967bb93097d2faf01517f16ccddd1c326ee5c3d1c78988fbc4a6098114a57",
   "srv/MappingGate.srv": "22644fe599ab18187abfe9fa5e34aa8cbe2069ba526b47731a7dc2e681295758",
   "srv/ReadMappingGrid.srv": "c1a11b080257527f22b919cba08f89c306fd0b518e487012a0708906d474b785",
-  "srv/ReadMappingPose.srv": "6c17f43a1018dd354838e8d45b0bb1550fe97c290a4b408b94bf309e96fb378c"
+  "srv/ReadMappingPose.srv": "6c17f43a1018dd354838e8d45b0bb1550fe97c290a4b408b94bf309e96fb378c",
+  "msg/CurrentObstacles.msg": "1256054cc4d84ac9332363a18d3347f38735bbe952153a85ce876a4eae8cd026",
+  "msg/QualifiedMappingScan.msg": "8ea75ae06bda7da43af4d312614b7584c25532fb90abe5fa9210198bd6828ab5"
 }
