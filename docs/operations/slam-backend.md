@@ -359,7 +359,11 @@ cmd_vel仅按窗口关联；输出只在最近200ms内确有running及ready观�
 按同effect_id/sequence/epoch查询原revoke，须accepted/output_exited/fenced-through及
 原progress退出同时确认；ok本身不够，未确认失败留trace，不造退休file。
 
-跨phase的CPU差分标straddling，不算后阶段峰值；整次CPU区间仍保留。IO/上下文切换为
+CPU ticks另带实际identity读取前后的monotonic区间，完成时刻作为统一的采样端点上界，
+不采用full字段读完后的入队时间。两次CPU读区间之间或区间内触及phase边界的差分标
+straddling，不分配阶段CPU；同名phase往返也不合并。阶段按CPU读区间归属，整次平均
+同样用CPU读完成端点；这是有界分次观察，非原子快照。旧trace缺CPU读取区间则CPU
+指标缺项（N/A），不从入队时间猜端点；非CPU字段仍为原入队观察口径。IO/上下文切换为
 同PID:starttime整次first-last差分，不称阶段计数。cgroup按字段保留最近实际值及时间，
 轻量cpu行不抹内存/events/peak/max；kernel memory.peak与sampled current max口径不同。
 RSS不相加异时峰值，PSS没有异时求和；task cgroup含producer/recorder，不称产品独占。

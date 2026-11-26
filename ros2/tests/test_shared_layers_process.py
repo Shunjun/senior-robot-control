@@ -1071,6 +1071,10 @@ def test_resource_phase_cpu_and_cgroup_keep_original_observations(tmp_path):
     )
 
     def row(stage, t, **fields):
+        if stage == "resource":
+            fields["process"] = dict(
+                fields["process"], cpu_read_started_steady_ns=t, cpu_read_completed_steady_ns=t
+            )
         return dict(schema=1, stage=stage, steady_ns=t, **fields)
 
     rows = [
@@ -1096,6 +1100,68 @@ def test_resource_phase_cpu_and_cgroup_keep_original_observations(tmp_path):
     assert result["cgroup_last"]["task"]["memory.peak"] == "8192"
     assert result["cgroup_last_observed_ns"]["task"]["memory.peak"] == 3_010_000_000
     assert result["cgroup_last_observed_ns"]["task"]["cpu.stat"] == 3_210_000_000
+
+
+@pytest.mark.parametrize("phase_in_cpu_read", [False, True])
+def test_resource_cpu_read_crossing_phase_is_not_charged_to_save(
+    tmp_path, monkeypatch, phase_in_cpu_read
+):
+    import tools.shared_layers_system_trace as module
+
+    # The counter is read at 2s; all CPU growth occurs before save at 2.9s.
+    # Delay either that read's return or the subsequent full fields until 3s.
+    clock = 2_000_000_000
+    cpu = 0
+    crossed = False
+    root = dict(pid=123, starttime=5, ppid=1, cgroup="", cpu_ticks=0)
+    writer = module.TraceWriter(tmp_path / "unused", {})
+    sampler = module.ResourceSampler(writer)
+    sampler.owned[(123, 5)] = root
+
+    def cross_phase():
+        nonlocal clock, cpu, crossed
+        # A phase callback must remain possible throughout /proc IO.
+        assert writer._lock.acquire(blocking=False)
+        writer._lock.release()
+        crossed = True
+        clock = 2_800_000_000
+        cpu = os.sysconf("SC_CLK_TCK")
+        clock = 2_900_000_000
+        writer.emit("phase", name="save")
+        clock = 3_000_000_000
+
+    def identity(pid):
+        result = dict(root, cpu_ticks=cpu)
+        if phase_in_cpu_read and not crossed:
+            cross_phase()
+        return result
+
+    def read_text(path):
+        if path.name == "status" and not crossed:
+            cross_phase()
+        return "VmRSS: 4 kB\n" if path.name == "status" else ""
+
+    with monkeypatch.context() as patch:
+        patch.setattr(module.time, "monotonic_ns", lambda: clock)
+        patch.setattr(module, "process_identity", identity)
+        patch.setattr(Path, "read_text", read_text)
+        patch.setattr(Path, "read_bytes", lambda path: b"probe")
+        sampler._resources(True)
+        clock = 4_000_000_000
+        sampler._resources(False)
+    rows = [dict(schema=1, stage="metadata", steady_ns=0), *writer.queue.queue]
+    rows.append(dict(schema=1, stage="trace_end", steady_ns=5_000_000_000, dropped=0))
+    path = tmp_path / "cpu-read.jsonl"
+    path.write_text("".join(json.dumps(row) + "\n" for row in rows))
+    result = module.summarize_system_trace(path)
+    assert "cpu_percent_one_core" not in result["phase_process_peaks"]["save"]["123:5"]
+    assert result["straddling_cpu_intervals"]["save"]["123:5"] == 1
+    # Whole-run CPU uses the declared read-completion endpoints, never emit times.
+    assert result["process_cpu_total_interval"]["123:5"] == dict(
+        start_steady_ns=3_000_000_000 if phase_in_cpu_read else 2_000_000_000,
+        end_steady_ns=4_000_000_000,
+        cpu_percent_one_core=100.0 if phase_in_cpu_read else 50.0,
+    )
 
 
 def test_control_window_requires_running_and_excludes_terminal_or_stale_status(tmp_path):

@@ -68,7 +68,7 @@ class TraceWriter:
                 raise RuntimeError("trace already closed")
             if self.error is not None:
                 raise RuntimeError("trace writer failed") from self.error
-            # Phase/resource order follows the same monotonic queue-commit order.
+            # This is queue-commit order; CPU reads carry their own time bounds.
             row = dict(schema=SCHEMA, stage=stage, steady_ns=time.monotonic_ns(), **fields)
             try:
                 self.queue.put_nowait(row)
@@ -254,9 +254,18 @@ class ResourceSampler:
 
     def _resources(self, full):
         for expected in self.snapshot():
+            cpu_started = time.monotonic_ns()
             row = process_identity(expected["pid"])
+            cpu_completed = time.monotonic_ns()
             if row is None or row["starttime"] != expected["starttime"]:
                 continue
+            # process_identity returns ticks from its final stat read. Bracket
+            # that observation separately from the slower full fields and emit.
+            row = dict(
+                row,
+                cpu_read_started_steady_ns=cpu_started,
+                cpu_read_completed_steady_ns=cpu_completed,
+            )
             if full:
                 root = Path(f"/proc/{row['pid']}")
                 for name in ("status", "smaps_rollup", "io"):
@@ -392,7 +401,6 @@ def summarize_system_trace(path: Path) -> dict:
     counters = {}
     cgroup_latest = {}
     cgroup_times = defaultdict(dict)
-    phase_serial = 0
     phase_windows = []
     straddling = defaultdict(Counter)
     cpu_totals = {}
@@ -400,6 +408,12 @@ def summarize_system_trace(path: Path) -> dict:
     route_status = "missing"
     navigation_ready = False
     route_observed_ns = state_observed_ns = -1_000_000_000
+
+    def phase_at(stamp):
+        return next(
+            (name for start, name in reversed(phase_windows) if start <= stamp), "bootstrap"
+        )
+
     for line_number, raw in enumerate(_bounded_lines(path), 1):
         try:
             if complete:
@@ -419,7 +433,6 @@ def summarize_system_trace(path: Path) -> dict:
                 reasons[str(row["reason"])[:256]] += 1
             if stage == "phase":
                 phase = row["name"]
-                phase_serial += 1
                 phase_windows.append((row["steady_ns"], phase))
                 if len(phase_windows) > 128:
                     raise ValueError("phase observation capacity exceeded")
@@ -515,24 +528,46 @@ def summarize_system_trace(path: Path) -> dict:
                         if text.startswith(label):
                             sample_metrics[label] = int(text.split()[1]) * 1024
                             peaks[label] = max(peaks.get(label, 0), sample_metrics[label])
-                old = previous_cpu.get(key)
-                if old and row["steady_ns"] > old[0]:
-                    percent = (
-                        (proc["cpu_ticks"] - old[1])
-                        / os.sysconf("SC_CLK_TCK")
-                        / ((row["steady_ns"] - old[0]) / 1e9)
-                        * 100
+                cpu_started = proc.get("cpu_read_started_steady_ns")
+                cpu_completed = proc.get("cpu_read_completed_steady_ns")
+                if cpu_started is None or cpu_completed is None:
+                    # Legacy queue timestamps cannot recover CPU read endpoints.
+                    previous_cpu.pop(key, None)
+                else:
+                    if (
+                        type(cpu_started) is not int
+                        or type(cpu_completed) is not int
+                        or not 0 <= cpu_started <= cpu_completed <= row["steady_ns"]
+                    ):
+                        raise ValueError("invalid CPU read interval")
+                    old = previous_cpu.get(key)
+                    cpu_phase = phase_at(cpu_completed)
+                    if old and cpu_completed > old[1]:
+                        # Read completion is the declared upper-bound endpoint,
+                        # consistently used for both per-interval and total CPU.
+                        percent = (
+                            (proc["cpu_ticks"] - old[2])
+                            / os.sysconf("SC_CLK_TCK")
+                            / ((cpu_completed - old[1]) / 1e9)
+                            * 100
+                        )
+                        # Include both read brackets: even a boundary touching an
+                        # endpoint is uncertain. Same-name phase returns count too.
+                        if any(old[0] <= t <= cpu_completed for t, _ in phase_windows):
+                            straddling[cpu_phase][key] += 1
+                        else:
+                            cpu_peaks = phase_peaks[cpu_phase].setdefault(key, {})
+                            cpu_peaks["cpu_percent_one_core"] = max(
+                                cpu_peaks.get("cpu_percent_one_core", 0), percent
+                            )
+                        peaks["cpu_percent_one_core"] = max(
+                            peaks.get("cpu_percent_one_core", 0), percent
+                        )
+                    previous_cpu[key] = (cpu_started, cpu_completed, proc["cpu_ticks"])
+                    total = cpu_totals.setdefault(
+                        key, [cpu_completed, proc["cpu_ticks"], cpu_completed, proc["cpu_ticks"]]
                     )
-                    if old[2] == phase_serial:
-                        sample_metrics["cpu_percent_one_core"] = percent
-                    else:
-                        straddling[phase][key] += 1
-                    peaks["cpu_percent_one_core"] = max(
-                        peaks.get("cpu_percent_one_core", 0), percent
-                    )
-                previous_cpu[key] = (row["steady_ns"], proc["cpu_ticks"], phase_serial)
-                total = cpu_totals.setdefault(key, [row["steady_ns"], proc["cpu_ticks"], 0, 0])
-                total[2:] = [row["steady_ns"], proc["cpu_ticks"]]
+                    total[2:] = [cpu_completed, proc["cpu_ticks"]]
                 per_process = phase_peaks[phase].setdefault(key, {})
                 for label, value in sample_metrics.items():
                     per_process[label] = max(per_process.get(label, 0), value)
@@ -587,11 +622,6 @@ def summarize_system_trace(path: Path) -> dict:
     phase_latencies = defaultdict(lambda: defaultdict(list))
     phase_missing = defaultdict(Counter)
     phase_paired = defaultdict(Counter)
-
-    def phase_at(stamp):
-        return next(
-            (name for start, name in reversed(phase_windows) if start <= stamp), "bootstrap"
-        )
 
     for observations in captures.values():
         q = observations.get("q")
@@ -740,7 +770,9 @@ def summarize_system_trace(path: Path) -> dict:
         cgroup_last_observed_ns=dict(cgroup_times),
         resource_scope=(
             "IO/context deltas are whole-run first-to-last per incarnation; "
-            "phase CPU excludes straddling intervals; RSS peaks are not additive; "
+            "CPU endpoints are read-completion upper bounds, not queue times; "
+            "phase CPU excludes intervals whose read brackets touch/cross a phase; "
+            "CPU without read bounds is unavailable; RSS peaks are not additive; "
             "PSS is not summed across different observation times; sampled current "
             "max differs from kernel memory.peak; cgroup includes recorder/producer"
         ),
