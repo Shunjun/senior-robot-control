@@ -237,6 +237,8 @@ export function TaskList({
   );
 }
 
+type TaskEditorProps = TaskListProps & { currentScan: readonly MapPoint[] };
+
 function TaskEditor({
   snapshot,
   currentScan,
@@ -246,7 +248,7 @@ function TaskEditor({
   map,
   mapCanvasProps,
   renderWorkspace, onPickStart,
-}: TaskListProps & { currentScan: readonly MapPoint[] }): ReactElement {
+}: TaskEditorProps): ReactElement {
   //Compatible: standalone task editor callers retain their combined list/editor layout.
   const [stage, setStage] = useState<"list" | "editor">(
     renderWorkspace ? "list" : "editor",
