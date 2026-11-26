@@ -1861,6 +1861,12 @@ it.each([false, true])(
       map_generation: "live-grid",
       robot_pose: { x: 0.2, y: 0.4, yaw: 0 },
       scan_points: [{ x: 0.5, y: 0.5 }],
+      scan_layer: {
+        map_ref: { map_id: "map-1", reference_revision: 2 }, map_generation: "live-grid",
+        backend_boot: "boot", source_id: "a".repeat(64), sequence: 1,
+        sampled_at: 10, expires_at: 10.5, remaining_s: .5,
+        hit_count: 1, preview_count: 1, display_mode: "preview", valid: true,
+      },
     });
     const identity = {
       robot_id: current.robot_id,
@@ -1899,13 +1905,13 @@ it.each([false, true])(
     fireEvent.click(screen.getByRole("button", { name: "导航与定位" }));
     if (displayOnly) {
       await screen.findByText("地图导出副本 · 仅供查看");
-      expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+      expect(screen.queryByLabelText("当前扫描预览")).toBeNull();
       expect(container.querySelector('[data-marker="robot"]')).toBeNull();
       expect(screen.queryByText("车辆位置暂不可用")).not.toBeNull();
       return;
     }
     await waitFor(() =>
-      expect(screen.queryByLabelText("实时激光命中点")).not.toBeNull(),
+      expect(screen.queryByLabelText("当前扫描预览")).not.toBeNull(),
     );
     const first = container
       .querySelector('[data-marker="robot"]')!
@@ -1918,7 +1924,7 @@ it.each([false, true])(
     ).not.toBe(first);
     const { map_generation: _generation, ...legacy } = current;
     link.emit(legacy);
-    expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+    expect(screen.queryByLabelText("当前扫描预览")).toBeNull();
     expect(container.querySelector('[data-marker="robot"]')).toBeNull();
     for (const overrides of [
       { localized: false },
@@ -1928,7 +1934,7 @@ it.each([false, true])(
       { map_ref: { map_id: "other", reference_revision: 2 } },
     ]) {
       link.emit({ ...current, ...overrides });
-      expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+      expect(screen.queryByLabelText("当前扫描预览")).toBeNull();
       expect(container.querySelector('[data-marker="robot"]')).toBeNull();
     }
   },
@@ -2154,6 +2160,13 @@ it("refreshes grid data within one reference without losing drafts or accepting 
     map_grid_id: "grid-1",
     navigation_ready: true,
     robot_pose: { x: 0.2, y: 0.4, yaw: 0 },
+    scan_points: Array.from({ length: 96 }, () => ({ x: .2, y: .4 })),
+    scan_layer: {
+      map_ref: { map_id: "map-1", reference_revision: 2 }, map_generation: "reference-1",
+      backend_boot: "boot", source_id: "a".repeat(64), sequence: 1,
+      sampled_at: 10, expires_at: 10.5, remaining_s: .5,
+      hit_count: 2048, preview_count: 96, display_mode: "preview", valid: true,
+    },
     home: {
       waypoint_id: "home",
       status: "confirmed",
@@ -2214,6 +2227,14 @@ it("refreshes grid data within one reference without losing drafts or accepting 
   await waitFor(() =>
     expect(container.querySelector('[data-marker="robot"]')).not.toBeNull(),
   );
+  const firstTail = screen.getByLabelText("当前扫描预览").querySelectorAll("circle")[95]!.getAttribute("cx");
+  link.emit({ ...current,
+    scan_points: [...current.scan_points!.slice(0, 95), { x: .8, y: .4 }],
+    scan_layer: { ...current.scan_layer!, sequence: 2 },
+  });
+  expect(screen.getByLabelText("当前扫描预览").querySelectorAll("circle")[95]!.getAttribute("cx")).not.toBe(firstTail);
+  expect(link.requests.filter(({ type }) => type === "map.tile")).toHaveLength(1);
+  expect(link.requests.filter(({ type }) => type === "map.manifest")).toHaveLength(1);
   fireEvent.click(screen.getByRole("button", { name: "在地图上设置目标" }));
   fireEvent.change(screen.getByLabelText("X (m)"), {
     target: { value: "0.5" },

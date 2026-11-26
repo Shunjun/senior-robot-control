@@ -462,6 +462,20 @@ class NativeNavigationBridge:
             return
         self._scan = scan
         points = project_hits(scan, alignment)
+        # Preserve the already qualified full Q; display sampling never edits navigation input.
+        import math
+
+        beams = tuple(b for b in scan.beams if b.kind == "hit" and b.endpoint_odom is not None)
+        self.reference.observe_display(
+            scan.key,
+            scan.capture.time.sample_steady_ns / 1e9,
+            scan.valid_until_steady_ns / 1e9,
+            len(scan.beams),
+            tuple(
+                (b.index, math.dist(b.origin_odom, b.endpoint_odom), p)
+                for b, p in zip(beams, points, strict=True)
+            ),
+        )
         grid = self.reference.grid()
         covered = grid is not None and all(
             grid.origin.x <= x < grid.origin.x + grid.width * grid.resolution

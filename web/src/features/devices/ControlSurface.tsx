@@ -1,3 +1,4 @@
+import { useCurrentScan } from "../map/useCurrentScan";
 import { newId } from "../../ids";
 import {
   useEffect,
@@ -291,6 +292,7 @@ export function ControlSurface({
   const activeMap = occupancy !== undefined && displayOnly !== true;
   const mappingEdits = snapshot.mapping_protocol_version === 2;
   const pickMap = activeMap || mappingEdits ? map : { ...map, map_ref: null };
+  const currentScan = useCurrentScan(snapshot);
   const liveMapTelemetry =
     activeMap &&
     snapshot.connected &&
@@ -511,7 +513,7 @@ export function ControlSurface({
               mini: cameraOn && view === "video",
               map,
               robot: liveMapTelemetry ? (snapshot.robot_pose ?? null) : null,
-              scanPoints: liveMapTelemetry ? (snapshot.scan_points ?? []) : [],
+              scanPoints: liveMapTelemetry ? currentScan : [],
               pickEnabled:
                 mode === "navigation" && navPick !== null && activeMap,
               draft: mode === "navigation" ? draft : null,

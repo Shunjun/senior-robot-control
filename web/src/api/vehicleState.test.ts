@@ -1,5 +1,8 @@
+import { renderHook, act, cleanup } from "@testing-library/react";
+import { useCurrentScan } from "../features/map/useCurrentScan";
+import type { RobotSnapshot } from "./protocol";
 import { parseInbound } from "./protocol";
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { decodeVehicleFrame, isTaskName, normalizeTaskName, VehicleTransport } from './vehicleState';
 
 export const frame = {
@@ -133,4 +136,150 @@ it('uses the agreed boundary whitespace for name validation without filtering in
   expect(isTaskName('\u0085')).toBe(false);
   expect(isTaskName('\uFEFF')).toBe(false);
   expect(isTaskName(' \u0085' + '😀'.repeat(128) + '\uFEFF ')).toBe(true);
+});
+
+it('decodes the approved scan identity and rejects unsafe or inconsistent display metadata', () => {
+  const layer = {
+    map_ref: { map_id: 'map', reference_revision: 1 }, map_generation: 'R1',
+    backend_boot: 'boot', source_id: 'a'.repeat(64), sequence: 1,
+    sampled_at: 10, expires_at: 10.5, remaining_s: .2,
+    hit_count: 2048, preview_count: 1, display_mode: 'preview', valid: true,
+  };
+  const parse = (scan_layer: unknown) => parseInbound(JSON.stringify({
+    v: 1, robot_id: 'robot', session_id: 'cloud', connection_epoch: 1,
+    request_id: 'scan', seq: 0, expires_at: 2000, type: 'snapshot', payload: {
+      connected: true, localized: true, map_ref: layer.map_ref, home: null,
+      task_revision: 0, runnable_task_ids: [], execution_status: 'idle', collected_at: 10,
+      stale: false, last_synced_at: 10, scan_points: [{ x: 1, y: 2 }], scan_layer,
+    },
+  }));
+  expect(parse(layer)).toMatchObject({ payload: { scan_layer: layer } });
+  for (const patch of [
+    { sequence: 2 ** 53 }, { remaining_s: .51 }, { expires_at: 11 },
+    { source_id: 'guess' }, { preview_count: 2 }, { valid: false }, { frame: 'map' },
+  ]) expect(parse({ ...layer, ...patch })).toBeNull();
+});
+
+const scanSnapshot = () => ({
+  robot_id: 'robot', connected: true, localized: true, stale: false,
+  map_ref: { map_id: 'map', reference_revision: 1 }, map_generation: 'R1',
+  home: null, home_revision: 0, task_revision: 0, runnable_task_ids: [],
+  execution_status: 'idle', collected_at: 10, last_synced_at: 10,
+  scan_points: [{ x: 1, y: 2 }],
+  scan_layer: {
+    map_ref: { map_id: 'map', reference_revision: 1 }, map_generation: 'R1',
+    backend_boot: 'boot', source_id: 'a'.repeat(64), sequence: 1,
+    sampled_at: 10, expires_at: 10.5, remaining_s: .2,
+    hit_count: 1, preview_count: 1, display_mode: 'preview' as const, valid: true,
+  },
+});
+
+it('expires a repeated scan without renewing its local deadline', () => {
+  vi.useFakeTimers();
+  const scan = scanSnapshot();
+  try {
+    const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
+      initialProps: { value: scan },
+    });
+    expect(result.current).toEqual(scan.scan_points);
+    act(() => vi.advanceTimersByTime(100));
+    rerender({ value: { ...scan, scan_layer: { ...scan.scan_layer, remaining_s: .5 } } });
+    act(() => vi.advanceTimersByTime(101));
+    expect(result.current).toEqual([]);
+  } finally { cleanup(); vi.useRealTimers(); }
+});
+
+it('cancels an older Q timer without clearing the newer Q', () => {
+  vi.useFakeTimers();
+  const scan = scanSnapshot();
+  try {
+    const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
+      initialProps: { value: scan },
+    });
+    act(() => vi.advanceTimersByTime(100));
+    const next = { ...scan, scan_layer: { ...scan.scan_layer, sequence: 2, remaining_s: .5 } };
+    rerender({ value: next });
+    act(() => vi.advanceTimersByTime(101));
+    expect(result.current).toEqual(scan.scan_points);
+    act(() => vi.advanceTimersByTime(400));
+    expect(result.current).toEqual([]);
+  } finally { cleanup(); vi.useRealTimers(); }
+});
+
+it('keeps a known source retired', () => {
+  const scan = scanSnapshot();
+  const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
+    initialProps: { value: scan },
+  });
+  const next = { ...scan, scan_layer: { ...scan.scan_layer, source_id: 'b'.repeat(64) } };
+  rerender({ value: next });
+  expect(result.current).toEqual(scan.scan_points);
+  rerender({ value: { ...scan, scan_layer: { ...scan.scan_layer, sequence: 10 } } });
+  expect(result.current).toEqual([]);
+  cleanup();
+});
+
+it('retires an old reference before the new reference has Q', () => {
+  const scan = scanSnapshot();
+  const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
+    initialProps: { value: scan as RobotSnapshot },
+  });
+  const next = { ...scan, map_generation: 'R2', scan_layer: { ...scan.scan_layer, map_generation: 'R2' } };
+  const { scan_layer: _pendingLayer, ...pending } = next;
+  rerender({ value: pending });
+  rerender({ value: { ...scan, scan_layer: { ...scan.scan_layer, sequence: 2 } } });
+  expect(result.current).toEqual([]);
+  rerender({ value: next });
+  expect(result.current).toEqual(scan.scan_points);
+  rerender({ value: scan });
+  expect(result.current).toEqual([]);
+  rerender({ value: next });
+  expect(result.current).toEqual(scan.scan_points);
+  cleanup();
+});
+
+it('revokes a Q on invalid and never restores that same identity', () => {
+  const scan = scanSnapshot();
+  const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
+    initialProps: { value: scan },
+  });
+  rerender({ value: { ...scan, scan_points: [], scan_layer: {
+    ...scan.scan_layer, valid: false, preview_count: 0, remaining_s: 0,
+  } } });
+  expect(result.current).toEqual([]);
+  rerender({ value: scan });
+  expect(result.current).toEqual([]);
+  cleanup();
+});
+
+it('rejects a lower scan sequence without changing the newer lease', () => {
+  const scan = scanSnapshot();
+  const next = { ...scan, scan_layer: { ...scan.scan_layer, sequence: 2 } };
+  const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
+    initialProps: { value: next },
+  });
+  rerender({ value: scan });
+  expect(result.current).toEqual([]);
+  rerender({ value: next });
+  expect(result.current).toEqual(scan.scan_points);
+  cleanup();
+});
+
+it('keeps a known backend boot retired', () => {
+  const scan = scanSnapshot();
+  const { result, rerender } = renderHook(({ value }) => useCurrentScan(value), {
+    initialProps: { value: scan },
+  });
+  rerender({ value: { ...scan, scan_layer: { ...scan.scan_layer, backend_boot: 'new' } } });
+  expect(result.current).toEqual(scan.scan_points);
+  rerender({ value: scan });
+  expect(result.current).toEqual([]);
+  cleanup();
+});
+
+it('never treats legacy scan points as qualified Q', () => {
+  const { scan_layer: _layer, ...legacy } = scanSnapshot();
+  const { result } = renderHook(() => useCurrentScan(legacy));
+  expect(result.current).toEqual([]);
+  cleanup();
 });

@@ -5,8 +5,11 @@ A fresh original scan/odometry receipt advances the body between graph keyframes
 a Home marker or operator seed never supplies a vehicle pose here.
 """
 
+import hashlib
+import json
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 from senior_mapping.references import rebase_pose
@@ -18,9 +21,31 @@ from vehicle_core.sensor_policy import default_policy
 from vehicle_core.values import MapRef, Pose2D
 
 
+@dataclass(frozen=True)
+class DisplayObservation:
+    key: ScanKey
+    source_id: str
+    sampled_at: float
+    expires_at: float
+    beam_count: int
+    # Original beam index, measured range, already projected map hit. No reprojection.
+    hits: tuple[tuple[int, float, tuple[float, float]], ...]
+
+    def preview(self, budget: int) -> list[dict[str, float]]:
+        buckets: dict[int, tuple[float, tuple[float, float]]] = {}
+        if budget > 0:
+            for index, distance, point in self.hits:
+                bucket = min(budget - 1, index * budget // self.beam_count)
+                if bucket not in buckets or distance < buckets[bucket][0]:
+                    buckets[bucket] = (distance, point)
+        return [{"x": buckets[b][1][0], "y": buckets[b][1][1]} for b in sorted(buckets)]
+
+
 class LiveMappingReference:
     def __init__(self, node: Any, fallback: Any = None) -> None:
         self.node, self.fallback = node, fallback
+        self._display: DisplayObservation | None = None
+        self.display_reason: str | None = "current_scan_unavailable"
         self.enabled = False
         self.boot = ""
         self.safety_reason = "motion runtime qualification required"
@@ -50,6 +75,7 @@ class LiveMappingReference:
         self._source = self._latest = None
 
     def withdraw(self) -> None:
+        self._display = None
         self._authorization = None
         self._costmaps.clear()
         self._accepted_key = None
@@ -59,8 +85,50 @@ class LiveMappingReference:
         self.set_current_coverage(False, "reference_unavailable")
 
     def invalidate_pose(self) -> None:
+        self._display = None
         self._available = False
         self.set_current_coverage(False, "current_scan_unavailable")
+
+    def observe_display(
+        self,
+        key: ScanKey,
+        sampled_at: float,
+        expires_at: float,
+        beam_count: int,
+        hits: tuple[tuple[int, float, tuple[float, float]], ...],
+    ) -> None:
+        # Only the qualified bridge produces this immutable observation.
+        if (
+            key.sequence > 2**53 - 1
+            or self._grid is None
+            or self._grid.map_ref.reference_revision > 2**53 - 1
+        ):
+            self._display = None
+            self.display_reason = "display_integer_out_of_range"
+            return
+        source = dict(zip(tuple(ScanKey.__dataclass_fields__)[:-1], key.source, strict=True))
+        source_id = hashlib.sha256(
+            json.dumps(source, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+                "utf-8"
+            )
+        ).hexdigest()
+        self._display = DisplayObservation(key, source_id, sampled_at, expires_at, beam_count, hits)
+        self.display_reason = None
+
+    def resize_preview(self, result: dict[str, Any], budget: int) -> None:
+        """Final reply owner may reduce the UI budget, preserving original angular coverage."""
+        observation, layer = self._display, result.get("scan_layer")
+        if observation is None or layer is None or not layer["valid"]:
+            return
+        if (layer["source_id"], layer["sequence"]) != (
+            observation.source_id,
+            observation.key.sequence,
+        ):
+            result["scan_points"] = []
+            layer.update(valid=False, remaining_s=0.0, preview_count=0)
+            return
+        result["scan_points"] = observation.preview(budget)
+        layer["preview_count"] = len(result["scan_points"])
 
     def set_current_coverage(self, valid: bool, reason: str | None = None) -> None:
         self._coverage = valid
@@ -310,10 +378,34 @@ class LiveMappingReference:
                 self.fallback.state(mode, execution_status, navigation_ready=navigation_ready)
             )
         pose, grid = self.pose(), self.grid()
+        now = time.monotonic()
+        observation = self._display
+        points: list[dict[str, float]] = []
+        layer = None
+        if observation is not None and grid is not None:
+            remaining = max(0.0, min(0.5, observation.expires_at - now))
+            valid = pose is not None and remaining > 0
+            points = observation.preview(96) if valid else []
+            layer = dict(
+                map_ref=dict(
+                    map_id=grid.map_ref.map_id, reference_revision=grid.map_ref.reference_revision
+                ),
+                map_generation=self._generation,
+                backend_boot=observation.key.backend_boot,
+                source_id=observation.source_id,
+                sequence=observation.key.sequence,
+                sampled_at=observation.sampled_at,
+                expires_at=observation.expires_at,
+                remaining_s=remaining if valid else 0.0,
+                hit_count=len(observation.hits),
+                preview_count=len(points),
+                display_mode="preview",
+                valid=valid,
+            )
         return {
             "v": 1,
             "ok": True,
-            "sampled_at": time.monotonic(),
+            "sampled_at": now,
             "localized": pose is not None,
             "safety_clear": self.node.task_motion_allowed(continuing=False),
             "manual_driving": mode == "manual",
@@ -328,7 +420,8 @@ class LiveMappingReference:
             and self._navigation_covered(),
             "current_coverage_reason": self.coverage_reason,
             "robot_pose": None if pose is None else {"x": pose.x, "y": pose.y, "yaw": pose.yaw},
-            "scan_points": [],
+            "scan_points": points,
+            "scan_layer": layer,
         }
 
     def pose_reply(self) -> dict[str, Any]:

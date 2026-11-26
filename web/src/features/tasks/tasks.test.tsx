@@ -548,11 +548,17 @@ it("shows current vehicle and laser hits on task maps only for qualified live ge
     map_generation: workspace.grid_id,
     robot_pose: { x: 1, y: 2, yaw: 0.2 },
     scan_points: [{ x: 2, y: 3 }],
+    scan_layer: {
+      map_ref: snapshot.map_ref!, map_generation: workspace.grid_id,
+      backend_boot: "boot", source_id: "a".repeat(64), sequence: 1,
+      sampled_at: 10, expires_at: 10.5, remaining_s: .5,
+      hit_count: 1, preview_count: 1, display_mode: "preview" as const, valid: true,
+    },
   };
   const { container, rerender } = render(
     <TaskList snapshot={current} link={robotLink} workspace={workspace} />,
   );
-  expect(screen.queryByLabelText("实时激光命中点")).not.toBeNull();
+  expect(screen.queryByLabelText("当前扫描预览")).not.toBeNull();
   expect(container.querySelector('[data-marker="robot"]')).not.toBeNull();
   for (const overrides of [
     { localized: false },
@@ -569,11 +575,11 @@ it("shows current vehicle and laser hits on task maps only for qualified live ge
         map={map}
       />,
     );
-    expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+    expect(screen.queryByLabelText("当前扫描预览")).toBeNull();
     expect(container.querySelector('[data-marker="robot"]')).toBeNull();
   }
   rerender(<TaskList snapshot={current} link={robotLink} map={map} />);
-  expect(screen.queryByLabelText("实时激光命中点")).toBeNull();
+  expect(screen.queryByLabelText("当前扫描预览")).toBeNull();
   expect(container.querySelector('[data-marker="robot"]')).toBeNull();
   expect(screen.queryByText("车辆位置暂不可用")).not.toBeNull();
 });
@@ -1236,4 +1242,88 @@ it('V15 separates the list, multi-point banner and editor while retaining one or
   expect(screen.queryByRole('button',{name:'撤销上一点'})).toBeNull();
   expect(screen.getByRole('list',{name:'任务航点顺序'}).querySelectorAll('li')).toHaveLength(2);
   expect(robotLink.request).not.toHaveBeenCalled();
+});
+
+it("updates Q tail in the task map without rereading tiles and still reloads G", async () => {
+  const robotLink = link();
+  let grid = "grid-1";
+  vi.mocked(robotLink.request).mockImplementation(async type => {
+    const identity = { robot_id: snapshot.robot_id, map_ref: snapshot.map_ref!, grid_id: grid };
+    if (type === "map.manifest") return { ok: true, data: { ...identity, width: 1, height: 1,
+      resolution: 1, origin: { x: 0, y: 0, yaw: 0 }, tile_size: 32 } } as never;
+    if (type === "map.tile") return { ok: true, data: { ...identity, tile_x: 0, tile_y: 0,
+      width: 1, height: 1, cells: [100] } } as never;
+    return { ok: true } as never;
+  });
+  const scan = { ...snapshot, map_generation: "R1", map_grid_id: grid,
+    scan_points: Array.from({ length: 96 }, () => ({ x: .2, y: .4 })),
+    scan_layer: {
+      map_ref: snapshot.map_ref!, map_generation: "R1", backend_boot: "boot",
+      source_id: "a".repeat(64), sequence: 1, sampled_at: 10, expires_at: 10.5,
+      remaining_s: .5, hit_count: 2048, preview_count: 96, display_mode: "preview" as const, valid: true,
+    },
+  };
+  function TaskMap({ value }: { value: RobotSnapshot }) {
+    const result = useWorkspaceMap(robotLink, value, { enabled: true, catalog: false, refresh: 0 });
+    return <TaskList snapshot={value} link={robotLink} {...(result.map && result.gridId ? {
+      workspace: { map: result.map, grid_id: result.gridId, waypoints: [] },
+    } : {})} />;
+  }
+  const { rerender } = render(<TaskMap value={scan} />);
+  await screen.findByLabelText("当前扫描预览");
+  const tail = () => screen.getByLabelText("当前扫描预览").querySelectorAll("circle")[95]!.getAttribute("cx");
+  const first = tail();
+  const next = { ...scan, scan_points: [...scan.scan_points.slice(0, 95), { x: .8, y: .4 }],
+    scan_layer: { ...scan.scan_layer, sequence: 2 } };
+  rerender(<TaskMap value={next} />);
+  expect(tail()).not.toBe(first);
+  expect(vi.mocked(robotLink.request).mock.calls.filter(([type]) => type === "map.tile")).toHaveLength(1);
+  expect(vi.mocked(robotLink.request).mock.calls.filter(([type]) => type === "map.manifest")).toHaveLength(1);
+  grid = "grid-2";
+  rerender(<TaskMap value={{ ...next, map_grid_id: grid }} />);
+  await waitFor(() => expect(vi.mocked(robotLink.request).mock.calls.filter(([type]) => type === "map.tile")).toHaveLength(2));
+  await screen.findByLabelText("当前扫描预览");
+});
+
+it("expires task scan points while retaining the loaded fixed wall and rejects legacy points", () => {
+  vi.useFakeTimers();
+  const current = { ...snapshot, map_generation: workspace.grid_id,
+    scan_points: [{ x: 2, y: 3 }], scan_layer: {
+      map_ref: snapshot.map_ref!, map_generation: workspace.grid_id, backend_boot: "boot",
+      source_id: "a".repeat(64), sequence: 1, sampled_at: 10, expires_at: 10.5,
+      remaining_s: .2, hit_count: 1, preview_count: 1, display_mode: "preview" as const, valid: true,
+    },
+  };
+  const fixed = { ...workspace, map: { ...workspace.map,
+    grid: { width: 3, height: 1, values: new Int8Array([-1, 0, 100]) } } };
+  try {
+    const { container, rerender } = render(<TaskList snapshot={current} link={link()} workspace={fixed} />);
+    const canvas = container.querySelector("canvas");
+    expect(canvas).not.toBeNull();
+    expect(screen.queryByLabelText("当前扫描预览")).not.toBeNull();
+    act(() => vi.advanceTimersByTime(201));
+    expect(screen.queryByLabelText("当前扫描预览")).toBeNull();
+    expect(container.querySelector("canvas")).toBe(canvas);
+    const { scan_layer: _layer, ...legacy } = current;
+    rerender(<TaskList snapshot={legacy} link={link()} workspace={fixed} />);
+    expect(screen.queryByLabelText("当前扫描预览")).toBeNull();
+    expect(container.querySelector("canvas")).toBe(canvas);
+  } finally { vi.useRealTimers(); }
+});
+
+it("keeps task Q revoked across the existing stale editor remount", () => {
+  const current = { ...snapshot, map_generation: workspace.grid_id,
+    scan_points: [{ x: 2, y: 3 }], scan_layer: {
+      map_ref: snapshot.map_ref!, map_generation: workspace.grid_id, backend_boot: "boot",
+      source_id: "a".repeat(64), sequence: 1, sampled_at: 10, expires_at: 10.5,
+      remaining_s: .2, hit_count: 1, preview_count: 1, display_mode: "preview" as const, valid: true,
+    },
+  };
+  const robotLink = link();
+  const { rerender } = render(<TaskList snapshot={current} link={robotLink} workspace={workspace} />);
+  expect(screen.queryByLabelText("当前扫描预览")).not.toBeNull();
+  rerender(<TaskList snapshot={{ ...current, stale: true }} link={robotLink} workspace={workspace} />);
+  expect(screen.queryByLabelText("当前扫描预览")).toBeNull();
+  rerender(<TaskList snapshot={current} link={robotLink} workspace={workspace} />);
+  expect(screen.queryByLabelText("当前扫描预览")).toBeNull();
 });

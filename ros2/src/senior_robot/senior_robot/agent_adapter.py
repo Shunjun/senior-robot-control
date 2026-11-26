@@ -11,6 +11,7 @@ keep their local execution lifetime. This adapter never writes an actuator veloc
 
 import asyncio
 import fcntl
+import json
 import os
 import re
 import stat
@@ -64,6 +65,7 @@ class AdapterCore:
         mapping: MappingRequests | None = None,
         state_provider: Callable[[], dict[str, Any]] | None = None,
         pose_provider: Callable[[], dict[str, Any]] | None = None,
+        state_preview: Callable[[dict[str, Any], int], None] | None = None,
         routes: "RouteService | None" = None,
         navigation_ready: Callable[[], bool] | None = None,
         ros_domain: int | None = None,
@@ -79,6 +81,7 @@ class AdapterCore:
         self._workspace_map = workspace_map
         self._state_provider = state_provider
         self._pose_provider = pose_provider
+        self._state_preview = state_preview
         self._routes = routes
         self._settled_sequence = 0
         self._task_effect_sequences: dict[str, int] = {}
@@ -130,7 +133,6 @@ class AdapterCore:
         if kind == "learning":
             import asyncio
             import hashlib
-            import json
             import os
             from pathlib import Path
 
@@ -225,6 +227,17 @@ class AdapterCore:
             if kind == "state.get":
                 result["task_lifecycle_version"] = 2 if self._routes is not None else 0
                 result["manual_protocol_version"] = 1 if self._manual is not None else 0
+                # Match ipc._answer/_encode after all provider/runtime/version fields exist.
+                result["v"] = 1
+                if result.get("scan_layer") is not None and self._state_preview is not None:
+                    for budget in range(96, -1, -1):
+                        self._state_preview(result, budget)
+                        body = json.dumps(
+                            result, separators=(",", ":"), allow_nan=False, ensure_ascii=True
+                        ).encode()
+                        if len(body) <= 8192:
+                            break
+                    # If the original non-preview reply exceeds the limit, IPC still rejects it.
             return result
         if kind in {"map.active", "map.manifest", "map.tile"}:
             if self._workspace_map is None or self._exiting:
@@ -780,6 +793,7 @@ def main() -> None:
             request_exit=request_exit,
             workspace_map=WorkspaceMap(reference.grid) if reference is not None else None,
             state_provider=state,
+            state_preview=reference.resize_preview,
             pose_provider=reference.pose_reply if reference is not None else None,
             routes=routes,
             navigation_ready=navigation_ready,

@@ -221,3 +221,97 @@ def test_an_agent_uplink_may_omit_the_cache_fields() -> None:
     envelope = validate_frame(json.dumps(body).encode(), ROBOT)
     assert isinstance(envelope, SnapshotEnvelope)
     assert envelope.payload.stale is False and envelope.payload.last_synced_at is None
+
+
+def scan_snapshot(*, source="a", sequence=1, generation="R1", remaining=0.2, valid=True):
+    from dataclasses import replace
+
+    from senior_contracts.wire import MapRefPayload, ScanLayerPayload, ScanPointPayload
+
+    return replace(
+        SNAPSHOT,
+        map_generation=generation,
+        scan_layer=ScanLayerPayload(
+            map_ref=MapRefPayload(map_id=MAP.map_id, reference_revision=MAP.reference_revision),
+            map_generation=generation,
+            backend_boot="backend",
+            source_id=source * 64,
+            sequence=sequence,
+            sampled_at=10.0,
+            expires_at=10.5,
+            remaining_s=remaining,
+            hit_count=1,
+            preview_count=1 if valid else 0,
+            display_mode="preview",
+            valid=valid,
+        ),
+        scan_points=(ScanPointPayload(x=1.0, y=2.0),) if valid else (),
+    )
+
+
+def test_scan_cache_duplicate_and_new_controller_deduct_residence():
+    rig = Rig()
+    steady = [100.0]
+    rig.hub.snapshots = SnapshotCache(clock=lambda: rig.now[0], monotonic=lambda: steady[0])
+    rig.hub.handle_agent_frame(rig.agent, rig.frame(scan_snapshot()))
+    steady[0] = 100.1
+    rig.hub.handle_agent_frame(rig.agent, rig.frame(scan_snapshot(remaining=0.5)))
+    assert rig.hub.snapshots.get(ROBOT).snapshot.scan_layer.remaining_s == pytest.approx(0.1)
+    steady[0] = 100.21
+    cached = rig.hub.snapshots.get(ROBOT)
+    assert not cached.snapshot.scan_layer.valid and cached.snapshot.scan_points == []
+    controller = rig.hub.attach_controller(ROBOT, "scan-cache")
+    assert controller is not None
+    (frame,) = _pushed(controller)
+    assert frame["payload"]["scan_layer"]["valid"] is False
+    assert frame["payload"].get("scan_points", []) == []
+    # Same cache projection is used by newly attached controllers; no new lease.
+    assert not rig.hub.snapshots.get(ROBOT).snapshot.scan_layer.valid
+
+
+def scan_cache_store():
+    rig = Rig()
+    cache = SnapshotCache(monotonic=lambda: 100.0)
+
+    def store(snapshot):
+        return cache.store(validate_frame(rig.frame(snapshot), ROBOT)).snapshot
+
+    return store
+
+
+def test_scan_cache_rejects_low_sequence():
+    store = scan_cache_store()
+    assert store(scan_snapshot(sequence=2)).scan_layer.valid
+    assert not store(scan_snapshot(sequence=1)).scan_layer.valid
+
+
+def test_scan_cache_keeps_known_source_retired():
+    store = scan_cache_store()
+    assert store(scan_snapshot()).scan_layer.valid
+    assert store(scan_snapshot(source="b")).scan_layer.valid
+    assert not store(scan_snapshot(source="a", sequence=3)).scan_layer.valid
+
+
+def test_scan_cache_retires_reference_before_new_q_arrives():
+    from dataclasses import replace
+
+    store = scan_cache_store()
+    assert store(scan_snapshot()).scan_layer.valid
+    store(replace(scan_snapshot(generation="R2"), scan_layer=None, scan_points=()))
+    assert not store(scan_snapshot(sequence=3)).scan_layer.valid
+    assert store(scan_snapshot(generation="R2")).scan_layer.valid
+    assert not store(scan_snapshot(generation="R1", sequence=4)).scan_layer.valid
+
+
+def test_scan_cache_keeps_known_boot_retired():
+    from dataclasses import replace
+
+    store = scan_cache_store()
+    original = scan_snapshot()
+    assert store(original).scan_layer.valid
+    newer = replace(
+        original,
+        scan_layer=original.scan_layer.model_copy(update=dict(backend_boot="new-boot", sequence=2)),
+    )
+    assert store(newer).scan_layer.valid
+    assert not store(original).scan_layer.valid

@@ -1,3 +1,4 @@
+import { useCurrentScan } from "../map/useCurrentScan";
 import { newId } from "../../ids";
 import { isTaskName, normalizeTaskName } from "../../api/vehicleState";
 import {
@@ -16,6 +17,7 @@ import {
 import type {
   ResponsePayload,
   RobotSnapshot,
+  MapPoint,
   TaskSummary,
 } from "../../api/protocol";
 import {
@@ -200,6 +202,7 @@ export function TaskList({
   mapCanvasProps,
   renderWorkspace, onPickStart,
 }: TaskListProps): ReactElement {
+  const currentScan = useCurrentScan(snapshot);
   const ref = snapshot.map_ref;
   //Compatible: older snapshots omit map_generation; still require matching map_ref.
   const matches =
@@ -221,6 +224,7 @@ export function TaskList({
   return (
     <TaskEditor
       key={scope}
+      currentScan={currentScan}
       snapshot={snapshot}
       link={link}
       workspace={live && matches ? workspace : undefined}
@@ -235,13 +239,14 @@ export function TaskList({
 
 function TaskEditor({
   snapshot,
+  currentScan,
   link,
   workspace,
   unavailable,
   map,
   mapCanvasProps,
   renderWorkspace, onPickStart,
-}: TaskListProps): ReactElement {
+}: TaskListProps & { currentScan: readonly MapPoint[] }): ReactElement {
   //Compatible: standalone task editor callers retain their combined list/editor layout.
   const [stage, setStage] = useState<"list" | "editor">(
     renderWorkspace ? "list" : "editor",
@@ -756,7 +761,7 @@ function TaskEditor({
             stale={!live}
             compact
             robot={liveMapTelemetry ? (snapshot.robot_pose ?? null) : null}
-            scanPoints={liveMapTelemetry ? (snapshot.scan_points ?? []) : []}
+            scanPoints={liveMapTelemetry ? currentScan : []}
             taskRoute={
               workspace === undefined
                 ? []
