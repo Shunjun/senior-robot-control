@@ -474,6 +474,9 @@ async def test_static_service_observation_retains_active_assertion(monkeypatch, 
         return {"ok": True, "navigation_ready": True}
 
     fixture.wait = wait
+    # This existing test isolates GetState diagnostics after initialization;
+    # the two component tests below exercise the new initialization owner.
+    fixture.localization_initialized = True
     result = await fixture.static_ready(N(request=request))
     assert bool(result) is active
     assert names == (
@@ -732,3 +735,191 @@ async def test_trace_failure_preserves_original_wait_and_settles_ipc(
             trace.__exit__()
         assert trace_failure.value.__cause__ is sink_error
         assert not trace._thread.is_alive()
+
+
+@pytest.fixture
+def static_localization_fixture(monkeypatch, tmp_path):
+    """Service boundary only: no ROS, native receipt or AMCL posterior emulation."""
+    import asyncio
+
+    from shared_layers_native_fixture import NativeFixture
+
+    def initial_request():
+        return N(pose=N(header=N(), pose=N(pose=N(position=N(), orientation=N()))))
+
+    modules = {
+        "lifecycle_msgs.msg": dict(State=N(PRIMARY_STATE_ACTIVE=3)),
+        "lifecycle_msgs.srv": dict(GetState=N(Request=lambda: None)),
+        "geometry_msgs.msg": dict(PoseWithCovarianceStamped=object),
+        "nav2_msgs.srv": dict(SetInitialPose=N(Request=initial_request)),
+        "sensor_msgs.msg": dict(LaserScan=object),
+        "std_srvs.srv": dict(Empty=N(Request=lambda: None)),
+        "rclpy.qos": dict(
+            DurabilityPolicy=N(TRANSIENT_LOCAL=1),
+            QoSProfile=lambda **kw: kw,
+            qos_profile_sensor_data=object(),
+        ),
+    }
+    for name, values in modules.items():
+        module = ModuleType(name)
+        module.__dict__.update(values)
+        monkeypatch.setitem(sys.modules, name, module)
+    fixture = NativeFixture(tmp_path)
+    fixture.startup = N(phase="static")
+    rows, calls, clients, destroyed, subscriptions, removed = [], [], [], [], [], []
+    fixture.trace = N(emit=lambda stage, **fields: rows.append(dict(stage=stage, **fields)))
+    stamp = N(sec=123, nanosec=456)
+
+    def create_client(kind, name):
+        def call(request):
+            future = asyncio.get_running_loop().create_future()
+            calls.append(
+                N(name=name, request=request, future=future, at=asyncio.get_running_loop().time())
+            )
+            if name.endswith("/get_state"):
+                future.set_result(N(current_state=N(id=3)))
+            elif name == "/set_initial_pose":
+                future.set_result(N())  # An empty response cannot attest localization.
+            return future
+
+        service = N(
+            name=name,
+            service_is_ready=lambda: True,
+            call_async=call,
+            remove_pending_request=removed.append,
+        )
+        clients.append(service)
+        return service
+
+    def subscribe(kind, name, callback, qos):
+        subscription = N(name=name, callback=callback)
+        subscriptions.append(subscription)
+        return subscription
+
+    fixture.node = N(
+        create_client=create_client,
+        destroy_client=destroyed.append,
+        create_subscription=subscribe,
+        destroy_subscription=subscriptions.remove,
+        get_clock=lambda: N(now=lambda: N(to_msg=lambda: stamp)),
+    )
+    return N(
+        fixture=fixture,
+        rows=rows,
+        calls=calls,
+        clients=clients,
+        destroyed=destroyed,
+        subscriptions=subscriptions,
+        removed=removed,
+        stamp=stamp,
+    )
+
+
+async def test_static_amcl_seed_uses_active_upstream_prior_without_admitting_ack(
+    static_localization_fixture,
+):
+    import asyncio
+    import math
+
+    env = static_localization_fixture
+    fixture = env.fixture
+    ready = False
+
+    async def request(kind):
+        assert kind == "state.get"
+        return dict(navigation_ready=ready)
+
+    pending = asyncio.create_task(fixture.static_ready(N(request=request)))
+    try:
+        await fixture.wait(lambda: fixture.localization_initialized)
+        assert not await pending  # Service acknowledgements alone leave static_ready false.
+        names = [call.name for call in env.calls]
+        assert names[:3] == ["/map_server/get_state", "/amcl/get_state", "/set_initial_pose"]
+        assert names.index("/set_initial_pose") < names.index("/controller_server/get_state")
+        seed = env.calls[2].request.pose
+        assert seed.header.frame_id == "map" and seed.header.stamp is env.stamp
+        assert (seed.pose.pose.position.x, seed.pose.pose.position.y) == (0.0, 0.0)
+        assert seed.pose.pose.orientation.w == 1.0
+        covariance = [0.0] * 36
+        covariance[0] = covariance[7] = 0.25
+        covariance[35] = (math.pi / 12) ** 2
+        assert seed.pose.covariance == covariance
+        record = next(r for r in env.rows if r["stage"] == "static_amcl_service")
+        assert "a097086719c88f781aa59788eca29ac6ca5e56db" in record["source"]
+        assert record["source_sha256"] == (
+            "29a6402bf643fc8ea0d2dcea29619d4cbdcaf7014c811332ed4e86e593d3f1af"
+        )
+        assert record["lifecycle"] == "map_server and amcl GetState ACTIVE observed"
+        assert fixture.localization_pose_count == 0
+        # Read-only observation retains even zero covariance and the original stamp;
+        # neither observation nor the service response sets navigation_ready.
+        fixture._observe_localization_pose(N(header=seed.header, pose=N(covariance=[0.0] * 36)))
+        observed = env.rows[-1]
+        assert observed["stage"] == "static_amcl_pose" and observed["stamp_ns"] == 123000000456
+        assert observed["covariance"] == [0.0] * 36
+        assert not await fixture.static_ready(N(request=request))
+        assert sum(c.name == "/set_initial_pose" for c in env.calls) == 1
+        ready = True  # Original IPC owner's result, not inferred from this component.
+        assert (await fixture.static_ready(N(request=request)))["navigation_ready"]
+        assert fixture.localization_task is None and not env.subscriptions
+        assert len(env.destroyed) == len(env.clients)
+    finally:
+        pending.cancel()
+        await asyncio.gather(pending, return_exceptions=True)
+        await fixture._stop_static_localization()
+
+
+async def test_static_amcl_new_scan_bounds_requests_and_settles_phase_exit_and_cancel(
+    static_localization_fixture,
+):
+    import asyncio
+
+    env = static_localization_fixture
+    fixture = env.fixture
+
+    def scan(stamp):
+        fixture._observe_localization_scan(N(header=N(stamp=N(sec=stamp, nanosec=0))))
+
+    def updates():
+        return [c for c in env.calls if c.name == "/request_nomotion_update"]
+
+    fixture.localization_task = asyncio.create_task(fixture._static_localization())
+    try:
+        await fixture.wait(lambda: fixture.localization_initialized)
+        await asyncio.sleep(0.22)
+        assert not updates()  # No scan, no busy requests.
+        scan(1)
+        await fixture.wait(lambda: len(updates()) == 1)
+        for stamp in range(2, 20):
+            scan(stamp)
+        await asyncio.sleep(0.05)
+        assert len(updates()) == 1 and not updates()[0].future.done()
+        updates()[0].future.set_result(N())
+        await fixture.wait(lambda: len(updates()) == 2)
+        assert updates()[1].at - updates()[0].at >= 0.2
+        assert fixture.localization_pose_count == 0  # ACK did not synthesize posterior.
+        fixture.startup.phase = "stopping"  # Original owner is retiring the old AMCL.
+        task = fixture.localization_task
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=1)
+        await fixture._stop_static_localization()
+        assert task.cancelled() and updates()[1].future.cancelled()
+        assert env.removed == [updates()[1].future]
+        assert not env.subscriptions and len(env.destroyed) == len(env.clients)
+        scan(20)
+        await asyncio.sleep(0.22)
+        assert len(updates()) == 2
+        # A shutdown cancellation also settles an in-flight request before clients die.
+        fixture.startup.phase = "static"
+        fixture.localization_task = asyncio.create_task(fixture._static_localization())
+        await fixture.wait(
+            lambda: len(env.calls) >= 4 and env.calls[-1].name == "/set_initial_pose"
+        )
+        scan(21)
+        await fixture.wait(lambda: len(updates()) == 3)
+        fixture.shutdown_done = True
+        await fixture._stop_static_localization()
+        assert updates()[-1].future.cancelled() and not env.subscriptions
+        assert len(env.destroyed) == len(env.clients)
+        assert sum(r["stage"] == "static_amcl_settled" for r in env.rows) == 2
+    finally:
+        await fixture._stop_static_localization()

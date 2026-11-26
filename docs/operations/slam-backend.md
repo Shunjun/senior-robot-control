@@ -455,3 +455,41 @@ restore/export仍在原第299帧 marker之后走原生命周期；若没有实�
 明确缺该证据，不能声称持续60s MPPI、完整S16或整T7成功。
 原 trace 工具未扩展，phase 可包含 motion_reference，按两份实际 trace 另行核共有窗口；
 其 sustained_mppi 始终 N/A，旧 stationary 提示不是运动成功判定。
+
+### 隔离仿真 AMCL 输入初始化与静止更新（2026-11-26）
+
+原 NativeFixture 在原 observer node/async owner 中，于 map_server、AMCL 的真实
+GetState 返回 ACTIVE 后、等待 controller 之前，调用官方 `/set_initial_pose`
+（nav2_msgs/srv/SetInitialPose）。仅已知隔离 world 出生点使用 map 坐标 (0,0,0)，
+以原 node clock 的实际 stamp 和完整36项 covariance 输入一次 seed：x/y=0.5²、
+yaw=(π/12)²，其余项零。这些值复用官方 navigation2
+[`a097086719c88f781aa59788eca29ac6ca5e56db` 的 initOdometry 默认 prior](https://github.com/ros-navigation/navigation2/blob/a097086719c88f781aa59788eca29ac6ca5e56db/nav2_amcl/src/amcl_node.cpp#L1571)，
+源文件 SHA256 为 `29a6402bf643fc8ea0d2dcea29619d4cbdcaf7014c811332ed4e86e593d3f1af`。
+它是普通仿真初始化输入，不能签为实车误差 profile、定位误差实测或产品通过阈值。
+原 launch 参数 seed 未填 covariance，会覆盖该默认 prior 为零；数学零方差本身不是坏报文，
+这里修正的是测试输入，不在产品中添加 epsilon 或降低协方差要求。
+
+服务空响应只表示调用完成，不是“已定位”。必须由原 AMCL 在真实 scan/TF 上生成
+posterior，再经原 native MessageInfo、writer/receipt/clock、map serial、回放/退休保护、
+严格正且有界 covariance 和原测量年龄 <0.5s 检查；原 state.get/navigation_ready 和
+warmer 仍有最终决定权。夹具既不发布 amcl_pose/Q/TF/ready，也不重盖任何 pose 时间。
+只读 `/amcl_pose` 观察记录原 stamp、完整 covariance 与计数，observer 没有逐消息 GID，
+不能代替 native 身份认证，历史观察也不能代认 seed 后 posterior。
+
+仅 startup.phase==static 时，独立 async 任务按新观察到的 `/scan` 原 stamp 推进，
+最多按原5Hz节奏、最多一个请求在途调用官方 `/request_nomotion_update`。重复/倒序
+stamp 不触发，无新 scan 不忙请求；慢服务期间只保留最新 scan，不追补请求队列。
+这只设置 AMCL force_update，仍需下一次真实 scan 的滤波/发布，响应不续 pose 年龄。
+`static_amcl_service` 记录初始化来源/先验/ACTIVE依据、请求与响应、触发 scan stamp、
+实际已观察 pose 数及错误/取消；`static_amcl_pose` 记录真实接收样本原 stamp，
+`static_amcl_settled` 记录资源结算。trace 自带观察 steady_ns，不声称请求与某条 pose
+具有未证明的因果对应关系。
+
+调用沿用原 wait/call 模式和30秒等待，外层60秒、shutdown45秒均不变；独立任务等待
+服务时原 executor pump 继续 spin。static_ready 真正返回 ready 前取消并结算此任务，
+然后调用方才能进入原 preparing/live；phase 离开 static 也停止发送，shutdown 在原
+Launch 退出之前取消 future、移除 pending request 并销毁新增的两个 clients 和两个
+只读 subscriptions。失败仍失败，服务任务失败不免除原 Launch 清退义务；不新增 node、
+进程或业务调度 owner。原功能 case 的 S05/S07/S09/R4、world、0.7m路线、scan/轮速/TF、
+足迹与 progress 断言均保持。组件替身仅验证输入/生命周期契约，本机没有 ROS/rclpy，
+真实服务、AMCL posterior、native 与整功能仍须由负责人亲审后交原 VM 验证。

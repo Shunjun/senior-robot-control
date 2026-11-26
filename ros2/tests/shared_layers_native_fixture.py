@@ -7,6 +7,7 @@ import asyncio
 import hashlib
 import importlib.util
 import json
+import math
 import os
 import re
 import subprocess
@@ -144,6 +145,10 @@ class NativeFixture:
         self.latest_slot = None
         self.control_subscriptions = {}
         self.shutdown_done = False
+        self.localization_task = None
+        self.localization_initialized = False
+        self.localization_scan_stamp = -1
+        self.localization_pose_count = 0
 
     async def __aenter__(self):
         try:
@@ -344,6 +349,12 @@ class NativeFixture:
                 await self.pump_task
             if self.launch_task and self.launch_task.done() and not self.shutdown_done:
                 raise AssertionError(f"real Launch exited early: {self.launch_task.result()}")
+            if (
+                self.localization_task
+                and self.localization_task is not asyncio.current_task()
+                and self.localization_task.done()
+            ):
+                self.localization_task.result()  # Service failures remain failures.
             result = predicate()
             if asyncio.iscoroutine(result):
                 result = await result
@@ -598,6 +609,146 @@ class NativeFixture:
 
         await self.wait(confirmed)
 
+    def _observe_localization_scan(self, message):
+        stamp = message.header.stamp
+        self.localization_scan_stamp = max(
+            self.localization_scan_stamp, stamp.sec * 1_000_000_000 + stamp.nanosec
+        )
+
+    def _observe_localization_pose(self, message):
+        # Read-only evidence: no reference callback, receipt, timestamp or ready mutation.
+        self.localization_pose_count += 1
+        stamp = message.header.stamp
+        self.trace.emit(
+            "static_amcl_pose",
+            count=self.localization_pose_count,
+            stamp_ns=stamp.sec * 1_000_000_000 + stamp.nanosec,
+            frame_id=message.header.frame_id,
+            covariance=list(message.pose.covariance),
+            identity="observer only; native MessageInfo admission remains authoritative",
+        )
+
+    def _localization_static(self):
+        return not self.shutdown_done and self.startup.phase == "static"
+
+    async def _localization_call(self, service, request, name, **fields):
+        future = None
+        try:
+            await self.wait(lambda: not self._localization_static() or service.service_is_ready())
+            if not self._localization_static():
+                raise asyncio.CancelledError()
+            future = service.call_async(request)
+            self.trace.emit("static_amcl_service", service=name, phase="request", **fields)
+            await self.wait(lambda: not self._localization_static() or future.done())
+            if not self._localization_static():
+                raise asyncio.CancelledError()
+            response = future.result()
+            self.trace.emit("static_amcl_service", service=name, phase="response", **fields)
+            return response  # Empty service acknowledgement is never localization evidence.
+        except BaseException as exc:
+            self.trace.emit(
+                "static_amcl_service", service=name, phase="error", error_type=type(exc).__name__
+            )
+            raise
+        finally:
+            if future is not None and not future.done():
+                future.cancel()
+                service.remove_pending_request(future)
+                self.trace.emit("static_amcl_service", service=name, phase="cancel_settled")
+
+    async def _initialize_localization(self, service, request_type):
+        await self.wait(lambda: not self._localization_static() or service.service_is_ready())
+        if not self._localization_static():
+            raise asyncio.CancelledError()
+        request = request_type.Request()
+        request.pose.header.frame_id = "map"
+        request.pose.header.stamp = self.node.get_clock().now().to_msg()
+        request.pose.pose.pose.position.x = request.pose.pose.pose.position.y = 0.0
+        request.pose.pose.pose.orientation.w = 1.0  # Known isolated-world spawn: yaw=0.
+        covariance = [0.0] * 36
+        covariance[0] = covariance[7] = 0.5**2
+        covariance[35] = (math.pi / 12) ** 2
+        request.pose.pose.covariance = covariance
+        stamp = request.pose.header.stamp
+        await self._localization_call(
+            service,
+            request,
+            "/set_initial_pose",
+            frame_id="map",
+            pose=[0.0, 0.0, 0.0],
+            stamp_ns=stamp.sec * 1_000_000_000 + stamp.nanosec,
+            covariance=covariance,
+            source="navigation2 a097086719c88f781aa59788eca29ac6ca5e56db "
+            "nav2_amcl/src/amcl_node.cpp:initOdometry:1571-1578",
+            source_sha256="29a6402bf643fc8ea0d2dcea29619d4cbdcaf7014c811332ed4e86e593d3f1af",
+            lifecycle="map_server and amcl GetState ACTIVE observed",
+        )
+        self.localization_initialized = True  # Input delivered, not posterior/qualification.
+
+    async def _static_localization(self):
+        from geometry_msgs.msg import PoseWithCovarianceStamped
+        from nav2_msgs.srv import SetInitialPose
+        from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+        from sensor_msgs.msg import LaserScan
+        from std_srvs.srv import Empty
+
+        services, subscriptions = [], []
+        try:
+            for kind, name in (
+                (SetInitialPose, "/set_initial_pose"),
+                (Empty, "/request_nomotion_update"),
+            ):
+                services.append(self.node.create_client(kind, name))
+            subscriptions.append(
+                self.node.create_subscription(
+                    LaserScan, "/scan", self._observe_localization_scan, qos_profile_sensor_data
+                )
+            )
+            subscriptions.append(
+                self.node.create_subscription(
+                    PoseWithCovarianceStamped,
+                    "/amcl_pose",
+                    self._observe_localization_pose,
+                    QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL),
+                )
+            )
+            await self._initialize_localization(services[0], SetInitialPose)
+            consumed, next_request = self.localization_scan_stamp, 0.0
+            while self._localization_static():
+                # One request per newly observed scan, no faster than the original 5Hz.
+                # Acknowledgement only sets AMCL force_update; a subsequent real scan
+                # must still produce the posterior through its original scan/TF path.
+                if self.localization_scan_stamp > consumed and time.monotonic() >= next_request:
+                    consumed = self.localization_scan_stamp
+                    await self._localization_call(
+                        services[1],
+                        Empty.Request(),
+                        "/request_nomotion_update",
+                        scan_stamp_ns=consumed,
+                        observed_pose_count=self.localization_pose_count,
+                    )
+                    # Bound actual calls even when discovery or a response was slow.
+                    next_request = time.monotonic() + 0.2
+                await asyncio.sleep(0.02)
+        finally:
+            for service in services:
+                self.node.destroy_client(service)
+            for subscription in subscriptions:
+                self.node.destroy_subscription(subscription)
+            self.trace.emit("static_amcl_settled", pose_count=self.localization_pose_count)
+
+    async def _stop_static_localization(self):
+        task = self.localization_task
+        if task is not None:
+            if not task.done():
+                task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            finally:
+                self.localization_task = None
+
     async def static_ready(self, client):
         from lifecycle_msgs.msg import State
         from lifecycle_msgs.srv import GetState
@@ -654,6 +805,13 @@ class NativeFixture:
                     )
                     if state_id != State.PRIMARY_STATE_ACTIVE:
                         return None
+                    if name == "amcl" and not self.localization_initialized:
+                        assert self._localization_static(), "static AMCL initialization required"
+                        if self.localization_task is None:
+                            self.localization_task = asyncio.create_task(
+                                self._static_localization()
+                            )
+                        await self.wait(lambda: self.localization_initialized)
                 except BaseException as exc:
                     observe(
                         "static_service",
@@ -667,7 +825,14 @@ class NativeFixture:
                     self.node.destroy_client(service)
             state = await client.request("state.get")
             self.trace.emit("static_state", record=state)
-            return state.get("navigation_ready") and state
+            if state.get("navigation_ready"):
+                # Settle before returning control to the caller that can prepare live.
+                await self._stop_static_localization()
+                return state
+            return None
+        except BaseException:
+            await self._stop_static_localization()
+            raise
         finally:
             observing = False
             observation.cancel()
@@ -741,6 +906,11 @@ class NativeFixture:
             return
         self.shutdown_done = True
         self.observed_session = None
+        localization_failure = None
+        try:
+            await self._stop_static_localization()
+        except BaseException as exc:
+            localization_failure = exc  # Still settle Launch; never turn service failure green.
         await asyncio.to_thread(self.resources._discover)
         obligations = self.resources.snapshot()
         self.trace.emit("shutdown_begin", owned=list(obligations))
@@ -788,6 +958,8 @@ class NativeFixture:
         assert not self.startup.cleanup_failed
         await self.wait(lambda: not self.run_directory.exists(), timeout=15)
         self.trace.emit("shutdown_settled")
+        if localization_failure is not None:
+            raise localization_failure
 
     async def __aexit__(self, exc_type, exc, traceback):
         import rclpy
