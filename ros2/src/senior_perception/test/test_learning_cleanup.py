@@ -227,7 +227,7 @@ async def test_hardware_cleanup_only_once_after_verified_live_agent_under_lock(
     monkeypatch.setattr(helper, "_terminate_motion_stack", terminate)
     monkeypatch.setattr(helper.asyncio, "create_subprocess_exec", spawn)
     monkeypatch.setattr(cleanup, "cleanup_old_learning_files", clean)
-    profile = N(ros_domain=None, ros_setup=None)
+    profile = N(ros_domain=None, ros_setup=None, navigation_parameters=None)
     assert await helper.supervise(tmp_path, ["agent"], {}, profile=profile) == (
         2 if outcome == "agent_exited" else 0
     )
