@@ -574,6 +574,27 @@ private:
         {original_odom.GetX(), original_odom.GetY(), original_odom.GetHeading()}});
   }
 
+  void log_graph_commit_unavailable(
+    const ReadGraphCommit::Request & request, const char * reason,
+    const char * initial_active, const char * final_active) noexcept
+  {
+    // This service and graph mutation share the default mutually exclusive group.
+    if (graph_commit_unavailable_logged_) {return;}
+    graph_commit_unavailable_logged_ = true;
+    try {
+      // Retirement is a later atomic snapshot, not the active decision witness.
+      const bool retired_after_decision = bounded_ingress_->retired_snapshot();
+      RCLCPP_WARN(get_logger(),
+        "ReadGraphCommit UNAVAILABLE: reason=%s request_boot=%.36s current_boot=%.36s "
+        "request_sequence=%llu graph_sequence=%llu initial_active=%s final_active=%s "
+        "retired_after_decision=%s raw_receipt_last_reason=N/A static_receipt_last_reason=N/A",
+        reason, request.boot_id.c_str(), boot_id_.c_str(),
+        static_cast<unsigned long long>(request.graph_commit_sequence),
+        static_cast<unsigned long long>(graph_commit_.sequence), initial_active, final_active,
+        retired_after_decision ? "true" : "false");
+    } catch (...) {}  // Diagnostics must not change service delivery, even if logging fails.
+  }
+
   void start_graph_commit_service()
   {
     read_graph_commit_ = create_service<ReadGraphCommit>(
@@ -581,13 +602,20 @@ private:
       [this](const ReadGraphCommit::Request::SharedPtr request,
         ReadGraphCommit::Response::SharedPtr response)
       {
-        if (request->boot_id != boot_id_ || !bounded_ingress_->active_snapshot()) {
+        if (request->boot_id != boot_id_) {
+          log_graph_commit_unavailable(*request, "boot_mismatch", "N/A", "N/A");
+          return;
+        }
+        const bool initial_active = bounded_ingress_->active_snapshot();
+        if (!initial_active) {
+          log_graph_commit_unavailable(*request, "inactive", "false", "N/A");
           return;
         }
         // Delivery and lookup stay on the graph owner; ingress eligibility is an atomic witness.
         const auto [state, cut] = graph_commit_history_.lookup(request->graph_commit_sequence);
         switch (state) {
           case CommitLookup::invalid:
+            log_graph_commit_unavailable(*request, "invalid_lookup", "true", "N/A");
             return;
           case CommitLookup::pending:
             response->status = ReadGraphCommit::Response::PENDING;
@@ -618,9 +646,12 @@ private:
           result.static_lidar_tf_receipt_valid = true;
         }
         fill_keyframes(cut->keyframes, result.keyframes);
-        if (bounded_ingress_->active_snapshot()) {
+        const bool final_active = bounded_ingress_->active_snapshot();
+        if (final_active) {
           result.status = ReadGraphCommit::Response::OK;
           *response = std::move(result);
+        } else {
+          log_graph_commit_unavailable(*request, "final_inactive", "true", "false");
         }
       });
   }
@@ -984,6 +1015,7 @@ private:
   rclcpp::Service<CaptureGraph>::SharedPtr capture_graph_;
   rclcpp::Service<ReadGraph>::SharedPtr read_graph_;
   rclcpp::Service<ReadGraphCommit>::SharedPtr read_graph_commit_;
+  bool graph_commit_unavailable_logged_{false};
   rclcpp::Service<ReadLoadedGraph>::SharedPtr candidate_receipt_;
   rclcpp::Service<MatchStationaryScan>::SharedPtr stationary_match_service_;
   bool stationary_match_spent_{false};
