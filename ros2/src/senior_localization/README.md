@@ -48,6 +48,28 @@ geo/heading/relocalization 原在 `src/senior_control/localization/`；navigatio
 不反向导入 senior_robot。沿用原单调/原始测量时间、map 帧、正且有界 covariance、来源/GID 资格，
 不从 TF、Home、轮速或初值推断地图定位，不把读 state 的时间当新 pose。
 
+### AMCL 晚加入订阅契约（2026-11-26）
+
+HardwareReference 的 pose 输入复用 native receipt 的 `qos="latched"`，请求 AMCL
+RELIABLE/TRANSIENT_LOCAL publisher 保存的最后一个样本（KeepLast 1）。原 `/map` 订阅不变；
+其它来源及 `reliable` 默认分支不变，没有新增传输进程、relay 或 pose 补发。
+仅 QoS compatible 不代表晚加入者已收到历史样本；graph GID 也不能当成逐消息 GID。
+保存样本仍须通过原 native MessageInfo/单 writer 认证、generation/sequence/clock、map serial
+及退休/回放保护，并按原 header stamp 映射测量时间；接收时不重盖新鲜时间。
+原 pose 0.5s 配置、hard_age、正且有界协方差和 warmer 条件均保留。
+
+真实观察中唯一 pose 的 x/y 方差为 0，且晚加入时可能已超龄，因此本次只修订阅历史请求，
+不宣称静态 pose、controller warm 或整 startup 已通过。Humble 1.1.20 官方
+[a097 AMCL 源码](https://github.com/ros-navigation/navigation2/blob/a097086719c88f781aa59788eca29ac6ca5e56db/nav2_amcl/src/amcl_node.cpp#L271)
+的参数初始化未填写 covariance；静止后 pose 发布依赖滤波更新，而非 TF 广播频率。
+数学零方差不等于消息损坏，但不满足这里既有的正方差准入。初始化不确定性和静止实际更新的
+后续行为需要原 owner 决策，本次没有修改初始化参数、调用更新服务或驱动运动。
+
+组件验证：现有 `ros2/tests/test_navigation_reference.py` 共 30 passed，其中新增 2 项执行真实
+Python subscribe/add 注册及 retained pose 的来源、身份和原样本截止检查，ROS 类型/配置 I/O
+使用替身，不启动 native/ROS。本机没有 rclpy；真实 latejoin DDS 交付、地图/pose 到达顺序、
+AMCL 输出资格和 warmer 2s 轮询仍待 VM 复验，不以组件测试代替。
+
 ## 依赖与未迁职责
 
 ament_cmake_python 安装 Python；CMake 安装真实 localization_node CLI，并收集包内原算法用例。

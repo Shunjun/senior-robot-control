@@ -59,7 +59,8 @@ class HardwareReference:
             self._on_pose,
             writer=self.config.pose_publisher,
             namespace=self.config.source_namespace,
-            qos="reliable",
+            # AMCL retains its last pose for late joiners; original stamp/TTL still apply.
+            qos="latched",
             invalidate=self._invalidate_pose,
         )
 

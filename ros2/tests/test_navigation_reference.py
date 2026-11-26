@@ -220,6 +220,127 @@ def test_standard_reference_pose_reply_satisfies_existing_home_ipc_schema(refere
     assert reply.sampled_at == pytest.approx(99.8)
 
 
+@pytest.fixture
+def subscribed_reference(monkeypatch):
+    """Real reference + native registration; only ROS types and pinned grid I/O replaced."""
+    from senior_localization import hardware_reference as module
+    from senior_sensor_ingress.native_receipt import NativeReceiptGroup
+
+    for package, name in (
+        ("geometry_msgs", "PoseWithCovarianceStamped"),
+        ("nav_msgs", "OccupancyGrid"),
+    ):
+        messages = ModuleType(f"{package}.msg")
+        setattr(messages, name, type(name, (), {"__module__": messages.__name__}))
+        monkeypatch.setitem(sys.modules, messages.__name__, messages)
+    clock = N(ns=100_000_000_000)
+    monkeypatch.setattr(module, "time", N(monotonic_ns=lambda: clock.ns))
+    grid = N(map_ref="map", grid_id="generation-a")
+    config = N(
+        grid=lambda: grid,
+        map_publisher="map_server",
+        pose_publisher="amcl",
+        source_namespace="/",
+        pose_topic="/amcl_pose",
+        max_age_s=0.5,
+        max_position_variance=0.2,
+        max_yaw_variance=0.2,
+    )
+    monkeypatch.setattr(module, "load_navigation_reference", lambda _: config)
+    gids = {"/map": b"map-a", "/amcl_pose": b"pose-a"}
+    node = N(
+        resolve_topic_name=lambda topic: topic,
+        get_logger=lambda: N(info=lambda _: None),
+        get_publishers_info_by_topic=lambda topic: [
+            N(
+                node_name="map_server" if topic == "/map" else "amcl",
+                node_namespace="/",
+                endpoint_gid=gids[topic],
+            )
+        ],
+    )
+    # Exercise subscribe/add without starting a ROS timer or native child.
+    group = NativeReceiptGroup.__new__(NativeReceiptGroup)
+    group.node, group.inputs, group._started_at = node, [], None
+    node._native_receipt_group = group
+    ref = module.HardwareReference(node, Path("/unused-pinned-reference.json"))
+    ref._map_gid = gids["/map"]
+    return N(ref=ref, clock=clock, group=group, gid=gids["/amcl_pose"])
+
+
+def test_amcl_latejoin_requests_retained_sample_on_existing_native_channel(subscribed_reference):
+    r = subscribed_reference
+    map_input, pose_input = r.group.inputs
+    assert (map_input.topic, map_input.qos, map_input.writer) == ("/map", "latched", "map_server")
+    assert (pose_input.topic, pose_input.qos, pose_input.writer, pose_input.namespace) == (
+        "/amcl_pose",
+        "latched",
+        "amcl",
+        "/",
+    )
+    assert pose_input.callback == r.ref._on_pose
+    assert pose_input.callback._senior_dds_info is True
+    assert pose_input.invalidate == r.ref._invalidate_pose
+
+
+def test_retained_pose_preserves_native_identity_and_original_age(subscribed_reference):
+    r = subscribed_reference
+    pose_input = r.group.inputs[1]
+    sample = map_sample(
+        stamp_ns=10_000_000_000,
+        received_ros_ns=10_200_000_000,
+        received_steady_ns=r.clock.ns,
+        clock_generation=3,
+    )
+    covariance = [0.0] * 36
+    covariance[0] = covariance[7] = covariance[35] = 0.1
+    msg = N(
+        header=N(stamp=N(sec=10, nanosec=0), frame_id="map"),
+        pose=N(
+            pose=N(position=N(x=1.0, y=0.0, z=0.0), orientation=N(x=0, y=0, z=0, w=1)),
+            covariance=covariance,
+        ),
+    )
+    info = dict(
+        publisher_gid=r.gid,
+        native_receipt_authenticated=True,
+        native_writer_name="amcl",
+        native_writer_namespace="/",
+        receipt_generation=2,
+        receipt_sequence=7,
+        sample_time=sample,
+    )
+    # Discovery alone cannot authenticate even a retained sample.
+    pose_input.callback(msg, {**info, "publisher_gid": b""})
+    assert r.ref.pose() is None
+    pose_input.callback(msg, info)
+    assert r.ref.pose() == Pose2D(1, 0, 0)
+    assert r.ref._pose_time is sample
+    assert r.ref._pose_identity == (b"pose-a", 2, 3)
+    assert r.ref._pose_sequence == 7
+    assert r.ref._pose_stamp_ns == 10_000_000_000
+    assert r.ref._pose_at == pytest.approx(99.8)
+    r.clock.ns += 300_000_000
+    assert r.ref.pose() is None  # 500ms from measurement, not callback receipt.
+    pose_input.callback(msg, {**info, "receipt_sequence": 8})
+    assert r.ref._pose_time is sample and r.ref._pose_sequence == 8
+    assert r.ref.pose() is None
+
+    # An unseen historical sample first delivered at the deadline is not stored.
+    pose_input.invalidate()
+    older = map_sample(
+        stamp_ns=10_100_000_000,
+        received_ros_ns=10_600_000_000,
+        received_steady_ns=r.clock.ns,
+        clock_generation=3,
+    )
+    msg.header.stamp.nanosec = 100_000_000
+    pose_input.callback(msg, {**info, "sample_time": older, "receipt_sequence": 9})
+    assert r.ref._pose is None and r.ref.pose() is None
+    assert r.ref._pose_time is sample
+    assert r.ref._pose_at == pytest.approx(99.8)
+
+
 def test_pose_diagnostics_preserve_receipt_deadline_and_bound_repetition(reference):
     r = reference
     message, info = r.message(received_ns=10_200_000_000)
