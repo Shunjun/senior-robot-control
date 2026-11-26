@@ -69,6 +69,13 @@ def assert_same_fixed(actual, expected):
     # O/F/U cell must agree. The original decoder validates each provenance itself.
 
 
+def _mapping_clients(socket):
+    from vehicle_core.ipc import IpcClient
+
+    # Match production composition: ordinary reads 1s, mapping lifecycle writes 30s.
+    return IpcClient(socket), IpcClient(socket, timeout_ms=30000.0)
+
+
 @native_only
 async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, monkeypatch):
     pytest.importorskip("rclpy", reason="unverified: ROS/colcon unavailable")
@@ -81,21 +88,21 @@ async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, mon
     from vehicle_manager.storage.bindings import Database
     from vehicle_manager.storage.domain_bindings import WaypointStore
 
-    from vehicle_core.ipc import IpcClient, IpcError
+    from vehicle_core.ipc import IpcError
 
     release = threading.Event()
     async with NativeFixture(tmp_path / "native") as harness:
-        wire = IpcClient(harness.socket)
+        client, mapping_wire = _mapping_clients(harness.socket)
         captures = []
 
         class ObservedClient:
             async def request(self, kind, **fields):
                 if kind != "map.backend.capture":
-                    return await wire.request(kind, **fields)
+                    return await mapping_wire.request(kind, **fields)
                 started = time.monotonic_ns()
                 harness.trace.emit("capture_rpc_begin", boot_id=fields.get("boot_id"))
                 try:
-                    return await wire.request(kind, **fields)
+                    return await mapping_wire.request(kind, **fields)
                 finally:
                     completed = time.monotonic_ns()
                     captures.append((started, completed))
@@ -106,7 +113,7 @@ async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, mon
                         timing_scope="RPC upper bound; native SaveToFile overlap unknown",
                     )
 
-        client = ObservedClient()
+        mapping_client = ObservedClient()
         managed = running = writer = None
         try:
             # Real map_server/AMCL/planner + real warmed DedicatedController first.
@@ -120,7 +127,7 @@ async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, mon
                 managed = await mapping_requests(
                     database,
                     client,
-                    client,
+                    mapping_client,
                     robot_id="shared-process-test",
                     root=tmp_path / "maps",
                     waypoints=points,
@@ -517,15 +524,17 @@ async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, mon
                     harness.trace.emit("post_exit_manager_rpc", reason=str(exc))
                 managed = None
         finally:
-            release.set()
-            if writer is not None:
-                await asyncio.gather(writer, return_exceptions=True)
-            if running is not None:
-                running.cancel()
-                await asyncio.gather(running, return_exceptions=True)
-            if managed is not None:
-                await managed.close()
-            await wire.close()
+            try:
+                release.set()
+                if writer is not None:
+                    await asyncio.gather(writer, return_exceptions=True)
+                if running is not None:
+                    running.cancel()
+                    await asyncio.gather(running, return_exceptions=True)
+                if managed is not None:
+                    await managed.close()
+            finally:
+                await asyncio.gather(client.close(), mapping_wire.close())
 
 
 @native_only
@@ -575,8 +584,6 @@ async def _run_system_reference(tmp_path, motion=None):
     from vehicle_manager.storage.bindings import Database
     from vehicle_manager.storage.domain_bindings import WaypointStore
 
-    from vehicle_core.ipc import IpcClient
-
     path = (Path(motion[1]).resolve() if motion else
             Path(os.environ["SENIOR_SHARED_LAYERS_REFERENCE_TRACE"]).resolve(strict=True))
     if motion and motion[0] == "record":
@@ -585,7 +592,7 @@ async def _run_system_reference(tmp_path, motion=None):
         path = path.resolve(strict=True)
     phase = "motion_reference" if motion else "stationary_reference"
     async with NativeFixture(tmp_path / "reference") as harness:
-        client = IpcClient(harness.socket)
+        client, mapping_client = _mapping_clients(harness.socket)
         managed = running = None
         try:
             await harness.wait(lambda: harness.static_ready(client), timeout=60)
@@ -595,7 +602,7 @@ async def _run_system_reference(tmp_path, motion=None):
                 managed = await mapping_requests(
                     database,
                     client,
-                    client,
+                    mapping_client,
                     robot_id="shared-process-test",
                     root=tmp_path / "maps",
                     waypoints=waypoints,
@@ -740,12 +747,111 @@ async def _run_system_reference(tmp_path, motion=None):
                 managed = None
                 assert not degraded, sorted(degraded)
         finally:
-            if running is not None:
-                running.cancel()
-                await asyncio.gather(running, return_exceptions=True)
-            if managed is not None:
-                await managed.close()
-            await client.close()
+            try:
+                if running is not None:
+                    running.cancel()
+                    await asyncio.gather(running, return_exceptions=True)
+                if managed is not None:
+                    await managed.close()
+            finally:
+                await asyncio.gather(client.close(), mapping_client.close())
+
+
+@pytest.mark.parametrize("entry", ["capture", "reference"])
+@pytest.mark.parametrize("failure", [RuntimeError, asyncio.CancelledError])
+async def test_mapping_transport_assembly_and_failure_cleanup(
+    tmp_path, monkeypatch, entry, failure
+):
+    """Stop at catalog assembly: no ROS lifecycle or readiness success is simulated."""
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    import shared_layers_native_fixture
+    import vehicle_manager.agent.mapping_catalog as catalog
+
+    from vehicle_core.ipc import IpcClient
+
+    clients, closed, exchanges, events = [], [], [], []
+    original_init, original_close = IpcClient.__init__, IpcClient.close
+
+    def track_init(self, *args, **kwargs):
+        original_init(self, *args, **kwargs)
+        clients.append(self)
+
+    async def track_close(self):
+        await original_close(self)
+        closed.append(self)
+
+    async def exchange(self, frame):
+        exchanges.append((self, json.loads(frame[4:])))
+        raise failure("transport boundary")
+
+    class AssemblyBoundary:
+        def __init__(self, root):
+            self.socket = tmp_path / "adapter.sock"
+            self.startup = SimpleNamespace(groups={})
+            self.parameters = tmp_path / "parameters.yaml"
+            self.trace = SimpleNamespace(
+                emit=lambda stage, **fields: events.append(dict(stage=stage, **fields))
+            )
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            pass
+
+        async def wait(self, predicate, **kwargs):
+            await predicate()
+
+        async def static_ready(self, client):
+            # Inspect only the selected state port; no readiness result is returned.
+            assert client is clients[0]
+            assert client._timeout == 1.0
+
+        async def consumer_parameters(self):
+            pass
+
+    async def inspect_assembly(database, reads, writes, **kwargs):
+        assert len(clients) == 2
+        assert reads is clients[0]
+        assert reads._timeout == 1.0
+        assert clients[1]._timeout == 30.0
+        assert reads is not writes
+        with pytest.raises(failure, match="transport boundary"):
+            await writes.request("map.backend.start")
+        assert exchanges[-1][0] is clients[1]
+        await writes.request("map.backend.capture", boot_id="observed-boot")
+
+    # Bypass only the import guard; the assembly boundary never enters ROS.
+    monkeypatch.setitem(sys.modules, "rclpy", ModuleType("rclpy"))
+    monkeypatch.setattr(shared_layers_native_fixture, "NativeFixture", AssemblyBoundary)
+    monkeypatch.setattr(catalog, "mapping_requests", inspect_assembly)
+    monkeypatch.setattr(IpcClient, "__init__", track_init)
+    monkeypatch.setattr(IpcClient, "close", track_close)
+    monkeypatch.setattr(IpcClient, "_exchange", exchange)
+    reference = tmp_path / "reference.jsonl"
+    reference.touch()
+    monkeypatch.setenv("SENIOR_SHARED_LAYERS_REFERENCE_TRACE", str(reference))
+    with pytest.raises(failure, match="transport boundary"):
+        if entry == "capture":
+            await test_owner_adapter_native_capture_restore_and_retirement(tmp_path, monkeypatch)
+        else:
+            await _run_system_reference(tmp_path)
+    assert len(clients) == 2
+    assert set(closed) == set(clients) and len(closed) == 2
+    assert exchanges[-1] == (
+        clients[1],
+        dict(v=1, type="map.backend.capture", boot_id="observed-boot"),
+    )
+    if entry == "capture":
+        assert [event["stage"] for event in events] == ["capture_rpc_begin", "capture_rpc_end"]
+        assert events[0]["boot_id"] == "observed-boot"
+        assert events[1]["started_ns"] <= events[1]["completed_ns"]
+        assert events[1]["timing_scope"] == ("RPC upper bound; native SaveToFile overlap unknown")
+    else:
+        assert not events
+
 
 
 def test_capture_index_pairs_original_sample_not_latest_sequence():
