@@ -497,8 +497,8 @@ async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, mon
                 harness.source.following = True
 
                 async def route_active():
-                    reply = await client.request("navigation.current")
-                    progress = reply.get("progress") or {}
+                    progress = await harness.route_status(client, plan)
+                    assert progress["status"] not in {"failed", "succeeded", "canceled", "missing"}
                     return progress.get("status") == "running" and progress
 
                 await harness.wait(route_active)
@@ -533,8 +533,8 @@ async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, mon
     not os.environ.get("SENIOR_SHARED_LAYERS_REFERENCE_TRACE"),
     reason="unverified: separate VM reference measurement dispatch required",
 )
-async def test_frozen_system_reference(tmp_path):
-    """One reference episode, no performance execution during the Bot1 implementation.
+async def test_frozen_stationary_system_reference(tmp_path):
+    """Stationary sensor/SLAM reference only; not a sustained MPPI or S16 workload.
 
     Bootstrap/postlude are outside the frozen 300-frame window. No parameter sweep,
     native sleeps or repeated save attempts. UI/loop/match/lock metrics remain N/A.
@@ -601,14 +601,18 @@ async def test_frozen_system_reference(tmp_path):
                     plan=plan,
                 )
                 assert reply.get("ok") and reply.get("accepted"), reply
-                # Frozen wheel/TF ignores output. A stalled original route may fail;
-                # that real failure is retained and never retried or called a success.
+                harness.trace.emit("route_accepted", reply=reply, active=False)
+                await harness.route_status(client, plan)
+                # Zero wheel/TF cannot satisfy the original .2m/10s progress checker.
+                # Observe the single execution's real terminal; never refill the window.
                 harness.source.begin_frozen(path)
-                harness.trace.emit("phase", name="reference_60s")
+                harness.trace.emit("phase", name="stationary_reference")
                 saved = False
                 degraded = set()
                 deadline = time.monotonic() + 70
                 while harness.source.tick < 1200:
+                    if harness.pump_task.done():
+                        await harness.pump_task
                     assert time.monotonic() < deadline, "frozen input delivery did not finish"
                     if harness.source.operations:
                         operation = harness.source.operations.popleft()
@@ -617,32 +621,34 @@ async def test_frozen_system_reference(tmp_path):
                             harness.trace.emit("phase", name="save")
                             await session._save(0)
                             saved = True
-                            harness.trace.emit("phase", name="reference_60s")
+                            harness.trace.emit("phase", name="stationary_reference")
                     state = await client.request("state.get")
                     harness.trace.emit("state", record=state)
                     if not state.get("navigation_ready"):
                         degraded.add(str(state.get("navigation_block_reason")))
-                    progress = (await client.request("navigation.current")).get("progress") or {}
-                    harness.trace.emit("route_state", record=progress)
-                    if progress.get("status") == "failed":
-                        degraded.add("original route failed under frozen stationary odom")
+                    progress = await harness.route_status(client, plan)
+                    if progress["status"] in {"failed", "missing", "cancel_pending", "canceled"}:
+                        degraded.add("original stationary route: " + progress["status"])
                     await asyncio.sleep(0.1)
+                progress = await harness.route_status(client, plan)
+                if progress["status"] in {"failed", "missing", "cancel_pending", "canceled"}:
+                    degraded.add("original stationary route: " + progress["status"])
                 assert saved and list(harness.source.operations) == ["restore_export"]
-                harness.trace.emit("reference_end", frames=300, degradations=sorted(degraded))
+                harness.trace.emit(
+                    "reference_end",
+                    frames=300,
+                    degradations=sorted(degraded),
+                    workload="stationary-only sensor/SLAM",
+                    full_load_success=False,
+                    sustained_mppi="N/A; original progress requires motion",
+                )
                 # Same explicit B postlude on both versions, outside measured raw window.
                 harness.source.frozen = None
                 harness.source.offset = 0.4
                 harness.source.operations.clear()
                 harness.trace.emit("phase", name="restore_export")
                 # Stop/cancel via original route owner before original catalog selection.
-                reply = await client.request(
-                    "navigation.task_cancel",
-                    execution_id=plan["execution_id"],
-                    task_epoch=1,
-                    effect_id="reference-cancel",
-                    effect_sequence=2,
-                )
-                assert reply.get("ok"), reply
+                await harness.cancel_route(client, plan)
                 await harness.wait(lambda: managed._runtime.backend.stopped())
                 selection = await managed._runtime.catalog.selection()
                 reply = await managed.request(
@@ -788,6 +794,7 @@ def test_coverage_matches_each_original_q_with_different_valid_sequences(tmp_pat
         )
         index.add("q", row)
         index.add("tf", row)
+        index.add("slot", row)
         rows.append(row)
     records = []
     for role, original in zip(("global", "local"), rows, strict=True):
@@ -808,6 +815,8 @@ def test_coverage_matches_each_original_q_with_different_valid_sequences(tmp_pat
     with TraceWriter(path, dict(run_id="portable", host_boot_id="host")) as trace:
         for row in rows:
             trace.emit("q", **row)
+            trace.emit("tf", **row)
+            trace.emit("slot", **row)
         for role, row in records:
             trace.emit(role, **row)
     summary = summarize_system_trace(path)
@@ -822,3 +831,337 @@ def test_trace_proc_identity_does_not_accept_reused_pid():
     original = process_identity(os.getpid())
     assert original is not None and alive(original)
     assert not alive(dict(original, starttime=original["starttime"] + 1))
+
+
+def test_real_coverage_schema_stays_in_contract_payload(tmp_path):
+    from dataclasses import asdict
+
+    from senior_mapping.shared_scan import CurrentLayerCoverage
+
+    from tools.shared_layers_system_trace import TraceWriter
+
+    coverage = asdict(CurrentLayerCoverage())
+    path = tmp_path / "coverage.jsonl"
+    with TraceWriter(path, {}) as trace:
+        # Exact original independent probe input and emission call.
+        trace.emit("global", **dict(coverage, deadline_ns=0))
+        with pytest.raises(ValueError, match="schema"):
+            trace.emit("local", **dict(coverage, schema=2))
+    row = json.loads(path.read_text().splitlines()[1])
+    assert row["schema"] == 1
+    assert row["record"] == dict(coverage, deadline_ns=0)
+
+
+def coverage_input(sequence, sample):
+    """Real production dataclass shape, no ROS or fabricated native result."""
+    from dataclasses import asdict
+
+    from senior_mapping.shared_scan import CostmapGeometry, CurrentLayerCoverage, ScanKey
+
+    key = ScanKey("backend", "bridge", "source", 1, 1, "aa", "bb", sequence)
+    geometry = CostmapGeometry(10, 10, 0.05, 0.0, 0.0)
+    return asdict(
+        CurrentLayerCoverage(
+            run_nonce="run",
+            host_boot_id="host",
+            owner_instance="owner",
+            role="global",
+            plugin_instance="plugin",
+            cycle=sequence,
+            status="ready",
+            key=key,
+            backend_boot="backend",
+            sample_steady_ns=sample,
+            scan_deadline_steady_ns=sample + 500_000_000,
+            cycle_started_steady_ns=sample + 100_000_000,
+            cycle_completed_steady_ns=sample + 200_000_000,
+            valid_until_steady_ns=sample + 500_000_000,
+            geometry=geometry,
+            master_geometry=geometry,
+            updated_bounds=(0.0, 0.0, 0.5, 0.5),
+            transform_valid=True,
+            cleanup_complete=True,
+        )
+    )
+
+
+def test_file_coverage_is_counted_in_its_reference_phase(tmp_path):
+    from tools.shared_layers_system_trace import summarize_system_trace
+
+    coverage = coverage_input(1, 1_000_000_000)
+    original = {name: coverage[name] for name in ("host_boot_id", "key", "sample_steady_ns")}
+    original.update(stamp_ns=1, deadline_ns=1_500_000_000)
+
+    def row(stage, t, **fields):
+        return dict(schema=1, stage=stage, steady_ns=t, **fields)
+
+    rows = [
+        row("metadata", 0),
+        row("q", 1_050_000_000, **original),
+        row("phase", 1_100_000_000, name="stationary_reference"),
+        row("file", 1_250_000_000, path="/private/global-coverage.json", record=coverage),
+        row("phase", 1_300_000_000, name="save"),
+        row("trace_end", 2_000_000_000, dropped=0),
+    ]
+    path = tmp_path / "file.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    result = summarize_system_trace(path)
+    assert result["sample_to_receive_or_cycle"]["global"]["max_ms"] == 200
+    phase = result["phase_capture_metrics"]["stationary_reference"]
+    assert phase["samples"]["global"] == 1 and phase["samples"]["local"] == 0
+    assert phase["latency"]["local"] == "N/A"
+    assert result["phase_capture_metrics"]["bootstrap"]["samples"]["global"] == 0
+    assert result["phase_capture_metrics"]["save"]["latency"]["global"] == "N/A"
+
+
+async def test_bounded_observe_reads_both_roles_after_bootstrap(tmp_path):
+    from shared_layers_native_fixture import NativeFixture
+
+    from tools.shared_layers_system_trace import TraceWriter
+
+    fixture = NativeFixture(tmp_path)
+    fixture.run_directory = tmp_path
+    tmp_path.chmod(0o700)
+    fixture._slot_record = lambda session: None  # Only the file/async-owner boundary is tested.
+    with TraceWriter(tmp_path / "trace.jsonl", {}) as trace:
+        fixture.trace = trace
+        from dataclasses import asdict
+
+        from senior_mapping.shared_scan import CurrentLayerCoverage
+
+        # Native queueCoverageLocked can publish before it has an authorization owner.
+        for role in ("global", "local"):
+            file = tmp_path / (role + "-coverage.json")
+            file.write_text(json.dumps(asdict(CurrentLayerCoverage(role=role))))
+            file.chmod(0o600)
+        await fixture.observe(None)
+        assert not fixture.coverage_rows
+        for cycle in (1, 3):
+            for role, seq in (("global", cycle), ("local", cycle + 1)):
+                record = coverage_input(seq, time.monotonic_ns() - 210_000_000)
+                record["role"] = role
+                q = dict(
+                    record,
+                    deadline_ns=record["scan_deadline_steady_ns"],
+                    stamp_ns=seq,
+                    map_generation=record["reference_generation"],
+                )
+                fixture.index.add("q", q)
+                fixture.index.add("tf", q)
+                fixture.index.add("slot", q)
+                file = tmp_path / (role + "-coverage.json")
+                file.write_text(json.dumps(record))
+                file.chmod(0o600)
+            await fixture.observe(None)
+        assert fixture.coverage_rows["global"]["key"]["sequence"] == 3
+        assert fixture.coverage_rows["local"]["key"]["sequence"] == 4
+    rows = [json.loads(line) for line in (tmp_path / "trace.jsonl").read_text().splitlines()]
+    assert [r["stage"] for r in rows].count("global") == 3
+    assert [r["stage"] for r in rows].count("local") == 3
+
+
+async def test_route_observer_keeps_real_terminal_after_current_disappears(tmp_path):
+    from senior_navigation.navigation_adapter import RouteService, _Route
+    from senior_robot.agent_adapter import AdapterCore
+    from shared_layers_native_fixture import NativeFixture
+
+    from tools.shared_layers_system_trace import TraceWriter
+    from vehicle_core.route_plan import RoutePlan
+
+    plan = RoutePlan(
+        execution_id="probe",
+        map_id="map",
+        reference_revision=1,
+        task_epoch=1,
+        effect_id="start",
+        action_ids=["goal"],
+        map_generation="generation",
+        poses=[[0.7, 0.0, 0.0]],
+    )
+    service = RouteService(None, qualified=lambda *args: False)
+    route = _Route(plan, asyncio.get_running_loop().create_future())
+    service._current = route
+    service._finish(route, "failed")
+    assert service.current is None
+    core = AdapterCore(
+        robot_id="probe",
+        submit=lambda *a, **k: None,
+        disconnect=lambda *a: None,
+        request_exit=lambda: None,
+        routes=service,
+    )
+
+    class Client:
+        async def request(self, kind, **fields):
+            assert kind == "navigation.task_status" and fields["execution_id"] == "probe"
+            return await core.handle(dict(type=kind, **fields))
+
+    fixture = NativeFixture(tmp_path)
+    with TraceWriter(tmp_path / "route.jsonl", {}) as trace:
+        fixture.trace = trace
+        assert (await fixture.route_status(Client(), plan.model_dump()))["status"] == "failed"
+        service._terminal.clear()
+        assert (await fixture.route_status(Client(), plan.model_dump()))["status"] == "missing"
+
+
+async def test_cancel_requires_original_effect_query_and_output_fence(tmp_path):
+    from senior_navigation.navigation_adapter import RouteService, _Route
+    from senior_robot.agent_adapter import AdapterCore
+    from shared_layers_native_fixture import NativeFixture
+
+    from tools.shared_layers_system_trace import TraceWriter
+    from vehicle_core.route_plan import RoutePlan
+
+    calls = []
+    retired = False
+    plan = RoutePlan(
+        execution_id="route",
+        map_id="map",
+        reference_revision=1,
+        task_epoch=1,
+        effect_id="start",
+        action_ids=["goal"],
+        map_generation="generation",
+        poses=[[0.7, 0.0, 0.0]],
+    )
+    service = RouteService(
+        None, qualified=lambda *args: False, source_retired=lambda execution: retired
+    )
+    route = _Route(plan, asyncio.get_running_loop().create_future())
+    service._finish(route, "failed")
+    core = AdapterCore(
+        robot_id="probe",
+        submit=lambda *a, **k: None,
+        disconnect=lambda *a: None,
+        request_exit=lambda: None,
+        routes=service,
+    )
+
+    class Client:
+        async def request(self, kind, **fields):
+            nonlocal retired
+            calls.append((kind, fields))
+            # The real wire owner must first report handled but unconfirmed.
+            # Advance only its injected gate predicate, never invent a wire ACK.
+            if len(calls) == 4:
+                retired = True
+            reply = await core.handle(dict(type=kind, **fields))
+            if len(calls) == 1:
+                assert reply["ok"] and reply["accepted"] is False
+                assert reply["controller_output_exited"] is False
+            return reply
+
+    fixture = NativeFixture(tmp_path)
+    with TraceWriter(tmp_path / "cancel.jsonl", {}) as trace:
+        fixture.trace = trace
+        await fixture.cancel_route(Client(), dict(execution_id="route", task_epoch=1))
+    assert [kind for kind, _ in calls] == ["navigation.task_cancel"] + [
+        "navigation.task_status"
+    ] * 4
+    assert calls[1][1]["effect_sequence"] == 2
+    assert calls[1][1]["effect_kind"] == "revoke"
+
+
+def test_resource_phase_cpu_and_cgroup_keep_original_observations(tmp_path):
+    from tools.shared_layers_system_trace import summarize_system_trace
+
+    ticks = os.sysconf("SC_CLK_TCK")
+    proc = dict(
+        pid=123, starttime=5, cpu_ticks=0, status="VmRSS:\t4 kB\n", smaps_rollup="Pss: 3 kB\n"
+    )
+
+    def row(stage, t, **fields):
+        return dict(schema=1, stage=stage, steady_ns=t, **fields)
+
+    rows = [
+        row("metadata", 0),
+        row("resource", 2_000_000_000, process=proc),
+        row("phase", 2_900_000_000, name="save"),
+        row("resource", 3_000_000_000, process=dict(proc, cpu_ticks=ticks)),
+        row(
+            "cgroup",
+            3_010_000_000,
+            cgroup="task",
+            values={"memory.current": "4096", "memory.peak": "8192", "cpu.stat": "usage_usec 200"},
+        ),
+        row("cgroup", 3_210_000_000, cgroup="task", values={"cpu.stat": "usage_usec 300"}),
+        row("trace_end", 4_000_000_000, dropped=0),
+    ]
+    path = tmp_path / "resources.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    result = summarize_system_trace(path)
+    assert "cpu_percent_one_core" not in result["phase_process_peaks"]["save"]["123:5"]
+    assert result["straddling_cpu_intervals"]["save"]["123:5"] == 1
+    assert result["process_peaks"]["123:5"]["cpu_percent_one_core"] == 100
+    assert result["cgroup_last"]["task"]["memory.peak"] == "8192"
+    assert result["cgroup_last_observed_ns"]["task"]["memory.peak"] == 3_010_000_000
+    assert result["cgroup_last_observed_ns"]["task"]["cpu.stat"] == 3_210_000_000
+
+
+def test_control_window_requires_running_and_excludes_terminal_or_stale_status(tmp_path):
+    from tools.shared_layers_system_trace import summarize_system_trace
+
+    def row(stage, t, **fields):
+        return dict(schema=1, stage=stage, steady_ns=t, **fields)
+
+    rows = [
+        row("metadata", 0),
+        row("phase", 1, name="stationary_reference"),
+        row("route_accepted", 2, active=False),
+        row("state", 3, record=dict(navigation_ready=True)),
+        row("control", 4, vx=0.1, wz=0),
+        row("route_state", 5, status="starting"),
+        row("controller_output", 6, vx=0.1, wz=0),
+        row("route_state", 7, status="running"),
+        row("controller_output", 8, vx=0.1, wz=0),
+        row("control", 9, vx=0.1, wz=0),
+        row("control", 1_000_000_000, vx=0.1, wz=0),
+        row("route_state", 1_000_000_001, status="failed"),
+        row("control", 1_000_000_002, vx=0.1, wz=0),
+        row("trace_end", 2_000_000_000, dropped=0),
+    ]
+    path = tmp_path / "control.jsonl"
+    path.write_text("".join(json.dumps(r) + "\n" for r in rows))
+    result = summarize_system_trace(path)["control_window_observations"]["stationary_reference"]
+    assert result["output_samples"]["final_cmd_vel"] == 4
+    assert result["output_samples"]["final_cmd_vel_nonzero_running_qualified"] == 1
+    assert result["nonzero_running_qualified_output_bounds"]["final_cmd_vel"] == dict(
+        first_observed_ns=9, last_observed_ns=9
+    )
+    assert result["first_terminal_observed_ns"] == 1_000_000_001
+    assert result["mppi_after_terminal"] == "N/A"
+
+
+def test_discovery_and_full_sample_reject_changed_incarnation(tmp_path, monkeypatch):
+    import tools.shared_layers_system_trace as module
+
+    real_identity = module.process_identity
+    root = dict(pid=100, starttime=1, ppid=1, cgroup="", cpu_ticks=0)
+    child = dict(pid=200, starttime=2, ppid=100, cgroup="", cpu_ticks=0)
+    reused = dict(child, starttime=3)
+    writer = module.TraceWriter(tmp_path / "unused", {})
+    sampler = module.ResourceSampler(writer)
+    sampler.owned[(100, 1)] = root
+    monkeypatch.setattr(Path, "iterdir", lambda path: iter((Path("/proc/100"), Path("/proc/200"))))
+    counts = {100: 0, 200: 0}
+
+    def identity(pid):
+        counts[pid] += 1
+        return root if pid == 100 else child if counts[pid] == 1 else reused
+
+    monkeypatch.setattr(module, "process_identity", identity)
+    sampler._discover()
+    assert set(sampler.owned) == {(100, 1)}
+    assert any(row["stage"] == "process_unconfirmed" for row in list(writer.queue.queue))
+    sampler.owned = {(200, 2): child}
+    reads = iter((child, reused))
+    monkeypatch.setattr(module, "process_identity", lambda pid: next(reads))
+    monkeypatch.setattr(Path, "read_text", lambda path: "VmRSS: 4 kB\n")
+    monkeypatch.setattr(Path, "read_bytes", lambda path: b"observed\0")
+    writer.queue.queue.clear()
+    sampler._resources(True)
+    assert not any(row["stage"] == "resource" for row in list(writer.queue.queue))
+    reads = iter((child, reused))
+    monkeypatch.setattr(module, "_process_stat", lambda pid: next(reads))
+    with pytest.raises(RuntimeError, match="identity unconfirmed"):
+        real_identity(200)

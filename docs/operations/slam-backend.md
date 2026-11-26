@@ -266,7 +266,7 @@ perception/robot/sensor_ingress/sim。先核真实导入、生成 typesupport、
 wz_max=.4，并记录 overlay/实际 descendant argv。不能用旧 S13 的 batch=2000 结果替代。
 build 使用 CMAKE_BUILD_PARALLEL_LEVEL/MAKEFLAGS 请求单编译；VM 须核实际编译并发，不能将此文本当构建证据。
 
-S16 reference 输入仅生成一次：
+Stationary-only sensor/SLAM reference 输入仅生成一次（不满足持续 MPPI/S16）：
 
 ```bash
 python3 ros2/tests/shared_layers_sensor_source.py \
@@ -276,7 +276,7 @@ python3 ros2/tests/shared_layers_sensor_source.py \
 # 冻结文件通过同一 schema/hash 后供两版各用一次，不重新抽样或以控制输出改输入。
 export SENIOR_SHARED_LAYERS_REFERENCE_TRACE="$task_run/reference-input.jsonl"
 python3 -m pytest -p pytest_asyncio.plugin \
-  ros2/tests/test_shared_layers_process.py::test_frozen_system_reference \
+  ros2/tests/test_shared_layers_process.py::test_frozen_stationary_system_reference \
   --basetemp "$task_run/reference-pytest" -vv -s
 # TRACE 指对应 pytest 私有目录内的 native/system-trace.jsonl 或 reference/system-trace.jsonl。
 python3 tools/occupancy_replay_benchmark.py --system-trace "$TRACE" --output "$task_run/summary.json"
@@ -290,12 +290,12 @@ MemAvailable≥6GiB；不要改用户/system slice，不在 Bot1 创建 scope。
 当前 pytest 原样当作旧版 runner；其原入口适配及缺项 N/A 仍需后续 VM 对照 owner 核实，
 本轮没有构建/取得可比旧版栈或补写旧版产品。
 
-reference 是 60s/300×5Hz×2048 的 stable A→motion→stable B，原曲面从3.0m到+0.4m，
+stationary-only reference 是 60s/300×5Hz×2048 的物体 stable A→motion→stable B，原曲面从3.0m到+0.4m，
 第150帧一次显式 save，第299帧结束后原 restore/export；20Hz wheel/TF 固定零轨迹，普通
 IMU 与原 mount 一致。参考 stamp 按冻结偏移与每次运行记录的 epoch 形成，不以晚到回调
 重新盖新鲜时间；实际 lateness 另记。bootstrap/postlude 不计入300帧，恢复 postlude 为同一 B。
-功能模式的原 SE2 则仅跟随最终 `/cmd_vel`。冻结模式虽发起同一原 route 作为控制负载，
-不跟随私有 MPPI Twist，也不伪造车动；若原 progress checker 因零 odom 正常报失败，测试
+功能模式的原 SE2 则仅跟随最终 `/cmd_vel`。冻结模式仅发起同一原 route 观察其生命周期，
+不跟随私有 MPPI Twist，也不伪造车动；零 odom 无法满足原 progress 的 .2m/10s，不能提供健康持续60s控制；真实失败时测试
 保留失败并 RED，不重复发任务、调超时或把记录成功当导航成功。restore/export/close
 可能按原 lifecycle 必须再 capture，不能把它们藏成“只有一次 native SaveToFile”。
 
@@ -330,10 +330,41 @@ assert os.sched_getaffinity(0) == {0, 1, 2, 3}
 available = next(int(s.split()[1]) for s in pathlib.Path("/proc/meminfo").read_text().splitlines() if s.startswith("MemAvailable:"))
 assert available >= 6 * 1024 * 1024
 print("task cgroup", root, "swap.max", root.joinpath("memory.swap.max").read_text().strip(), flush=True)
-os.execv(sys.executable, [sys.executable, "-m", "pytest", "-p", "pytest_asyncio.plugin", "ros2/tests/test_shared_layers_process.py::test_frozen_system_reference", "--basetemp", os.environ["TASK7_REFERENCE_BASETEMP"], "-vv", "-s"])
+os.execv(sys.executable, [sys.executable, "-m", "pytest", "-p", "pytest_asyncio.plugin", "ros2/tests/test_shared_layers_process.py::test_frozen_stationary_system_reference", "--basetemp", os.environ["TASK7_REFERENCE_BASETEMP"], "-vv", "-s"])
 '
 ```
 
 `TASK7_REFERENCE_BASETEMP` 指新的私有 pytest 目录，须在执行前显式 export；scope unit 名称也
 应为本次唯一且未占用名称。上面没有设置 MemorySwapMax，也没有把历史 scope 的25%/256MiB
 探针当作车辆规格。完整基线/UI 并发与最终 S16 仍由负责人另派，不能只跑这段就签通过。
+
+
+### 八项独立审核返修边界（2026-11-26）
+
+当前入口名称含 `stationary`，仅记录静止 sensor/SLAM；采满300帧不代表全负载成功，
+终态/idle之后MPPI指标N/A，真实failed/missing等仍保留并使pytest RED。运动参考仅有
+仓库外提案，未实现/运行；短原route不能承诺一次健康60s，T6 UI未集成仍不签完整S16。
+
+coverage contract的schema=1与trace envelope的schema=1独立：完整payload置于record，
+拒未知contract schema；解码兼容原file.record和原扁平helper。原async pump每100ms只读
+slot与两coverage，即使主loop在save/restore await仍观察；磁盘读在IO worker，capture
+索引只由asyncio owner访问，控制回调只入队。每角色各自按完整host/ScanKey回Q/TF/slot，
+不要求双角色同sequence，不续原sample+500ms。summary按bootstrap/stationary_reference/
+save/restore_export列样本数、缺角色N/A与缺Q/TF/slot；bootstrap不能冒充主窗60s。
+
+原navigation.task_status按execution_id/task_epoch观察starting/running/cancel_pending/
+failed/succeeded/canceled/missing，accepted不算active。原私有controller Twist与最终
+cmd_vel仅按窗口关联；输出只在最近200ms内确有running及ready观察时计入该窗口，查询
+阻塞/缺样时未知，不外推负载时长。终态/失格时刻是观察上界，分开保留。取消仅发一次，
+按同effect_id/sequence/epoch查询原revoke，须accepted/output_exited/fenced-through及
+原progress退出同时确认；ok本身不够，未确认失败留trace，不造退休file。
+
+跨phase的CPU差分标straddling，不算后阶段峰值；整次CPU区间仍保留。IO/上下文切换为
+同PID:starttime整次first-last差分，不称阶段计数。cgroup按字段保留最近实际值及时间，
+轻量cpu行不抹内存/events/peak/max；kernel memory.peak与sampled current max口径不同。
+RSS不相加异时峰值，PSS没有异时求和；task cgroup含producer/recorder，不称产品独占。
+
+发现后代时将原starttime及父身份带到register复核，full采样前后复核incarnation/cgroup；
+不符丢弃并记unconfirmed。stat/cgroup为同incarnation内的有界分次观察，不是原子内核
+快照。受控读取序列覆盖竞态分支，未在Linux现场制造PID复用；无按名字补认/进程控制。
+本次仅本child定向helper/summary/factory及必要旧回归；Humble/十包/真实链仍留后续VM。

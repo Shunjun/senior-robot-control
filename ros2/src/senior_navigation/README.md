@@ -336,3 +336,13 @@ PublishFiles 与 capture RPC 日志不能证明 native 慢 SaveToFile 已重叠�
 仍需 new startup run，harness 不代发 permit。冻结零 odom 对照保留原 route 的失败，不调
 progress checker 求通过；UI、物理几何、实车、原始历史对定位/loop影响及完整 S16 待后续
 准确集成版本验证。异常/未知结算保留 run 证据，不能当垃圾清除。
+
+
+Task7八项审核返修后，`test_frozen_stationary_system_reference`明确只作stationary
+sensor/SLAM参考，零odom不满足原progress .2m/10s，终态后的MPPI指标N/A，不能签持续
+60s控制或完整S16。单execution由原task_status按原epoch观察，accepted不作active；
+私有controller输出和最终cmd_vel只作新鲜running/ready窗口关联。取消须原effect查询、
+输出退出与fenced-through确认，未确认留trace。pump持续只读slot/双coverage，完整key
+各回原Q/TF/slot；trace envelope/contract schema独立且payload完整保留。summary分开
+bootstrap/主stationary窗/save/restore，缺角色/配对明确N/A；资源阶段跨界CPU不误归属，
+cgroup逐字段保留最近值/时刻。实际Humble/Launch、PID现场和T6 UI仍未验。

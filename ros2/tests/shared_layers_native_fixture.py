@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -50,7 +51,7 @@ class CaptureIndex:
     def coverage(self, row: dict):
         found = self.rows.get(identity(row), {})
         q = found.get("q")
-        if q is None or "tf" not in found:
+        if q is None or not all(stage in found for stage in ("tf", "slot")):
             return None
         if "map_id" in q:
             assert (row["map_id"], row["reference_revision"], row["reference_generation"]) == (
@@ -85,6 +86,28 @@ def capture_record(backend: str, host: str, capture, *, deadline: int) -> dict:
     )
 
 
+def read_coverage(path):
+    from senior_mapping.shared_scan import (
+        MAX_CONTRACT_BYTES,
+        CurrentLayerCoverage,
+        _contract_decode,
+        _unique_contract_pairs,
+    )
+
+    with path.open("rb") as stream:
+        raw = stream.read(MAX_CONTRACT_BYTES + 1)
+    if len(raw) > MAX_CONTRACT_BYTES:
+        raise ValueError("coverage observation exceeds contract bound")
+    row = json.loads(raw, object_pairs_hook=_unique_contract_pairs)
+    if type(row.get("schema")) is not int or row["schema"] != 1:
+        raise ValueError("unsupported coverage contract schema")
+    if row["status"] == "ready":
+        _contract_decode(row, CurrentLayerCoverage)
+    # Native pre-authorization invalid records legitimately have no owner yet.
+    # Observe their whole payload, but never turn them into ready evidence.
+    return row
+
+
 def load_module(name: str, path: Path):
     spec = importlib.util.spec_from_loader(name, SourceFileLoader(name, str(path)))
     if spec is None or spec.loader is None:
@@ -117,6 +140,9 @@ class NativeFixture:
         self.events = deque(maxlen=512)
         self.coverage_rows = {}
         self.coverage_versions = {}
+        self.observed_session = None
+        self.latest_slot = None
+        self.control_subscriptions = {}
         self.shutdown_done = False
 
     async def __aenter__(self):
@@ -364,6 +390,7 @@ class NativeFixture:
         from rclpy.time import Time
         from tf2_ros import TransformException
 
+        next_observation = next_topics = 0
         while True:
             self.executor.spin_once(timeout_sec=0)
             for key, row in tuple(self.pending_tf.items()):
@@ -378,9 +405,39 @@ class NativeFixture:
                 self.index.add("tf", row)
                 self.trace.emit("tf", **row)
                 del self.pending_tf[key]
+            now = time.monotonic_ns()
+            if now >= next_topics:
+                self._observe_controller_topics()
+                next_topics = now + 1_000_000_000
+            if self.observed_session is not None and now >= next_observation:
+                await self.observe(self.observed_session)
+                next_observation = now + 100_000_000
             await asyncio.sleep(0.005)
 
-    def observe_slot(self, session):
+    def _observe_controller_topics(self):
+        from geometry_msgs.msg import Twist
+
+        for topic, types in self.node.get_topic_names_and_types():
+            if (
+                re.fullmatch(r"/control/navigation/run_[0-9a-f]{32}/cmd_vel", topic)
+                and "geometry_msgs/msg/Twist" in types
+                and topic not in self.control_subscriptions
+            ):
+                assert len(self.control_subscriptions) < 16, "controller observation bound exceeded"
+                self.control_subscriptions[topic] = self.node.create_subscription(
+                    Twist,
+                    topic,
+                    lambda msg, topic=topic: self.trace.emit(
+                        "controller_output",
+                        topic=topic,
+                        vx=msg.linear.x,
+                        wz=msg.angular.z,
+                        association="observed authorization window only; no capture cause",
+                    ),
+                    10,
+                )
+
+    def _slot_record(self, session):
         from senior_mapping.shared_scan import read_latest_scan
 
         result = read_latest_scan(
@@ -398,32 +455,64 @@ class NativeFixture:
                 envelope.scan.capture,
                 deadline=envelope.valid_until_steady_ns,
             )
-            self.index.add("slot", row)
-            self.trace.emit("slot", **row)
             return row
         return None
 
-    async def ready(self, client, session):
-        row = self.observe_slot(session)
-        if not row or not self.index.pair(row, "q", "qualified", "tf", "slot"):
-            return None
+    def observe_slot(self, session):
+        row = self._slot_record(session)
+        if row:
+            self.index.add("slot", row)
+            self.trace.emit("slot", **row)
+        return row
+
+    async def observe(self, session):
+        """One bounded read pass; only this asyncio owner touches the capture index.
+
+        The IO workers return immutable records, never callbacks into the index.
+        The pump keeps observing during save/restore IPC awaits, beyond ready().
+        """
+        row = await asyncio.to_thread(self._slot_record, session)
+        self.latest_slot = row
+        if row:
+            self.index.add("slot", row)
+            self.trace.emit("slot", **row)
         for role in ("global", "local"):
             path = self.run_directory / (role + "-coverage.json")
             try:
-                coverage = json.loads(await asyncio.to_thread(path.read_text))
+                coverage = await asyncio.to_thread(read_coverage, path)
             except FileNotFoundError:
-                return None
+                self.coverage_rows.pop(role, None)
+                continue
+            assert coverage["role"] == role
+            if self.coverage_versions.get(role) != coverage:
+                self.trace.emit(role, record=coverage)
+                self.coverage_versions[role] = coverage
             if coverage.get("status") != "ready" or not coverage.get("key"):
-                return None
+                self.coverage_rows.pop(role, None)
+                continue
             original = self.index.coverage(coverage)
-            if original is None:
+            if original is not None and time.monotonic_ns() < coverage["valid_until_steady_ns"]:
+                self.coverage_rows[role] = coverage
+            else:
+                self.coverage_rows.pop(role, None)
+
+    async def ready(self, client, session):
+        self.observed_session = session
+        row = self.latest_slot
+        if (
+            not row
+            or row["key"]["backend_boot"] != session.graph.boot
+            or not self.index.pair(row, "q", "qualified", "tf", "slot")
+        ):
+            return None
+        for role in ("global", "local"):
+            coverage = self.coverage_rows.get(role)
+            if (
+                not coverage
+                or coverage["key"]["backend_boot"] != session.graph.boot
+                or time.monotonic_ns() >= coverage["valid_until_steady_ns"]
+            ):
                 return None
-            if time.monotonic_ns() >= coverage["valid_until_steady_ns"]:
-                return None
-            self.coverage_rows[role] = coverage
-            if self.coverage_versions.get(role) != coverage["cycle"]:
-                self.trace.emit(role, **dict(coverage, deadline_ns=original["deadline_ns"]))
-                self.coverage_versions[role] = coverage["cycle"]
         state = await client.request("state.get")
         self.trace.emit("state", record=state)
         if state.get("ok") and state.get("navigation_ready"):
@@ -431,6 +520,73 @@ class NativeFixture:
             assert self.node.count_publishers("/senior/mapping/current_obstacles") == 1
             return state
         return None
+
+    async def route_status(self, client, plan):
+        reply = await client.request(
+            "navigation.task_status",
+            execution_id=plan["execution_id"],
+            task_epoch=plan["task_epoch"],
+        )
+        progress = reply.get("progress")
+        status = progress.get("status") if progress else "missing"
+        self.trace.emit(
+            "route_state",
+            record=progress,
+            status=status,
+            reply=reply,
+            execution_id=plan["execution_id"],
+            task_epoch=plan["task_epoch"],
+        )
+        assert reply.get("ok") and reply.get("execution_id") == plan["execution_id"], reply
+        assert status in {
+            "starting",
+            "running",
+            "cancel_pending",
+            "failed",
+            "succeeded",
+            "canceled",
+            "missing",
+        }, reply
+        if progress:
+            assert progress["execution_id"] == plan["execution_id"], reply
+            assert progress["task_epoch"] == plan["task_epoch"], reply
+        return progress or dict(status="missing")
+
+    async def cancel_route(self, client, plan):
+        fields = dict(
+            execution_id=plan["execution_id"],
+            task_epoch=plan["task_epoch"],
+            effect_id="reference-cancel",
+            effect_sequence=2,
+        )
+
+        async def request(kind):
+            reply = await client.request(
+                kind, **fields, **({"effect_kind": "revoke"} if kind.endswith("status") else {})
+            )
+            self.trace.emit("route_cancel", request_kind=kind, request=fields, reply=reply)
+            assert reply.get("ok") and reply.get("lifecycle_version") == 2, reply
+            assert all(
+                reply.get(k) == fields[k] for k in ("execution_id", "task_epoch", "effect_id")
+            ), reply
+            return reply
+
+        await request("navigation.task_cancel")  # ok only means the request was handled.
+
+        async def confirmed():
+            reply = await request("navigation.task_status")
+            progress = await self.route_status(client, plan)
+            epoch = plan["task_epoch"]
+            return (
+                reply.get("accepted") is True
+                and reply.get("controller_output_exited") is True
+                and (reply.get("sources_fenced_through_epoch") or 0) >= epoch
+                and progress.get("controller_output_exited") is True
+                and (progress.get("sources_fenced_through_epoch") or 0) >= epoch
+                and progress["status"] in {"failed", "succeeded", "canceled"}
+            )
+
+        await self.wait(confirmed)
 
     async def static_ready(self, client):
         from lifecycle_msgs.msg import State
@@ -517,6 +673,7 @@ class NativeFixture:
         if self.shutdown_done:
             return
         self.shutdown_done = True
+        self.observed_session = None
         await asyncio.to_thread(self.resources._discover)
         obligations = self.resources.snapshot()
         self.trace.emit("shutdown_begin", owned=list(obligations))

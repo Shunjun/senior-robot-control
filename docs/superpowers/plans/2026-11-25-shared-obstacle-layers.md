@@ -421,3 +421,21 @@ A=新增，M=修改，D=删除；每行一个去重路径，任务列即逐任�
 复核重点均来自上述原输入：Q/slot 异步错帧、同源两 coverage 可不同 sequence、raw 旧 A 不复活、无 scan 的退休、R4 未确认退出必须保留证据。native global 内部重启需新 startup run 的既有边界保留，不在 harness 代签 permit。
 
 实际本机记录：原始异步触发（Q1/slot2 截止不同）在 portable helper 固定，按完整 key 配对后通过；相关 portable 191 passed/4 skipped，最终 factory 定向33 passed/2 skipped。原第一次回归的2项 perception 子进程 import 失败由 runner 未继承本 child PYTHONPATH 引起，未改产品/断言，显式同 child 路径后全组通过。factory 静态对比确认原 startup 类、参数生成与展开动作 AST 一致，不执行抽出的 AST，不当真实 Launch 证据。Bot1 无 ROS/colcon，两个新增真实入口均未执行，完整 S05/S07/S09/R4/S16/十包/物理/UI 仍待 VM；最终提交/精确 diff/行数与命令证据放指定仓库外交付报告。
+
+
+### Task7 八项独立审核定向返修（2026-11-26，a612588 child）
+
+本轮严格A0/M6/D0：仅原fixture、process test、system trace及本计划/operations/navigation
+README，不改factory默认、producer、原生产owner/T6三接点、wire/config/build/lock/依赖。
+R1完整coverage payload与envelope schema分界；R2把bounded只读观察从ready拆到原pump，
+IO worker不碰索引，主窗口/save/restore持续配完整key，file.record正确解码且分phase缺数可见；
+R3按原task_status/epoch核同一执行，私有/最终Twist窗口与终态/失格观察分开；R5同一
+cancel effect/sequence查询原accepted/输出退出/fence与progress，不把ok当退休；R6跨阶段
+CPU差分straddling且保留整次区间；R7逐字段cgroup最近值/时刻与各内存口径；R8发现时
+绑定原starttime/父身份，register及full读后复核，受控读取回归不冒称现场PID复用。
+
+R4当前入口改名stationary-only sensor/SLAM：固定零odom无法满足原.2m/10s保护，300帧
+不是全负载成功，真实failed/missing保留RED，idle/终态后MPPI N/A。运动参考仅仓库外
+提案，不改安全/资格/progress、不重复发route、不实现/运行新负载；短原route的可得active
+窗口须负责人选择，不能承诺一次健康60s。以上是源码/定向helper修正，非native、整T7、
+性能或完整S16通过；Humble VM、同输入基线及T6集成仍由负责人亲阅/独立复核后另派。
