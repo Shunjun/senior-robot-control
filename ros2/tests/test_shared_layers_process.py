@@ -340,6 +340,10 @@ async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, mon
                 resumed = managed._runtime._session
                 fresh = resumed.active.fixed_snapshot(resumed.source)
                 assert fresh.watermark.backend_boot != exported.watermark.backend_boot
+                assert (
+                    fresh.watermark.reference_generation != exported.watermark.reference_generation
+                )
+                assert fresh.watermark.source.raw_gid != exported.watermark.source.raw_gid
                 assert fresh.watermark.evidence_key is None
                 assert_same_fixed(fresh, exported)
                 assert hashlib.sha256(destination.read_bytes()).hexdigest() == archive_hash
@@ -470,6 +474,7 @@ async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, mon
                 active = managed._runtime._session
                 state = await harness.wait(lambda: harness.ready(client, active), timeout=60)
                 assert active.graph.boot != resumed.graph.boot
+                assert active.active.map_generation != resumed.active.map_generation
                 assert active._reference_floor_ns > old_deadline
                 # R4 normal active route through original agent/RouteService/DedicatedController.
                 plan = dict(
