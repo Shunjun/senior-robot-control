@@ -112,6 +112,7 @@ export const SNAPSHOT_FIELDS = [
   "robot_pose",
   "navigation_block_reason",
   "scan_points",
+  "scan_layer",
 ] as const;
 
 export const RESPONSE_STATUSES = [
@@ -260,6 +261,23 @@ export interface SnapshotPayload {
   //Compatible: older vehicles do not report the navigation blocker.
   navigation_block_reason?: string | null;
   scan_points?: MapPoint[];
+  //Compatible: legacy points alone cannot establish a qualified current scan.
+  scan_layer?: ScanLayer;
+}
+
+export interface ScanLayer {
+  map_ref: MapRef;
+  map_generation: string;
+  backend_boot: string;
+  source_id: string;
+  sequence: number;
+  sampled_at: number;
+  expires_at: number;
+  remaining_s: number;
+  hit_count: number;
+  preview_count: number;
+  display_mode: "preview";
+  valid: boolean;
 }
 
 export interface ResponsePayload {
@@ -290,6 +308,8 @@ export type InboundEnvelope = SnapshotEnvelope | ResponseEnvelope;
  */
 export interface RobotSnapshot extends SnapshotPayload {
   robot_id: string;
+  /** Client-owned transport evidence; never decoded from a wire payload. */
+  display_order?: { client: object; generation: number; epoch: number; sequence: number };
 }
 
 /** One row of `GET /api/robots`. */
@@ -381,6 +401,29 @@ function parseScanPoints(value: unknown): MapPoint[] | null {
   return points;
 }
 
+function parseScanLayer(value: unknown, pointCount: number): ScanLayer | null | undefined {
+  //Compatible: older producers omit the qualified display observation.
+  if (value === undefined || value === null) return undefined;
+  if (!isRecord(value)) return null;
+  const keys = ["map_ref", "map_generation", "backend_boot", "source_id", "sequence",
+    "sampled_at", "expires_at", "remaining_s", "hit_count", "preview_count", "display_mode", "valid"];
+  const ref = parseMapRef(value["map_ref"]);
+  const sample = value["sampled_at"], expiry = value["expires_at"], remaining = value["remaining_s"];
+  const sequence = value["sequence"], hits = value["hit_count"], preview = value["preview_count"];
+  if (Object.keys(value).some(key => !keys.includes(key)) || ref == null ||
+      !Number.isSafeInteger(ref.reference_revision) ||
+      !isText(value["map_generation"], 128) || !isText(value["backend_boot"], 128) ||
+      typeof value["source_id"] !== "string" || !/^[0-9a-f]{64}$/.test(value["source_id"]) ||
+      !isCount(sequence) || !Number.isSafeInteger(sequence) ||
+      !isFiniteNumber(sample) || sample < 0 || !isFiniteNumber(expiry) ||
+      expiry < sample || expiry - sample > .5 ||
+      !isFiniteNumber(remaining) || remaining < 0 || remaining > .5 ||
+      !isCount(hits) || hits > 2048 || !isCount(preview) || preview > 96 ||
+      preview > hits || preview !== pointCount || value["display_mode"] !== "preview" ||
+      typeof value["valid"] !== "boolean" || (!value["valid"] && preview !== 0)) return null;
+  return value as unknown as ScanLayer;
+}
+
 function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   if (!isRecord(value)) return null;
   const mapRef = parseMapRef(value["map_ref"]);
@@ -405,6 +448,8 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
   const robotPose = parseRobotPose(value["robot_pose"]);
   const scanPoints = parseScanPoints(value["scan_points"]);
   if (robotPose === undefined || scanPoints === null) return null;
+  const scanLayer = parseScanLayer(value["scan_layer"], scanPoints.length);
+  if (scanLayer === null) return null;
   const tasks = parseTasks(value["tasks"]);
   if (tasks === null) return null;
   const homeRevision = value["home_revision"] === undefined ? 0 : value["home_revision"];
@@ -453,6 +498,7 @@ function parseSnapshotPayload(value: unknown): SnapshotPayload | null {
     robot_pose: robotPose,
     navigation_block_reason: navigationBlockReason,
     scan_points: scanPoints,
+    ...(scanLayer === undefined ? {} : { scan_layer: scanLayer }),
   };
 }
 
@@ -552,6 +598,7 @@ export function parseInbound(raw: unknown): InboundEnvelope | null {
     expires_at: data["expires_at"],
   };
   if (data["type"] === "snapshot") {
+    if (!Number.isSafeInteger(base.seq)) return null;
     const payload = parseSnapshotPayload(data["payload"]);
     return payload === null ? null : { ...base, type: "snapshot", payload };
   }

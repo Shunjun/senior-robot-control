@@ -10,6 +10,7 @@ from senior_contracts.wire import (
     MapRefPayload,
     PerformancePayload,
     RobotPosePayload,
+    ScanLayerPayload,
     ScanPointPayload,
     SnapshotEnvelope,
     SnapshotPayload,
@@ -49,6 +50,7 @@ class LiveState:
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = None
     scan_points: tuple[ScanPointPayload, ...] = ()
+    scan_layer: ScanLayerPayload | None = None
     vehicle_ui: dict[str, Any] | None = None
     manual_controller_generation: int | None = None
     manual_agent_epoch: int | None = None
@@ -87,6 +89,7 @@ class RobotSnapshot:
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = None
     scan_points: tuple[ScanPointPayload, ...] = ()
+    scan_layer: ScanLayerPayload | None = None
     vehicle_ui: dict[str, Any] | None = None
     manual_controller_generation: int | None = None
     manual_agent_epoch: int | None = None
@@ -94,6 +97,8 @@ class RobotSnapshot:
     map_grid_id: str | None = None
     performance: PerformancePayload | None = None
     mapping_protocol_version: Literal[1, 2] | None = None
+    # //Compatible: local/legacy snapshots have no ordered uplink publication.
+    publication_sequence: int = 0
 
 
 def _map_payload(map_ref: MapRef | None) -> MapRefPayload | None:
@@ -176,6 +181,14 @@ def snapshot_envelope(
             and snapshot.localized
             and snapshot.map_generation is not None
             else None,
+            scan_layer=(
+                snapshot.scan_layer
+                if not stale
+                and snapshot.connected
+                and snapshot.localized
+                and snapshot.map_generation is not None
+                else None
+            ),
             scan_points=list(snapshot.scan_points)
             if not stale
             and snapshot.connected
@@ -229,6 +242,7 @@ def snapshot_from_envelope(
         robot_pose=payload.robot_pose,
         navigation_block_reason=payload.navigation_block_reason,
         scan_points=tuple(payload.scan_points),
+        scan_layer=payload.scan_layer,
         vehicle_ui=payload.vehicle_ui,
         manual_controller_generation=payload.manual_controller_generation,
         manual_agent_epoch=payload.manual_agent_epoch,

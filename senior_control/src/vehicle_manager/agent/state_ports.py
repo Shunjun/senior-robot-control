@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from senior_contracts.navigation import RouteProgress
-from senior_contracts.wire import RobotPosePayload, ScanPointPayload
+from senior_contracts.wire import RobotPosePayload, ScanLayerPayload, ScanPointPayload
 
 from vehicle_manager.tasks.executor import TaskExecutor
 from vehicle_manager.tasks.models import ExecutionContext
@@ -124,6 +124,8 @@ class StateReading(Protocol):
     def robot_pose(self) -> RobotPosePayload | None: ...
     @property
     def navigation_block_reason(self) -> str | None: ...
+    @property
+    def scan_layer(self) -> ScanLayerPayload | None: ...
     @property
     def scan_points(self) -> tuple[ScanPointPayload, ...]: ...
     @property

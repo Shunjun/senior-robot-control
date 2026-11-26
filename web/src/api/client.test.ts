@@ -358,3 +358,35 @@ it('puts the calibration request id in the real envelope and validates its priva
     expect(socket.sent.filter(frame => frame.type === 'learning.start')).toHaveLength(1);
   } finally { client.disconnect(); }
 });
+
+it('fences snapshot publication order before projecting trusted scan metadata', async () => {
+  const { client, socket } = await connected();
+  let latest: import('./protocol').RobotSnapshot | undefined;
+  const unsubscribe = client.subscribe(value => { latest = value; });
+  const ordered = (seq: number, generation: string) => ({
+    ...snapshot(), seq, payload: { ...snapshot().payload,
+      map_ref: { map_id: 'map', reference_revision: 1 }, map_generation: generation,
+      scan_points: [{ x: 1, y: 2 }], scan_layer: {
+        map_ref: { map_id: 'map', reference_revision: 1 }, map_generation: generation,
+        backend_boot: 'boot', source_id: 'a'.repeat(64), sequence: 1,
+        sampled_at: 10, expires_at: 10.5, remaining_s: .4,
+        hit_count: 1, preview_count: 1, display_mode: 'preview', valid: true,
+      } },
+  });
+  try {
+    const old = ordered(2, 'R1');
+    socket.receive(old);
+    socket.receive(ordered(3, 'R2'));
+    socket.receive(old);
+    expect(latest?.map_generation).toBe('R2');
+    expect(latest?.display_order).toMatchObject({ epoch: 3, sequence: 3 });
+    socket.receive({ ...snapshot(), seq: 0 });
+    expect(latest?.map_generation).toBe('R2');
+    socket.receive({ v: 1, type: 'control.connection', robot_id: 'robot', connection_epoch: 4 });
+    expect(latest?.scan_layer?.valid).toBe(false);
+    socket.receive({ ...ordered(1, 'R3'), connection_epoch: 4 });
+    expect(latest?.map_generation).toBe('R3');
+    socket.receive(ordered(100, 'R1'));
+    expect(latest?.map_generation).toBe('R3');
+  } finally { unsubscribe(); client.disconnect(); }
+});

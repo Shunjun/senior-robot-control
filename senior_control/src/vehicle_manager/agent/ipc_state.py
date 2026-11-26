@@ -65,6 +65,8 @@ class IpcState(Generic[StateT]):
                 map_grid_id=state.map_grid_id,
                 robot_pose=state.robot_pose if geometry_live else None,
                 scan_points=tuple(state.scan_points) if geometry_live else (),
+                scan_layer=state.scan_layer if geometry_live else None,
+                current_coverage_reason=state.current_coverage_reason,
                 navigation_block_reason=state.navigation_block_reason,
                 runtime_observation=state.runtime_observation,
                 motion_runtime=state.motion_runtime,

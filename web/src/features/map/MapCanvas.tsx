@@ -1007,8 +1007,8 @@ export function MapCanvas({
             <Marker kind="draft" pose={preview} view={view} />
           )}
           {!stale && scanPoints.length > 0 && (
-            <g aria-label="实时激光命中点" className={ui.scanHits}>
-              <title>实时激光命中点 · 独立于静态地图</title>
+            <g aria-label="当前扫描预览" className={ui.scanHits}>
+              <title>当前扫描预览</title>
               {scanPoints.map((point, index) => {
                 const at = worldToScreen(view, point);
                 return <circle key={index} cx={at.x} cy={at.y} r={3} />;
@@ -1026,7 +1026,7 @@ export function MapCanvas({
       </p>
 
       {!stale && scanPoints.length > 0 && (
-        <p className={ui.scanLegend}>实时激光命中点 · 独立于静态地图</p>
+        <p className={ui.scanLegend}>当前扫描预览</p>
       )}
       {taskRoute.length > 0 && (
         <p className={ui.hint}>任务航点顺序连线 · 不代表车辆实际避障路径</p>

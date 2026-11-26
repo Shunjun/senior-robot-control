@@ -3,9 +3,9 @@
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
 from senior_contracts.navigation import RouteProgress
-from senior_contracts.wire import RobotPosePayload, ScanPointPayload, ShortText
+from senior_contracts.wire import RobotPosePayload, ScanLayerPayload, ScanPointPayload, ShortText
 
 from vehicle_core.runtime_state import MotionRuntimeState, RuntimeObservation
 from vehicle_core.values import MapRef
@@ -27,6 +27,8 @@ class RuntimeState:
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = None
     scan_points: tuple[ScanPointPayload, ...] = ()
+    scan_layer: ScanLayerPayload | None = None
+    current_coverage_reason: str | None = None
     # //Compatible: older IPC omits observation metadata.
     runtime_observation: RuntimeObservation | None = None
     motion_runtime: MotionRuntimeState | None = None
@@ -88,11 +90,23 @@ class StateReply(BaseModel):
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = Field(default=None, max_length=256)
     scan_points: list[ScanPointPayload] = Field(default_factory=list, max_length=96)
+    # //Compatible: old adapters have no qualified display observation or internal reason.
+    scan_layer: ScanLayerPayload | None = None
+    current_coverage_reason: ShortText | None = None
+
+    @model_validator(mode="after")
+    def scan_count(self) -> "StateReply":
+        if self.scan_layer is not None and self.scan_layer.preview_count != len(self.scan_points):
+            raise ValueError("scan preview count mismatch")
+        return self
 
     @model_serializer(mode="wrap")
     def serialize(self, handler: Any) -> dict[str, Any]:
         result: dict[str, Any] = handler(self)
         # //Compatible: preserve the omitted-field wire shape of legacy replies.
+        for optional in ("scan_layer", "current_coverage_reason"):
+            if getattr(self, optional) is None:
+                result.pop(optional, None)
         if self.map_grid_id is None:
             result.pop("map_grid_id", None)
         return result
