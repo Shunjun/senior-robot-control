@@ -539,6 +539,34 @@ async def test_frozen_stationary_system_reference(tmp_path):
     Bootstrap/postlude are outside the frozen 300-frame window. No parameter sweep,
     native sleeps or repeated save attempts. UI/loop/match/lock metrics remain N/A.
     """
+    await _run_system_reference(tmp_path)
+
+
+@native_only
+@pytest.mark.skipif(
+    not (os.environ.get("SENIOR_SHARED_LAYERS_MOTION_RECORD")
+         or os.environ.get("SENIOR_SHARED_LAYERS_MOTION_REPLAY")),
+    reason="unverified: separately dispatched VM motion recording/replay required",
+)
+async def test_motion_system_reference(tmp_path):
+    """A: one original 0.7m execution, observed short active window, 60s sensors."""
+    record = os.environ.get("SENIOR_SHARED_LAYERS_MOTION_RECORD")
+    replay = os.environ.get("SENIOR_SHARED_LAYERS_MOTION_REPLAY")
+    assert bool(record) != bool(replay), "choose exactly one ordinary input mode"
+    await _run_system_reference(
+        tmp_path, motion=("record" if record else "replay", record or replay)
+    )
+
+
+def _reference_save_due(source):
+    # Leave the final restore/export marker queued until the input window is complete.
+    if source.operations and source.operations[0] == "save":
+        source.operations.popleft()
+        return True
+    return False
+
+
+async def _run_system_reference(tmp_path, motion=None):
     pytest.importorskip("rclpy", reason="unverified: ROS/colcon unavailable")
     from senior_mapping.archive import STABLE_LAYER, MapArchive
     from senior_mapping.references import load_snapshot
@@ -549,7 +577,13 @@ async def test_frozen_stationary_system_reference(tmp_path):
 
     from vehicle_core.ipc import IpcClient
 
-    path = Path(os.environ["SENIOR_SHARED_LAYERS_REFERENCE_TRACE"]).resolve(strict=True)
+    path = (Path(motion[1]).resolve() if motion else
+            Path(os.environ["SENIOR_SHARED_LAYERS_REFERENCE_TRACE"]).resolve(strict=True))
+    if motion and motion[0] == "record":
+        assert not path.exists(), "recording must use a new path; keep stationary archive intact"
+    else:
+        path = path.resolve(strict=True)
+    phase = "motion_reference" if motion else "stationary_reference"
     async with NativeFixture(tmp_path / "reference") as harness:
         client = IpcClient(harness.socket)
         managed = running = None
@@ -594,6 +628,16 @@ async def test_frozen_stationary_system_reference(tmp_path):
                     map_generation=state["map_generation"],
                     poses=[[0.7, 0.0, 0.0]],
                 )
+                if motion:
+                    if motion[0] == "record":
+                        harness.source.begin_recording(path, dict(
+                            harness.input_metadata, plan=plan,
+                            parameters_sha256=hashlib.sha256(
+                                harness.parameters.read_bytes()).hexdigest(),
+                        ))
+                    else:
+                        harness.source.begin_frozen(path)
+                        assert harness.source.motion_ticks is not None, "motion schema2 required"
                 reply = await client.request(
                     "navigation.task_start",
                     execution_id=plan["execution_id"],
@@ -603,10 +647,11 @@ async def test_frozen_stationary_system_reference(tmp_path):
                 assert reply.get("ok") and reply.get("accepted"), reply
                 harness.trace.emit("route_accepted", reply=reply, active=False)
                 await harness.route_status(client, plan)
-                # Zero wheel/TF cannot satisfy the original .2m/10s progress checker.
                 # Observe the single execution's real terminal; never refill the window.
-                harness.source.begin_frozen(path)
-                harness.trace.emit("phase", name="stationary_reference")
+                if not motion:
+                    # Zero wheel/TF cannot satisfy the original .2m/10s progress checker.
+                    harness.source.begin_frozen(path)
+                harness.trace.emit("phase", name=phase)
                 saved = False
                 degraded = set()
                 deadline = time.monotonic() + 70
@@ -614,36 +659,45 @@ async def test_frozen_stationary_system_reference(tmp_path):
                     if harness.pump_task.done():
                         await harness.pump_task
                     assert time.monotonic() < deadline, "frozen input delivery did not finish"
-                    if harness.source.operations:
-                        operation = harness.source.operations.popleft()
-                        if operation == "save":
-                            assert not saved
-                            harness.trace.emit("phase", name="save")
-                            await session._save(0)
-                            saved = True
-                            harness.trace.emit("phase", name="stationary_reference")
+                    if _reference_save_due(harness.source):
+                        assert not saved
+                        harness.trace.emit("phase", name="save")
+                        await session._save(0)
+                        saved = True
+                        harness.trace.emit("phase", name=phase)
                     state = await client.request("state.get")
                     harness.trace.emit("state", record=state)
                     if not state.get("navigation_ready"):
                         degraded.add(str(state.get("navigation_block_reason")))
                     progress = await harness.route_status(client, plan)
                     if progress["status"] in {"failed", "missing", "cancel_pending", "canceled"}:
-                        degraded.add("original stationary route: " + progress["status"])
+                        degraded.add(phase + " original route: " + progress["status"])
                     await asyncio.sleep(0.1)
                 progress = await harness.route_status(client, plan)
                 if progress["status"] in {"failed", "missing", "cancel_pending", "canceled"}:
-                    degraded.add("original stationary route: " + progress["status"])
+                    degraded.add(phase + " original route: " + progress["status"])
                 assert saved and list(harness.source.operations) == ["restore_export"]
+                if motion and motion[0] == "record":
+                    harness.source.finish_recording()
                 harness.trace.emit(
                     "reference_end",
                     frames=300,
                     degradations=sorted(degraded),
-                    workload="stationary-only sensor/SLAM",
+                    workload="motion A short-route + sensor/SLAM" if motion else
+                             "stationary-only sensor/SLAM",
+                    active_window="observed per-run only; intersect both versions externally",
+                    save_active_overlap="unverified; actual overlap required, otherwise missing",
+                    final_route=progress,
                     full_load_success=False,
-                    sustained_mppi="N/A; original progress requires motion",
+                    sustained_mppi="N/A; short route does not prove sustained 60s" if motion else
+                                   "N/A; original progress requires motion",
                 )
                 # Same explicit B postlude on both versions, outside measured raw window.
                 harness.source.frozen = None
+                harness.source.motion_ticks = None
+                harness.source.following = False
+                harness.source.input_complete = False
+                harness.source.previous_ns = harness.source.node.get_clock().now().nanoseconds
                 harness.source.offset = 0.4
                 harness.source.operations.clear()
                 harness.trace.emit("phase", name="restore_export")
@@ -1231,3 +1285,223 @@ def test_discovery_and_full_sample_reject_changed_incarnation(tmp_path, monkeypa
     monkeypatch.setattr(module, "_process_stat", lambda pid: next(reads))
     with pytest.raises(RuntimeError, match="identity unconfirmed"):
         real_identity(200)
+
+
+def _ordinary_source(monkeypatch, tmp_path):
+    """Controlled DDS/message boundary; runs the real source step and SE2, no ROS."""
+    import copy
+    import sys
+    from types import ModuleType, SimpleNamespace
+
+    from shared_layers_sensor_source import SensorSource
+
+    from vehicle_core.values import Pose2D
+
+    class ClockStamp:
+        def __init__(self, nanoseconds):
+            self.nanoseconds = nanoseconds
+
+        def to_msg(self):
+            return self.nanoseconds
+
+    def vector():
+        return SimpleNamespace(x=0.0, y=0.0, z=0.0)
+
+    def quaternion():
+        return SimpleNamespace(x=0.0, y=0.0, z=0.0, w=0.0)
+
+    def message():
+        return SimpleNamespace(
+            header=SimpleNamespace(stamp=None, frame_id=""), child_frame_id="",
+            transform=SimpleNamespace(translation=vector(), rotation=quaternion()),
+            pose=SimpleNamespace(pose=SimpleNamespace(position=vector(), orientation=quaternion()),
+                                 covariance=[0.0] * 36),
+            twist=SimpleNamespace(twist=SimpleNamespace(linear=vector(), angular=vector())),
+            orientation=quaternion(), angular_velocity=vector(), linear_acceleration=vector(),
+            angular_velocity_covariance=[0.0] * 9,
+        )
+
+    for name, members in (
+        ("geometry_msgs.msg", {"TransformStamped": message}),
+        ("nav_msgs.msg", {"Odometry": message}),
+        ("sensor_msgs.msg", {"Imu": message, "LaserScan": message}),
+        ("rclpy.time", {"Time": ClockStamp}),
+    ):
+        module = ModuleType(name)
+        module.__dict__.update(members)
+        monkeypatch.setitem(sys.modules, name, module)
+
+    class Publisher:
+        def __init__(self):
+            self.rows = []
+
+        def publish(self, row):
+            self.rows.append(copy.deepcopy(row))
+
+        sendTransform = publish
+
+    class Trace:
+        def __init__(self):
+            self.rows = []
+
+        def emit(self, stage, **fields):
+            self.rows.append(dict(stage=stage, **fields))
+
+    clock = SimpleNamespace(ns=10_000_000_000)
+    steady = SimpleNamespace(ns=20_000_000_000)
+    monkeypatch.setattr(time, "monotonic_ns", lambda: steady.ns)
+    # Deterministic geometry oracle isolates tape I/O; original raycast has its own regression.
+    monkeypatch.setattr("shared_layers_sensor_source.raycast",
+                        lambda origin, direction, segments:
+                        math.nan if direction[0] < 0 else 2.0 + origin[0] * 0.01)
+    source = SensorSource.__new__(SensorSource)
+    source.trace = Trace()
+    source.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
+        now=lambda: ClockStamp(clock.ns)))
+    source.world = Path(__file__).parents[1] / "src/senior_sim/worlds/motion_qualification.sdf"
+    source.urdf = Path(__file__).parents[1] / "src/senior_sim/urdf/senior.urdf.xacro"
+    from shared_layers_sensor_source import mount_from_urdf, world_segments
+
+    source.mount, source.walls = mount_from_urdf(source.urdf), world_segments(source.world)
+    source.pose = Pose2D(0, 0, 0)
+    source.offset, source.invalid = 0.0, False
+    source.enabled, source.following = True, False
+    source.command, source.command_at, source.command_stamp_ns = (0.0, 0.0), 0, None
+    source.tick, source.previous_ns = 0, clock.ns
+    source.frozen = source.frozen_origin_ns = source.motion_ticks = source.recording = None
+    source.input_complete = False
+    from collections import deque
+
+    source.operations = deque(maxlen=2)
+    source.tf, source.wheel, source.imu, source.scan = (Publisher() for _ in range(4))
+    return source, clock, steady
+
+
+def _record_ordinary_episode(source, clock, steady, path):
+    source.begin_recording(path, dict(test_boundary="controlled ordinary messages"))
+    for i in range(1200):
+        # Preserve real jitter, a short motion, timeout, then stationary sensor tail.
+        clock.ns += 50_000_000 + (i % 3) * 1000
+        steady.ns += 50_000_000 + (i % 3) * 1000
+        if i < 20:
+            from types import SimpleNamespace
+
+            if i == 3:
+                source._command(SimpleNamespace(linear=SimpleNamespace(x=0.08),
+                                                angular=SimpleNamespace(z=0.01)))
+            source._command(SimpleNamespace(linear=SimpleNamespace(x=0.1),
+                                            angular=SimpleNamespace(z=0.02)))
+        source._step()
+    source.finish_recording()
+
+
+def test_motion_ordinary_record_replay_roundtrip(monkeypatch, tmp_path):
+    from shared_layers_sensor_source import MOTION_FORMAT_SHA256, read_motion
+
+    source, clock, steady = _ordinary_source(monkeypatch, tmp_path)
+    path = tmp_path / "motion.jsonl"
+    _record_ordinary_episode(source, clock, steady, path)
+    frozen_bytes = path.read_bytes()
+    digest = hashlib.sha256(frozen_bytes).hexdigest()
+    metadata, ticks = read_motion([json.loads(line) for line in frozen_bytes.splitlines()])
+    import shared_layers_sensor_source
+
+    assert metadata["source_sha256"] == hashlib.sha256(
+        Path(shared_layers_sensor_source.__file__).read_bytes()).hexdigest()
+    assert metadata["format_sha256"] == MOTION_FORMAT_SHA256
+    assert ticks[0]["command"]["ros_offset_ns"] == ticks[0]["offset_ns"]
+    assert ticks[0]["dt"] == 0.05
+    assert len(ticks[3]["commands"]) == 2
+    assert ticks[3]["commands"][0]["vx"] == 0.08
+    assert sum(len(tick["commands"]) for tick in ticks) == 21
+    assert ticks[20]["twist"] == [0.1, 0.02]
+    assert ticks[26]["twist"] == [0.0, 0.0]  # original 300ms timeout
+    assert ticks[-1]["pose"][0] > 0.1
+    assert ticks[4]["offset_ns"] != 4 * 50_000_000
+    original = (source.tf.rows, source.wheel.rows, source.imu.rows, source.scan.rows)
+    replay, clock, steady = _ordinary_source(monkeypatch, tmp_path)
+    clock.ns = 100_000_000_000
+    replay.begin_frozen(path)
+    origin = replay.frozen_origin_ns
+    for tick in ticks:
+        clock.ns = origin + tick["offset_ns"]
+        replay._step()
+    assert replay.input_complete
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+    assert replay.trace.rows[0]["sha256"] == digest
+    for before, after in zip(original, (replay.tf.rows, replay.wheel.rows,
+                                       replay.imu.rows, replay.scan.rows), strict=True):
+        assert len(before) == len(after)
+        for a, b in zip(before, after, strict=True):
+            assert a.header.stamp - metadata["ros_stamp_origin_ns"] == b.header.stamp - origin
+            a.header.stamp = b.header.stamp = 0
+            # NaN raw values use JSON null in the frozen file, never become free.
+            if hasattr(a, "ranges"):
+                assert [None if math.isnan(v) else v for v in a.ranges] == [
+                    None if math.isnan(v) else v for v in b.ranges]
+                a.ranges = b.ranges = []
+            assert a == b
+    operations = [r for r in source.trace.rows if r["stage"] == "input_operation_due"]
+    replay_operations = [r for r in replay.trace.rows if r["stage"] == "input_operation_due"]
+    assert operations == replay_operations
+    assert [r["offset_ns"] for r in operations] == [ticks[600]["offset_ns"],
+                                                   ticks[1196]["offset_ns"]]
+    assert list(replay.operations) == ["save", "restore_export"]
+
+
+async def test_motion_replay_outputs_cannot_change_frozen_inputs(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    from shared_layers_sensor_source import read_motion
+
+    source, clock, steady = _ordinary_source(monkeypatch, tmp_path)
+    path = tmp_path / "motion.jsonl"
+    _record_ordinary_episode(source, clock, steady, path)
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    _, ticks = read_motion([json.loads(line) for line in path.read_text().splitlines()])
+    replay, clock, steady = _ordinary_source(monkeypatch, tmp_path)
+    replay.begin_frozen(path)
+    origin = replay.frozen_origin_ns
+    from shared_layers_native_fixture import NativeFixture
+
+    observer = NativeFixture(tmp_path)
+    observer.trace = replay.trace
+    plan = dict(execution_id="original", task_epoch=1)
+    saves = 0
+    replay._step()  # first recorded offset is not due yet
+    assert not replay.wheel.rows
+    for i, tick in enumerate(ticks):
+        # Late delivery is visible and never restamped; outputs differ throughout replay.
+        clock.ns = origin + tick["offset_ns"] + 7_000_000
+        steady.ns += 50_000_000
+        replay._command(SimpleNamespace(linear=SimpleNamespace(x=-0.8),
+                                        angular=SimpleNamespace(z=1.7)))
+        replay._step()
+        assert replay.wheel.rows[-1].pose.pose.position.x == tick["pose"][0]
+        assert replay.wheel.rows[-1].twist.twist.linear.x == tick["twist"][0]
+        assert replay.wheel.rows[-1].header.stamp == origin + tick["offset_ns"]
+        saves += _reference_save_due(replay)
+        if i in (20, 21):
+            class ObservedClient:
+                def __init__(self, progress):
+                    self.progress = progress
+
+                async def request(self, kind, **fields):
+                    assert kind == "navigation.task_status" and fields == plan
+                    return dict(ok=True, execution_id="original",
+                                progress=self.progress)
+
+            progress = dict(plan, status="failed") if i == 20 else None
+            await observer.route_status(ObservedClient(progress), plan)
+    replay._step()
+    assert len(replay.wheel.rows) == 1200 and len(replay.scan.rows) == 300
+    assert saves == 1 and list(replay.operations) == ["restore_export"]
+    assert all(r["publication_lateness_ns"] == 7_000_000 for r in replay.trace.rows
+               if r["stage"] == "raw_input")
+    assert [r["status"] for r in replay.trace.rows if r["stage"] == "route_state"] == [
+        "failed", "missing"]
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    rows[-1]["complete"] = False
+    with pytest.raises(ValueError, match="incomplete ordinary input"):
+        read_motion(rows)

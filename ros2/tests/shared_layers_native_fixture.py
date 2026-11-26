@@ -197,10 +197,16 @@ class NativeFixture:
                 assets / "grid.json",
                 assets / "map.yaml",
                 sim / "config/motion_profile.json",
+                sim / "config/controllers.yaml",
+                Path(get_package_share_directory("senior_navigation")) / "config/nav2.yaml",
                 sim / "launch/simulation_motion.launch.py",
                 source_root / "uv.lock",
             )
         }
+        self.input_metadata = dict(
+            source_commit=version[0], source_tree=version[1], asset_sha256=digests,
+            host_boot_id=self.host, world=str(world), urdf=str(urdf),
+        )
         self.trace = TraceWriter(
             self.root / "system-trace.jsonl",
             dict(

@@ -372,3 +372,52 @@ RSS不相加异时峰值，PSS没有异时求和；task cgroup含producer/record
 不符丢弃并记unconfirmed。stat/cgroup为同incarnation内的有界分次观察，不是原子内核
 快照。受控读取序列覆盖竞态分支，未在Linux现场制造PID复用；无按名字补认/进程控制。
 本次仅本child定向helper/summary/factory及必要旧回归；Humble/十包/真实链仍留后续VM。
+
+### 已选 A：原短路线的运动输入记录/冻结/重放
+
+保留上面的 schema1 stationary 文件、命令和 SHA256，不能把它签成运动参考。
+新增 VM 专用入口复用同一 manager/catalog、NativeSession、原 world/URDF/profile 和
+`[0.7,0,0]` 单 execution/epoch；不延长路线、不重发任务、不改 progress/资格/安全。
+以下沿用前文已准备的安装环境、隔离域和 task-only 四核 scope；Bot1 未执行 ROS 或性能。
+
+```bash
+# 仅 VM：生成一次，输出路径必须不存在；原最终 /cmd_vel 经原 SE2 驱动普通输入。
+unset SENIOR_SHARED_LAYERS_MOTION_REPLAY
+export SENIOR_SHARED_LAYERS_MOTION_RECORD="$task_run/motion-input.jsonl"
+python -m pytest -p pytest_asyncio.plugin \
+  ros2/tests/test_shared_layers_process.py::test_motion_system_reference \
+  --basetemp "$task_run/motion-record" -vv -s
+sha256sum "$SENIOR_SHARED_LAYERS_MOTION_RECORD"
+
+# 仅 VM：两版各一次，使用上次原文件/hash、同 offset；不从输出反控输入。
+export SENIOR_SHARED_LAYERS_MOTION_REPLAY="$SENIOR_SHARED_LAYERS_MOTION_RECORD"
+unset SENIOR_SHARED_LAYERS_MOTION_RECORD
+python -m pytest -p pytest_asyncio.plugin \
+  ros2/tests/test_shared_layers_process.py::test_motion_system_reference \
+  --basetemp "$task_run/motion-replay" -vv -s
+```
+
+schema2 JSONL 上限仍为 32MiB：metadata + 1200 个真实 20Hz tick + input_end。
+每 tick 存实际 ROS/host monotonic offset、原受限 dt、最新 command 及该 tick 间全部收到的
+最终 command 时间/数值（最多256条，超限报错），wheel/同 stamp TF 共用 pose/twist；
+IMU 由同一 yaw/wz 和原固定重力、协方差无损生成，常量契约进入 format SHA256。
+每4 tick 保存原5Hz×2048 raw（无回波 null）、原对象 phase/offset、save/restore recipe；
+事件的实际 offset 是所属 tick 的 offset，recipe 的 offset 仍保留原名义时间表。
+metadata 包含录制 epoch、host boot、source commit/tree、producer SHA256、format SHA256、
+原资产/地图/profile/launch/参数 hash 与原 plan；fixture 原 trace 仍保留各版实际参数及输出。
+录制完成文件转0400，并输出完整 SHA256；中断仍保留 complete=false footer，reader 拒绝重放。
+文件完整只表示普通输入完整，不表示运动/资格/导航成功。
+
+重放先校验每帧/每 tick、原 scene/marker 与 world/URDF hash，再逐 tick 消费；
+stamp=该 run 新记录的 epoch+冻结 offset，未到时等待，迟到保留旧 stamp 并报告 lateness。
+第1200 tick 后停止 tape 发布，postlude 显式恢复原 B 静态输入。
+最终/private 输出只进入原 trace，不能改变冻结 pose、twist、IMU、raw 或操作 offset；
+不保存/重放 ScanKey、GID、Q、permit、coverage、ACK，这些由每版原 owner 重新产生。
+
+60s 尾段仅 sensor/SLAM。只比较两版同 execution/epoch、实际 running+qualified、
+健康 motion/TF/scan 和新鲜 private/final 输出的共有短窗；沿原200ms观测新鲜度，查询阻塞、
+缺样、终态/失格之后不能外推，终态时间仅为观察上界。save仍用原第150帧 marker，
+restore/export仍在原第299帧 marker之后走原生命周期；若没有实测 active/save 重叠，
+明确缺该证据，不能声称持续60s MPPI、完整S16或整T7成功。
+原 trace 工具未扩展，phase 可包含 motion_reference，按两份实际 trace 另行核共有窗口；
+其 sustained_mppi 始终 N/A，旧 stationary 提示不是运动成功判定。
