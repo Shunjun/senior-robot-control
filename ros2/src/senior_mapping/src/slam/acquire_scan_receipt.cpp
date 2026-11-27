@@ -1,3 +1,5 @@
+#include <senior_sensor_ingress/publisher_topology.hpp>
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #include "scan_receipt_admission.hpp"
 
 #include <chrono>
@@ -17,7 +19,7 @@ using admission::Message;
 Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
 {
   const auto raw = node->declare_parameter<std::string>("raw_topic", "/scan");
-  const auto bounded = node->declare_parameter<std::string>("bounded_topic", "/safety/raw/scan");
+  const auto bounded = node->declare_parameter<std::string>("bounded_topic", senior_sensor_ingress::wiring::safety_raw_scan);
   const auto frame = node->declare_parameter<std::string>("expected_frame", "laser_link");
   if (raw.empty() || raw.front() != '/' || bounded.empty() || bounded.front() != '/' ||
     raw == bounded || !admission::text_ok(frame))
@@ -32,9 +34,10 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
     [&](Message::ConstSharedPtr scan) {
       if (acquired) return;
       const auto publishers = node->get_publishers_info_by_topic(bounded);
-      if (publishers.size() != 1 || publishers.front().node_name() != "scan_receipt" ||
-          publishers.front().node_namespace() != "/" ||
-          publishers.front().topic_type() != "senior_interfaces/msg/BoundedRawLaserScan") return;
+      if (!senior_sensor_ingress::publisher_matches(publishers,
+          senior_sensor_ingress::wiring::node_scan_receipt,
+          senior_sensor_ingress::wiring::ns_scan_receipt,
+          "senior_interfaces/msg/BoundedRawLaserScan")) return;
       const auto & capture = scan->capture;
       if (!capture.valid || capture.frame_id != frame || capture.bridge_boot_id.empty() ||
           capture.capture_generation == 0 || !admission::sample_valid(capture) ||

@@ -186,8 +186,12 @@ def fixed_pose(pose: Pose2D) -> None:
         fixed_real(v)
 
 
-def fixed_cells(cells: tuple[tuple[int, int], ...], limit: int = 2048) -> None:
-    if not isinstance(cells, tuple) or len(cells) > limit or len(set(cells)) != len(cells):
+def fixed_cells(cells: tuple[tuple[int, int], ...], limit: int | None = None) -> None:
+    if (
+        not isinstance(cells, tuple)
+        or (limit is not None and len(cells) > limit)
+        or len(set(cells)) != len(cells)
+    ):
         raise ValueError("invalid or duplicate local cells")
     for p in cells:
         if (
@@ -198,8 +202,8 @@ def fixed_cells(cells: tuple[tuple[int, int], ...], limit: int = 2048) -> None:
             raise ValueError("expected int32 cell pair")
 
 
-def fixed_points(points: tuple[tuple[float, float], ...], limit: int) -> None:
-    if not isinstance(points, tuple) or len(points) > limit:
+def fixed_points(points: tuple[tuple[float, float], ...], limit: int | None = None) -> None:
+    if not isinstance(points, tuple) or (limit is not None and len(points) > limit):
         raise ValueError("too many local points")
     for p in points:
         if not isinstance(p, tuple) or len(p) != 2:
@@ -355,7 +359,7 @@ class StableSupport:
         fixed_text(self.anchor_id)
         fixed_real(self.resolution_m, positive=True)
         fixed_points(self.local_surface, 32)
-        fixed_points(self.local_endpoints, 2048)
+        fixed_points(self.local_endpoints)
         fixed_cells(self.local_cells)
         for v in (self.created_evidence_revision, self.updated_evidence_revision):
             fixed_uint(v)

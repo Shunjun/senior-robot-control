@@ -1,3 +1,5 @@
+#include <senior_sensor_ingress/publisher_topology.hpp>
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #include <senior_sensor_ingress/sample_time.hpp>
 #include <senior_sensor_ingress/sample_record.hpp>
 #include <senior_sensor_ingress/source_order.hpp>
@@ -28,12 +30,12 @@
 namespace senior_motion_estimation::scan_matching {
 class ScanMotionNode : public rclcpp::Node {
 public:
-  ScanMotionNode() : Node("scan_motion_node"), buffer_(get_clock()), listener_(buffer_)
+  ScanMotionNode() : Node(senior_sensor_ingress::wiring::node_scan_motion_node, senior_sensor_ingress::wiring::ns_scan_motion_node), buffer_(get_clock()), listener_(buffer_)
   {
     body_ = declare_parameter<std::string>("body_frame", "base_link");
-    const auto scan_topic = declare_parameter<std::string>("scan_topic", "/perception/scan_filtered");
+    const auto scan_topic = declare_parameter<std::string>("scan_topic", senior_sensor_ingress::wiring::perception_scan_filtered);
     scan_topic_ = scan_topic;
-    raw_topic_ = declare_parameter<std::string>("raw_scan_topic", "/safety/raw/scan");
+    raw_topic_ = declare_parameter<std::string>("raw_scan_topic", senior_sensor_ingress::wiring::safety_raw_scan);
     //Compatible: legacy launch may supply this policy; raw input has no TTL.
     declare_parameter<double>("sensor_hard_age_ms", -1.0);
     max_speed_ = declare_parameter<double>("max_linear_speed", -1.0);
@@ -63,9 +65,9 @@ public:
     }
     limits.min_rays = static_cast<unsigned>(min_rays);
     matcher_ = std::make_unique<LocalMatcher>(limits);
-    publisher_ = create_publisher<senior_interfaces::msg::ScanMotion>("/motion/scan", 10);
+    publisher_ = create_publisher<senior_interfaces::msg::ScanMotion>(senior_sensor_ingress::wiring::motion_scan, 10);
     //Compatible: add independent diagnostics without changing ScanMotion consumers.
-    diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/motion/scan_diagnostics", rclcpp::SensorDataQoS().keep_last(1));
+    diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(senior_sensor_ingress::wiring::motion_scan_diagnostics, rclcpp::SensorDataQoS().keep_last(1));
     subscription_ = create_subscription<senior_interfaces::msg::FencedFilteredScan>(
       scan_topic, rclcpp::SensorDataQoS(),
       [this](senior_interfaces::msg::FencedFilteredScan::ConstSharedPtr message,
@@ -142,8 +144,10 @@ private:
       return;
     }
     const auto sources = get_publishers_info_by_topic(scan_topic_);
-    if (sources.size() != 1 || sources[0].node_name() != "scan_receipt" ||
-        sources[0].node_namespace() != "/") {
+    if (!senior_sensor_ingress::publisher_matches(sources,
+        senior_sensor_ingress::wiring::node_scan_receipt,
+        senior_sensor_ingress::wiring::ns_scan_receipt,
+        "senior_interfaces/msg/FencedFilteredScan")) {
       invalidate(output, "scan_owner_unavailable", true); return;
     }
     const auto generation = scan_order_.generation();

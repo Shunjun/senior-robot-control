@@ -4,6 +4,8 @@ import multiprocessing as mp
 import os
 
 from vehicle_core.process_resources import LatestSnapshot, child_lifetime, stop_process
+from vehicle_core.ros_wiring import TOPICS
+from vehicle_core.ros_wiring import publisher as configured_publisher
 
 
 def _publish(parameters, slot, status_slot, stop, parent_pid):
@@ -16,10 +18,12 @@ def _publish(parameters, slot, status_slot, stop, parent_pid):
 
     rclpy.init(args=[])
     node = Node(
-        "motion_reporter", parameter_overrides=[Parameter(n, value=v) for n, v in parameters]
+        configured_publisher("motion_reporter").name,
+        namespace=configured_publisher("motion_reporter").namespace,
+        parameter_overrides=[Parameter(n, value=v) for n, v in parameters],
     )
-    publisher = node.create_publisher(String, "/motion/runtime", 1)
-    status_publisher = node.create_publisher(DiagnosticArray, "/safety/status", 1)
+    publisher = node.create_publisher(String, TOPICS.motion_runtime, 1)
+    status_publisher = node.create_publisher(DiagnosticArray, TOPICS.safety_status, 1)
     version, status_version, latest = 0, 0, None
     try:
         while rclpy.ok() and not stop.is_set() and os.getppid() == parent_pid:

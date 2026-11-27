@@ -1,3 +1,4 @@
+#include <senior_sensor_ingress/publisher_topology.hpp>
 #include <senior_sensor_ingress/sample_time.hpp>
 #include <optional>
 // Humble-compatible DDS receipts over an inherited, private AF_UNIX channel.
@@ -144,8 +145,7 @@ class NativeReceipt : public rclcpp::Node {
   bool topology(size_t id) {
     auto &in = inputs_[id];
     const auto endpoints = get_publishers_info_by_topic(in.topic);
-    bool good = endpoints.size() == 1 && endpoints[0].node_name() == in.name &&
-                endpoints[0].node_namespace() == in.ns;
+    bool good = senior_sensor_ingress::publisher_matches(endpoints, in.name, in.ns);
     Gid next{};
     if (good) next = endpoints[0].endpoint_gid();
     const bool changed = in.valid != good;

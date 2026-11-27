@@ -543,12 +543,8 @@ class NativeSession:
             return
         previous = self._last_scan_capture
         current = row.scan.capture.time
-        if previous is not None and (
-            current.stamp_ns <= previous.stamp_ns
-            or current.sample_steady_ns <= previous.sample_steady_ns
-            or current.received_steady_ns <= previous.received_steady_ns
-        ):
-            self._evidence.reset()
+        if previous is not None and current.stamp_ns <= previous.stamp_ns:
+            # A repeated/older capture contributes nothing; it does not erase history.
             return
         self.active.accept_scan(self.source, row.scan, verified)
         self._last_scan_capture = current

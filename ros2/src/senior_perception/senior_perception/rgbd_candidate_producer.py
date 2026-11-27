@@ -25,11 +25,15 @@ from senior_perception.vision.rgbd_candidate_codec import fill_candidate
 from senior_perception.vision.rgbd_producer_engine import RetainedFrontiers, RgbdProducerEngine
 from senior_perception.vision.static_tf_binding import Edge, StaticBinding, TransformSnapshot
 from vehicle_core.diagnostics import process_diagnostics
+from vehicle_core.ros_wiring import TOPICS, publisher, publisher_identity
 
 
 class RgbdCandidateProducer(Node):
     def __init__(self):
-        super().__init__("rgbd_candidate_producer")
+        super().__init__(
+            publisher("rgbd_candidate_producer").name,
+            namespace=publisher("rgbd_candidate_producer").namespace,
+        )
         try:
             self._initialize()
         except BaseException:
@@ -72,12 +76,12 @@ class RgbdCandidateProducer(Node):
         self._retained: RetainedFrontiers | None = None
         self._overflow_invalidation_pending = False
         self._topics = (
-            "/rgbd_diagnostic/rgb",
-            "/rgbd_diagnostic/depth",
-            "/rgbd_diagnostic/rgb_info",
-            "/rgbd_diagnostic/depth_info",
+            TOPICS.rgbd_diagnostic_rgb,
+            TOPICS.rgbd_diagnostic_depth,
+            TOPICS.rgbd_diagnostic_rgb_info,
+            TOPICS.rgbd_diagnostic_depth_info,
         )
-        self._candidate_topic = "/rgbd_diagnostic/candidate"
+        self._candidate_topic = TOPICS.rgbd_diagnostic_candidate
         self._publisher = self.create_publisher(
             RgbdMotionCandidate, self._candidate_topic, qos_profile_sensor_data
         )
@@ -125,9 +129,7 @@ class RgbdCandidateProducer(Node):
 
     def _owner(self, topic, name):
         owners = self.get_publishers_info_by_topic(topic)
-        if len(owners) != 1 or owners[0].node_name != name or owners[0].node_namespace != "/":
-            return ""
-        return bytes(owners[0].endpoint_gid).hex()
+        return publisher_identity(owners, name)
 
     def _invalid(self, reason):
         owner = self._owner(self._candidate_topic, "rgbd_candidate_producer")

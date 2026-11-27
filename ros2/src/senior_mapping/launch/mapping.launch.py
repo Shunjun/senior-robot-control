@@ -16,6 +16,7 @@ from launch_ros.substitutions import FindPackageShare
 
 from vehicle_core.launch_recovery import restart_prefix
 from vehicle_core.lifecycle_events import resource_handlers
+from vehicle_core.ros_wiring import TOPICS
 
 
 def _mapping_actions(context):
@@ -108,7 +109,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "bounded_scan_topic",
-                default_value="/safety/raw/scan",
+                default_value=TOPICS.safety_raw_scan,
                 description="Existing scan_receipt output, used only in verified lidar mode.",
             ),
             DeclareLaunchArgument(

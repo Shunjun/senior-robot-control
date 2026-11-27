@@ -38,4 +38,5 @@
   <exec_depend>nav2_behavior_tree</exec_depend>
   <exec_depend>nav2_util</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
+  <depend>senior_sensor_ingress</depend>
 </package>

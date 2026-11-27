@@ -1,3 +1,5 @@
+#include <senior_sensor_ingress/publisher_topology.hpp>
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #include "senior_sensor_ingress/rgbd_candidate_receipt.hpp"
 #include "senior_sensor_ingress/raw_receipt.hpp"
 #include "senior_sensor_ingress/sample_record.hpp"
@@ -55,11 +57,16 @@ bool transform_matches(const geometry_msgs::msg::TransformStamped & a,
 }
 
 RgbdCandidateReceipt::RgbdCandidateReceipt(const rclcpp::NodeOptions & options)
-: Node("rgbd_candidate_receipt", options), relay_boot_(new_boot())
+: Node(senior_sensor_ingress::wiring::node_rgbd_candidate_receipt, senior_sensor_ingress::wiring::ns_rgbd_candidate_receipt, options), relay_boot_(new_boot())
 {
-  const auto prefix=declare_parameter<std::string>("topic_prefix", "/rgbd_diagnostic");
-  raw_topics_={prefix+"/rgb", prefix+"/depth", prefix+"/rgb_info", prefix+"/depth_info"};
-  candidate_topic_=prefix+"/candidate";
+  const auto prefix=declare_parameter<std::string>("topic_prefix", senior_sensor_ingress::wiring::rgbd_diagnostic);
+  raw_topics_={wiring::rgbd_diagnostic_rgb, wiring::rgbd_diagnostic_depth,
+    wiring::rgbd_diagnostic_rgb_info, wiring::rgbd_diagnostic_depth_info};
+  if (prefix != wiring::rgbd_diagnostic) {
+    //Compatible: explicit diagnostic prefix override remains an operator remap.
+    raw_topics_={prefix+"/rgb", prefix+"/depth", prefix+"/rgb_info", prefix+"/depth_info"};
+  }
+  candidate_topic_=prefix == wiring::rgbd_diagnostic ? wiring::rgbd_diagnostic_candidate : prefix+"/candidate";
   base_=declare_parameter<std::string>("base_frame", "base_link");
   camera_=declare_parameter<std::string>("camera_frame", "camera_color_optical_frame");
   if (prefix.empty() || base_.empty() || camera_.empty() || base_ == camera_)
@@ -67,7 +74,7 @@ RgbdCandidateReceipt::RgbdCandidateReceipt(const rclcpp::NodeOptions & options)
   tf_buffer_=std::make_unique<tf2_ros::Buffer>(get_clock());
   tf_listener_=std::make_unique<tf2_ros::TransformListener>(*tf_buffer_, this, false);
   const auto qos=rclcpp::SensorDataQoS().keep_last(4);
-  publisher_=create_publisher<Fenced>(prefix+"/fenced", qos);
+  publisher_=create_publisher<Fenced>(prefix == wiring::rgbd_diagnostic ? wiring::rgbd_diagnostic_fenced : prefix+"/fenced", qos);
   for (size_t i=0; i<2; ++i) {
     images_[i]=create_subscription<Image>(raw_topics_[i], qos,
       [this,i](Image::ConstSharedPtr body) {image(i,*body);});
@@ -86,8 +93,8 @@ bool RgbdCandidateReceipt::graph_matches(const std::string & topic,const std::st
     "senior_interfaces/msg/RgbdMotionCandidate" :
     (topic==raw_topics_[0] || topic==raw_topics_[1] ?
       "senior_interfaces/msg/BoundedRawImage" : "senior_interfaces/msg/BoundedRawCameraInfo");
-  return graph.size()==1 && graph[0].node_name()==node && graph[0].node_namespace()=="/" &&
-    graph[0].topic_type()==type;
+  return publisher_matches(graph, node, topic == candidate_topic_ ?
+    wiring::ns_rgbd_candidate_producer : wiring::ns_raw_receipt, type);
 }
 
 void RgbdCandidateReceipt::invalidate(const std::string & reason)
@@ -116,7 +123,7 @@ bool RgbdCandidateReceipt::clocks_ok(int64_t ros_ns,uint64_t steady)
 
 bool RgbdCandidateReceipt::accept_raw(size_t stream,const Header & h)
 {
-  if (!graph_matches(raw_topics_[stream],"raw_receipt")) return false;
+  if (!graph_matches(raw_topics_[stream],wiring::node_raw_receipt)) return false;
   auto & source=sources_[stream];
   if (!h.valid) {
     if (h.capture_generation < raw_generation_ ||
@@ -205,7 +212,7 @@ void RgbdCandidateReceipt::candidate(const Candidate & body,const rclcpp::Messag
 {
   std::lock_guard<std::mutex> lock(mutex_);
   if (!clocks_ok(get_clock()->now().nanoseconds(),time::monotonic_ns()) ||
-      !graph_matches(candidate_topic_,"rgbd_candidate_producer")) return;
+      !graph_matches(candidate_topic_,wiring::node_rgbd_candidate_producer)) return;
   if (!body.valid) {
     if (!candidate_order_.observe_generation(body.producer_boot_id,body.owner_generation)) return;
     last_candidate_=body;

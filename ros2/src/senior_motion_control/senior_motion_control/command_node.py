@@ -33,6 +33,7 @@ from senior_motion_control.manual_authority import ManualAuthorityError, ManualA
 from senior_motion_control.manual_control import ManualIngress, ManualTarget, MotionRuntimeReceiver
 from vehicle_core.clock import Clock, SystemClock
 from vehicle_core.errors import ErrorCode
+from vehicle_core.ros_wiring import TOPICS, publisher
 from vehicle_core.runtime_state import MotionRuntimeState
 from vehicle_core.values import Velocity
 
@@ -91,13 +92,17 @@ class CommandNode(Node):
         *,
         parameter_overrides: list[Parameter] | None = None,
     ) -> None:
-        super().__init__("command_node", parameter_overrides=parameter_overrides or [])
+        super().__init__(
+            publisher("command_node").name,
+            namespace=publisher("command_node").namespace,
+            parameter_overrides=parameter_overrides or [],
+        )
         self.declare_parameter("robot_id", "robot")
         self.declare_parameter("native_writer_receipts", False)
         self._native_writer_receipts = bool(self.get_parameter("native_writer_receipts").value)
         self.declare_parameter("command_rate_hz", 10.0)
         self.declare_parameter("command_ttl_ms", 300.0)
-        self.declare_parameter("final_command_topic", "/safety/final_command")
+        self.declare_parameter("final_command_topic", TOPICS.safety_final_command)
         self._monotonic_clock = clock if clock is not None else SystemClock()
         if arbiter is None:
             self._arbiter = Arbiter(
@@ -136,31 +141,33 @@ class CommandNode(Node):
             subscribe(
                 self,
                 String,
-                "/motion/runtime",
+                TOPICS.motion_runtime,
                 self._on_motion_runtime,
-                writer="motion_reporter",
+                writer=publisher("motion_reporter").name,
+                namespace=publisher("motion_reporter").namespace,
                 qos="reliable",
                 invalidate=self._invalidate_motion_runtime,
             )
         else:
             # //Compatible: ordinary rclpy consumers retain their metadata path.
             self._runtime_subscription = self.create_subscription(
-                String, "/motion/runtime", self._on_motion_runtime, qos_profile_sensor_data
+                String, TOPICS.motion_runtime, self._on_motion_runtime, qos_profile_sensor_data
             )
         if self._native_writer_receipts:
             subscribe(
                 self,
                 DriveExecutionFeedback,
-                "/safety/drive_feedback",
+                TOPICS.safety_drive_feedback,
                 self._on_drive_feedback,
-                writer="safety_gate",
+                writer=publisher("safety_gate").name,
+                namespace=publisher("safety_gate").namespace,
                 qos="sensor",
                 invalidate=self._invalidate_drive_feedback,
             )
         else:
             self.create_subscription(
                 DriveExecutionFeedback,
-                "/safety/drive_feedback",
+                TOPICS.safety_drive_feedback,
                 self._on_drive_feedback,
                 qos_profile_sensor_data,
             )
@@ -707,10 +714,12 @@ class CommandNode(Node):
             collection.acknowledged = False
 
     def _retirement_incarnation_current(self) -> bool:
-        runtime = self.get_publishers_info_by_topic("/motion/runtime")
-        feedback = self.get_publishers_info_by_topic("/safety/drive_feedback")
+        runtime = self.get_publishers_info_by_topic(TOPICS.motion_runtime)
+        feedback = self.get_publishers_info_by_topic(TOPICS.safety_drive_feedback)
         good = all(
-            len(rows) == 1 and rows[0].node_name == writer and rows[0].node_namespace == "/"
+            len(rows) == 1
+            and rows[0].node_name == publisher(writer).name
+            and rows[0].node_namespace == publisher(writer).namespace
             for rows, writer in ((runtime, "motion_reporter"), (feedback, "safety_gate"))
         )
         current = self._retirement_core
@@ -862,14 +871,14 @@ class CommandNode(Node):
 
     @with_dds_info
     def _on_motion_runtime(self, msg: String, info: dict[str, Any] | None = None) -> None:
-        endpoints = self.get_publishers_info_by_topic("/motion/runtime")
+        endpoints = self.get_publishers_info_by_topic(TOPICS.motion_runtime)
         if len(endpoints) != 1:
             return
         endpoint = endpoints[0]
         gid = info.get("publisher_gid") if info else None
         if (
-            endpoint.node_name != "motion_reporter"
-            or endpoint.node_namespace != "/"
+            endpoint.node_name != publisher("motion_reporter").name
+            or endpoint.node_namespace != publisher("motion_reporter").namespace
             or (gid is not None and bytes(gid) != bytes(endpoint.endpoint_gid))
         ):
             return
@@ -1151,14 +1160,14 @@ class CommandNode(Node):
     def _on_drive_feedback(
         self, msg: DriveExecutionFeedback, info: dict[str, Any] | None = None
     ) -> None:
-        endpoints = self.get_publishers_info_by_topic("/safety/drive_feedback")
+        endpoints = self.get_publishers_info_by_topic(TOPICS.safety_drive_feedback)
         if len(endpoints) != 1:
             return
         endpoint = endpoints[0]
         gid = info.get("publisher_gid") if info is not None else None
         if (
-            endpoint.node_name == "safety_gate"
-            and endpoint.node_namespace == "/"
+            endpoint.node_name == publisher("safety_gate").name
+            and endpoint.node_namespace == publisher("safety_gate").namespace
             and (gid is None or bytes(endpoint.endpoint_gid) == bytes(gid))
             and msg.owner_boot_id == self._owner_boot
             and msg.robot_id == str(self.get_parameter("robot_id").value)

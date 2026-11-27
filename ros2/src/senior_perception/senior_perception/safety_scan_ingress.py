@@ -13,6 +13,7 @@ from senior_sensor_ingress.ros_lifecycle import run
 from tf2_ros import Buffer, TransformException, TransformListener
 
 from senior_perception.vision.raw_capture import RawCaptureAdmission, capture_from_message
+from vehicle_core.ros_wiring import TOPICS, publisher, publisher_identity
 from vehicle_core.sensor_policy import default_policy
 
 
@@ -21,13 +22,14 @@ class SafetyScanIngress(Node):
 
     def __init__(self, *, parameter_overrides=None):
         super().__init__(
-            "safety_scan_ingress",
+            publisher("safety_scan_ingress").name,
+            namespace=publisher("safety_scan_ingress").namespace,
             parameter_overrides=parameter_overrides or [],
             start_parameter_services=False,
         )
         self.declare_parameter("body_frame", "base_link")
-        self.declare_parameter("scan_topic", "/safety/raw/scan")
-        self.declare_parameter("bounded_scan_topic", "/safety/scan_candidate")
+        self.declare_parameter("scan_topic", TOPICS.safety_raw_scan)
+        self.declare_parameter("bounded_scan_topic", TOPICS.safety_scan_candidate)
         self._body = str(self.get_parameter("body_frame").value)
         self._raw_topic = str(self.get_parameter("scan_topic").value)
         hard_age_ms = default_policy().hard_age_ms
@@ -81,12 +83,8 @@ class SafetyScanIngress(Node):
 
     def _check_source(self) -> bool:
         endpoints = self.get_publishers_info_by_topic(self._raw_topic)
-        gid = (
-            bytes(endpoints[0].endpoint_gid).hex()
-            if len(endpoints) == 1
-            and endpoints[0].node_name == "scan_receipt"
-            and endpoints[0].node_namespace == "/"
-            else ""
+        gid = publisher_identity(
+            endpoints, "scan_receipt", "senior_interfaces/msg/BoundedRawLaserScan"
         )
         ready = self._admission is not None and self._admission.observe_bridge(gid)
         if ready != self._ready:

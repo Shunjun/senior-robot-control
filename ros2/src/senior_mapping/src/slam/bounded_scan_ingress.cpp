@@ -1,3 +1,5 @@
+#include <senior_sensor_ingress/ros_wiring.hpp>
+#include <senior_sensor_ingress/publisher_topology.hpp>
 #include "bounded_scan_ingress.hpp"
 #include "scan_receipt_admission.hpp"
 
@@ -14,8 +16,8 @@ BoundedScanIngress::BoundedScanIngress(rclcpp::Node & node, tf2_ros::Buffer & tf
   rclcpp::CallbackGroup::SharedPtr group)
 : node_(node), tf_(tf), bounded_topic_(std::move(bounded_topic)),
   odom_frame_(std::move(odom_frame)), base_frame_(std::move(base_frame)),
-  expected_name_(node.declare_parameter<std::string>("scan_bridge_node", "scan_receipt")),
-  expected_namespace_(node.declare_parameter<std::string>("scan_bridge_namespace", "/")),
+  expected_name_(node.declare_parameter<std::string>("scan_bridge_node", senior_sensor_ingress::wiring::node_scan_receipt)),
+  expected_namespace_(node.declare_parameter<std::string>("scan_bridge_namespace", senior_sensor_ingress::wiring::ns_scan_receipt)),
   submit_(std::move(submit))
 {
   rclcpp::SubscriptionOptions options;
@@ -30,9 +32,8 @@ void BoundedScanIngress::offer(BoundedScan::ConstSharedPtr scan)
 {
   if (closed_.load()) return;
   const auto publishers = node_.get_publishers_info_by_topic(bounded_topic_);
-  if (publishers.size() != 1 || publishers.front().node_name() != expected_name_ ||
-      publishers.front().node_namespace() != expected_namespace_ ||
-      publishers.front().topic_type() != "senior_interfaces/msg/BoundedRawLaserScan") {
+  if (!senior_sensor_ingress::publisher_matches(publishers, expected_name_, expected_namespace_,
+      "senior_interfaces/msg/BoundedRawLaserScan")) {
     active_.store(false);
     return;
   }

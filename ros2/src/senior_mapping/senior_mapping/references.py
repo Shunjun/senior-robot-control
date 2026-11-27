@@ -787,10 +787,10 @@ def _packed(points: tuple, fmt: str) -> dict:
     )
 
 
-def _unpacked(body: dict, fmt: str, limit: int) -> tuple:
+def _unpacked(body: dict, fmt: str, limit: int | None = None) -> tuple:
     body = _fixed_object(body, "count encoding data_b64")
     fixed_uint(body["count"])
-    if body["count"] > limit or body["encoding"] != "le-" + fmt:
+    if (limit is not None and body["count"] > limit) or body["encoding"] != "le-" + fmt:
         raise ValueError("invalid packed coordinate encoding")
     return tuple(
         struct.iter_unpack(
@@ -923,8 +923,8 @@ def _support_v2(body: dict) -> StableSupport:
         )
     )
     b["local_surface"] = tuple(tuple(p) for p in _fixed_array(b["local_surface"], 32))
-    b["local_endpoints"] = _unpacked(b["local_endpoints"], "dd", 2048)
-    b["local_cells"] = _unpacked(b["local_cells"], "ii", 2048)
+    b["local_endpoints"] = _unpacked(b["local_endpoints"], "dd")
+    b["local_cells"] = _unpacked(b["local_cells"], "ii")
     b["first_key"], b["last_key"], b["source"] = (
         _key_v2(b["first_key"]),
         _key_v2(b["last_key"]),
@@ -1420,7 +1420,7 @@ def decode_fixed_delta(data: bytes) -> FixedDelta:
             item = dict(_fixed_object(item, fields))
             item["trigger_key"] = _key_v2(item["trigger_key"])
             if kind is SupportCellRemoval:
-                item["local_cells"] = _unpacked(item["local_cells"], "ii", 2048)
+                item["local_cells"] = _unpacked(item["local_cells"], "ii")
             if kind is LegacyMaskEdit:
                 item["cell_indices"] = tuple(_fixed_array(item["cell_indices"], 8192))
                 item["expected_values"] = tuple(_fixed_array(item["expected_values"], 8192))

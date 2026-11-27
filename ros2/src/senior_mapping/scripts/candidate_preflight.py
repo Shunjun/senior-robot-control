@@ -17,6 +17,8 @@ import time
 import uuid
 from pathlib import Path
 
+from vehicle_core.ros_wiring import TOPICS
+
 
 class PreflightError(RuntimeError):
     pass
@@ -451,7 +453,7 @@ def parse_args(argv=None):
         if not (abs(x) <= 1_000_000 and abs(y) <= 1_000_000 and abs(yaw) <= math.tau):
             parser.error("live seed is outside native matching bounds")
         args.live_raw_topic = args.live_raw_topic or "/scan"
-        args.live_bounded_topic = args.live_bounded_topic or "/safety/raw/scan"
+        args.live_bounded_topic = args.live_bounded_topic or TOPICS.safety_raw_scan
         if args.live_raw_topic == args.live_bounded_topic or any(
             not re.fullmatch(r"/[A-Za-z_][A-Za-z0-9_/]{0,126}", topic)
             or topic.endswith("/")
@@ -461,13 +463,8 @@ def parse_args(argv=None):
             parser.error("live scan topics must be distinct, absolute ROS topic names")
     if not args.prefix.is_absolute() or not re.fullmatch("[0-9a-f]{64}", args.digest):
         parser.error("expected an absolute staged prefix and a lowercase SHA-256 digest")
-    if (
-        not args.map_frame
-        or not args.odom_frame
-        or args.map_frame == args.odom_frame
-        or max(len(args.map_frame), len(args.odom_frame)) > 128
-    ):
-        parser.error("expected distinct nonempty map and odom frames of at most 128 characters")
+    if not args.map_frame or not args.odom_frame or args.map_frame == args.odom_frame:
+        parser.error("expected distinct nonempty map and odom frames")
 
     return parser, args
 

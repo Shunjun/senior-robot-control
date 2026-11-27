@@ -2,6 +2,8 @@
 
 import time
 
+from vehicle_core.ros_wiring import TOPICS
+
 PREVIEW_FPS = 15.0
 
 
@@ -35,7 +37,9 @@ def main() -> None:
     gate = LatestImageGate()
     try:
         source = node.declare_parameter("input_topic", "/camera/color/image_raw").value
-        destination = node.declare_parameter("output_topic", "/senior_camera/color/image_raw").value
+        destination = node.declare_parameter(
+            "output_topic", TOPICS.senior_camera_color_image_raw
+        ).value
         qos = QoSProfile(
             depth=1,
             # The vendor raw publishers and image_transport use reliable delivery.

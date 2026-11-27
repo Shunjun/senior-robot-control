@@ -7,6 +7,8 @@ import yaml
 from pydantic import ValidationError
 from senior_motion_control.hardware_profile import HardwareMotionProfile, load_hardware_profile
 
+from vehicle_core.ros_wiring import TOPICS
+
 # Required parameters have no hardware defaults. Sensor and response calibration
 # belongs in this file, not in a simulation YAML or product driving preferences.
 # Strip these old draft names before validation. They are not live consumers.
@@ -205,7 +207,7 @@ def load_real_parameters(
         errors.append("safety_gate.output_topic must stay /cmd_vel (sole actuator owner)")
     for node in ("command_node", "safety_gate"):
         p = result[node]
-        for key, expected in (("final_command_topic", "/safety/final_command"),):
+        for key, expected in (("final_command_topic", TOPICS.safety_final_command),):
             if p.get(key, expected) != expected:
                 errors.append(f"{node}.{key} must stay {expected}")
     if errors:

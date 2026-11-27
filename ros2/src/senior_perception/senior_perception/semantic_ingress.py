@@ -38,6 +38,7 @@ from senior_perception.vision.semantic_runtime import (
 )
 from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 from vehicle_core.diagnostics import process_diagnostics
+from vehicle_core.ros_wiring import TOPICS, publisher, publisher_identity
 from vehicle_core.sensor_policy import default_policy
 
 
@@ -50,16 +51,17 @@ class SemanticIngress(Node):
 
     def __init__(self, *, parameter_overrides=None, _worker=None):
         super().__init__(
-            "semantic_ingress",
+            publisher("semantic_ingress").name,
+            namespace=publisher("semantic_ingress").namespace,
             parameter_overrides=parameter_overrides or [],
             start_parameter_services=False,
         )
-        self.declare_parameter("rgb_topic", "/safety/raw/rgb")
-        self.declare_parameter("rgb_camera_info_topic", "/safety/raw/rgb_info")
-        self.declare_parameter("bounded_depth_topic", "/safety/bounded_depth")
-        self.declare_parameter("raw_depth_topic", "/safety/raw/depth")
-        self.declare_parameter("raw_depth_info_topic", "/safety/raw/depth_info")
-        self.declare_parameter("candidate_topic", "/safety/semantic_candidate_unfenced")
+        self.declare_parameter("rgb_topic", TOPICS.safety_raw_rgb)
+        self.declare_parameter("rgb_camera_info_topic", TOPICS.safety_raw_rgb_info)
+        self.declare_parameter("bounded_depth_topic", TOPICS.safety_bounded_depth)
+        self.declare_parameter("raw_depth_topic", TOPICS.safety_raw_depth)
+        self.declare_parameter("raw_depth_info_topic", TOPICS.safety_raw_depth_info)
+        self.declare_parameter("candidate_topic", TOPICS.safety_semantic_candidate_unfenced)
         self.declare_parameter("registered_profile", False)
         self.declare_parameter("weights_path", "")
         self.declare_parameter("device", "cpu")
@@ -145,15 +147,7 @@ class SemanticIngress(Node):
 
     def _source(self, topic):
         endpoints = self.get_publishers_info_by_topic(topic)
-        if (
-            len(endpoints) != 1
-            or endpoints[0].node_name != "raw_receipt"
-            or endpoints[0].node_namespace != "/"
-        ):
-            return ""
-        endpoint = endpoints[0]
-        gid = bytes(endpoint.endpoint_gid)
-        return gid.hex()
+        return publisher_identity(endpoints, "raw_receipt")
 
     def _check_sources(self):
         current = tuple(self._source(topic) for topic in self._topics)

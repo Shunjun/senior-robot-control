@@ -1,3 +1,4 @@
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #ifndef SENIOR_MAPPING__MAPPING_NAVIGATION_HPP_
 #define SENIOR_MAPPING__MAPPING_NAVIGATION_HPP_
 
@@ -70,7 +71,7 @@ public:
   MappingNavigation(rclcpp::Node & node, std::string boot, std::function<bool()> active, Raster raster)
   : boot_(std::move(boot)), active_(std::move(active))
   {
-    grid_service_ = node.create_service<Grid>("/senior/slam/read_mapping_grid",
+    grid_service_ = node.create_service<Grid>(senior_sensor_ingress::wiring::senior_slam_read_mapping_grid,
       [this, raster](Grid::Request::SharedPtr request, Grid::Response::SharedPtr response) {
         if (request->boot_id != boot_ || !active_()) {return;}
         auto result = raster(request->graph_commit_sequence);
@@ -79,7 +80,7 @@ public:
         response->boot_id = boot_; response->graph_commit_sequence = request->graph_commit_sequence;
         response->ok = true;
       });
-    pose_service_ = node.create_service<Pose>("/senior/slam/read_mapping_pose",
+    pose_service_ = node.create_service<Pose>(senior_sensor_ingress::wiring::senior_slam_read_mapping_pose,
       [this](Pose::Request::SharedPtr request, Pose::Response::SharedPtr response) {
         if (request->boot_id != boot_ || !active_() || !pose_ ||
           !scan_receipt_admission::sample_valid(pose_->capture))

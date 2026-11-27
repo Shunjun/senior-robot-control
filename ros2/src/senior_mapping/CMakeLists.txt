@@ -66,7 +66,7 @@ if(BUILD_TESTING)
   configure_file(scripts/candidate_preflight.py candidate_preflight.py COPYONLY)
   ament_add_test(candidate_preflight
     COMMAND "${CMAKE_COMMAND}" -E env
-      "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/scripts"
+      "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/scripts:${CMAKE_CURRENT_SOURCE_DIR}/../../.."
       "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test/native/test_candidate_preflight.py"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
   )
@@ -202,4 +202,6 @@ if(BUILD_TESTING)
 endif()
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/ros_wiring.cmake")
+senior_configure_wiring(config/slam.yaml)
 ament_package()

@@ -46,6 +46,7 @@ from senior_sensor_ingress.ros_lifecycle import MotionExecutor, run
 from senior_motion_control.arbiter import FinalCommandFence
 from senior_motion_control.native import native_executable
 from senior_motion_control.source_fences import ProducerTopology, SourceEpochFence
+from vehicle_core.ros_wiring import TOPICS, publisher
 from vehicle_core.sensor_policy import default_policy
 from vehicle_core.values import Velocity
 
@@ -65,7 +66,10 @@ class SafetyGate(Node):
 
     def _initialize(self, *, parameter_overrides, input_channel):
         super().__init__(
-            "safety_input" if input_channel is not None else "safety_gate",
+            publisher("safety_input" if input_channel is not None else "safety_gate").name,
+            namespace=publisher(
+                "safety_input" if input_channel is not None else "safety_gate"
+            ).namespace,
             parameter_overrides=parameter_overrides or [],
             start_parameter_services=False,
         )
@@ -77,13 +81,13 @@ class SafetyGate(Node):
         self.declare_parameter("simulation_rate_hz", 20.0)
         self.declare_parameter("body_frame", "base_link")
         self.declare_parameter("wheel_frame", "odom")
-        self.declare_parameter("final_command_topic", "/safety/final_command")
+        self.declare_parameter("final_command_topic", TOPICS.safety_final_command)
         self.declare_parameter("robot_id", "robot")
-        self.declare_parameter("bounded_scan_topic", "/safety/bounded_scan")
-        self.declare_parameter("raw_scan_topic", "/safety/raw/scan")
-        self.declare_parameter("bounded_depth_topic", "/safety/bounded_depth")
-        self.declare_parameter("raw_depth_topic", "/safety/raw/depth")
-        self.declare_parameter("raw_depth_info_topic", "/safety/raw/depth_info")
+        self.declare_parameter("bounded_scan_topic", TOPICS.safety_bounded_scan)
+        self.declare_parameter("raw_scan_topic", TOPICS.safety_raw_scan)
+        self.declare_parameter("bounded_depth_topic", TOPICS.safety_bounded_depth)
+        self.declare_parameter("raw_depth_topic", TOPICS.safety_raw_depth)
+        self.declare_parameter("raw_depth_info_topic", TOPICS.safety_raw_depth_info)
         self.declare_parameter("depth_policy", "required")
         self.declare_parameter("depth_collision_min_z", 1e10)
         self.declare_parameter("depth_collision_max_z", -1e10)
@@ -122,8 +126,12 @@ class SafetyGate(Node):
         self._scan_source = ""
         self._scan_masked_count = 0
         self._scan_ambiguous_count = 0
-        self._scan_topology = ProducerTopology("scan_receipt", "/")
-        self._depth_topology = ProducerTopology("raw_receipt", "/")
+        self._scan_topology = ProducerTopology(
+            publisher("scan_receipt").name, publisher("scan_receipt").namespace
+        )
+        self._depth_topology = ProducerTopology(
+            publisher("raw_receipt").name, publisher("raw_receipt").namespace
+        )
         self._scan_generation = 0
         hard_age_ms = default_policy().hard_age_ms
         scan_age = hard_age_ms / 1000
@@ -163,7 +171,7 @@ class SafetyGate(Node):
         )
         self._drive_feedback_publisher = (
             self.create_publisher(
-                DriveFeedbackMessage, "/safety/drive_feedback", qos_profile_sensor_data
+                DriveFeedbackMessage, TOPICS.safety_drive_feedback, qos_profile_sensor_data
             )
             if input_channel is None
             else None

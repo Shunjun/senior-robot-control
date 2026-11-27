@@ -32,6 +32,7 @@ from senior_motion_estimation.sample_types import (
 from senior_motion_estimation.source_admission import AdmissionOwner
 from senior_motion_estimation.source_modes import SourceMode
 from senior_motion_estimation.temporal import TemporalConfig, TemporalResolver
+from vehicle_core.ros_wiring import TOPICS, matching_publisher, publisher
 from vehicle_core.sample_time import SampleTime
 from vehicle_core.values import Pose2D
 
@@ -72,11 +73,7 @@ def observation_origin(
             "native_configured_writer",
             str(info.get("receipt_boot_id", "")),
         )
-    if (
-        len(endpoints) != 1
-        or endpoints[0].node_name != expected_name
-        or endpoints[0].node_namespace != expected_namespace
-    ):
+    if matching_publisher(endpoints, expected_name, expected_namespace) is None:
         return None
     return PublisherOrigin(
         publisher_gid(info) or None,
@@ -452,7 +449,7 @@ class NativeObservationRosBridge:
             source_invalidated=source_invalidated,
         )
         self.publisher = (
-            node.create_publisher(String, "/motion/core_reference", 10) if publish else None
+            node.create_publisher(String, TOPICS.motion_core_reference, 10) if publish else None
         )
         self._message_type = String
         self._warn_at = 0.0
@@ -471,11 +468,11 @@ class NativeObservationRosBridge:
             (Imu, profile.imu_topic, "/imu/data", self._imu, Source.IMU, profile.imu_publisher),
             (
                 ScanMotion,
-                "/motion/scan",
-                "/motion/scan",
+                TOPICS.motion_scan,
+                TOPICS.motion_scan,
                 self._laser,
                 Source.LASER,
-                "scan_motion_node",
+                publisher("scan_motion_node").name,
             ),
         ):
             self._subscriptions.append(
@@ -485,7 +482,9 @@ class NativeObservationRosBridge:
                     topic,
                     self._callback(handler, logical, topic),
                     writer=writer,
-                    namespace=profile.source_namespace if source is not Source.LASER else "/",
+                    namespace=profile.source_namespace
+                    if source is not Source.LASER
+                    else publisher("scan_motion_node").namespace,
                     qos="sensor" if source is not Source.LASER else "reliable",
                     invalidate=lambda source=source: self.core.invalidate_source(source),
                     expired=lambda message, info, source=source: self._record_rejected_receipt(
@@ -566,20 +565,32 @@ class NativeObservationRosBridge:
             expected = {
                 "/wheel/odom": self.profile.wheel_publisher,
                 "/imu/data": self.profile.imu_publisher,
-                "/motion/scan": "scan_motion_node",
+                TOPICS.motion_scan: publisher("scan_motion_node").name,
             }
+            native_checked = (
+                isinstance(info, dict) and info.get("native_receipt_authenticated") is True
+            )
+            endpoints = (
+                []
+                if native_checked
+                else self.node.get_publishers_info_by_topic(
+                    self.node.resolve_topic_name(wire_topic)
+                )
+            )
             origin = observation_origin(
                 info,
-                self.node.get_publishers_info_by_topic(self.node.resolve_topic_name(wire_topic)),
+                endpoints,
                 expected[topic],
                 expected_namespace=self.profile.source_namespace
-                if topic != "/motion/scan"
-                else "/",
+                if topic != TOPICS.motion_scan
+                else publisher("scan_motion_node").namespace,
             )
             if origin is None:
                 from vehicle_core.diagnostics import process_diagnostics
 
-                role = {"/wheel/odom": "wheel", "/imu/data": "imu", "/motion/scan": "laser"}[topic]
+                role = {"/wheel/odom": "wheel", "/imu/data": "imu", TOPICS.motion_scan: "laser"}[
+                    topic
+                ]
                 process_diagnostics().sensor_attempt(role, "raw", None, ("source_rejected",))
                 if now - self._warn_at > 1:
                     self._warn_at = now
@@ -590,7 +601,7 @@ class NativeObservationRosBridge:
                 return
             try:
                 ros_now = self.node.get_clock().now().nanoseconds / 1e9
-                if topic == "/motion/scan":
+                if topic == TOPICS.motion_scan:
                     accepted = handler(msg, origin, ros_now, now)
                 else:
                     sample = received_sample(info)
@@ -604,7 +615,7 @@ class NativeObservationRosBridge:
                         generation=int(info["receipt_generation"]),
                         sequence=int(info["receipt_sequence"]),
                     )
-                if accepted and topic == "/motion/scan":
+                if accepted and topic == TOPICS.motion_scan:
                     self._publish(laser_update=True)
             except (
                 ValueError,
@@ -619,9 +630,11 @@ class NativeObservationRosBridge:
                 # Runtime already recorded clocks that reached its age classifier.
                 # Earlier malformed payload/TF failures have counters, never age=0.
                 if not isinstance(exc, SensorClockError):
-                    role = {"/wheel/odom": "wheel", "/imu/data": "imu", "/motion/scan": "laser"}[
-                        topic
-                    ]
+                    role = {
+                        "/wheel/odom": "wheel",
+                        "/imu/data": "imu",
+                        TOPICS.motion_scan: "laser",
+                    }[topic]
                     process_diagnostics().sensor_attempt(role, "raw", None, ("invalid_data",))
                     self.core.invalidate_source(Source(role))
                 if now - self._warn_at > 1:

@@ -505,8 +505,8 @@ class _FreeConfidence:
 class FreeSpaceAccumulator:
     """Transient free confidence; thresholds retain the existing count/span/belief gate.
 
-    Coordinates are local to one trigger anchor. A graph correction or skipped
-    scan resets the window; no persisted free is reconstructed from raw history.
+    Coordinates are local to one trigger anchor. A graph correction
+    resets the window; no persisted free is reconstructed from raw history.
     """
 
     def __init__(self, thresholds: OccupancyThresholds) -> None:
@@ -522,19 +522,13 @@ class FreeSpaceAccumulator:
         limits = self.limits
         if limits is None:
             return set()
-        previous = self.previous
-        if previous is not None and (
-            scan.key.sequence <= previous.key.sequence
-            or scan.capture.time.stamp_ns <= previous.capture.time.stamp_ns
-            or scan.capture.time.sample_steady_ns <= previous.capture.time.sample_steady_ns
-            or scan.capture.time.received_steady_ns <= previous.capture.time.received_steady_ns
-        ):
-            return set()
-        token = (basis.reference_generation, basis.anchor_digest, basis.anchor_id)
-        if self.anchor != token or (
-            previous is not None and scan.key.sequence != previous.key.sequence + 1
-        ):
+        token = (scan.key.source, basis.reference_generation, basis.anchor_digest, basis.anchor_id)
+        if self.anchor != token:
             self.cells.clear()
+            self.previous = None
+        previous = self.previous
+        if previous is not None and scan.capture.time.stamp_ns <= previous.capture.time.stamp_ns:
+            return set()
         self.anchor, self.previous = token, scan
         alignment = rebase_pose(Pose2D(0, 0, 0), basis.odom_basis, basis.map_basis)
         free, hits = set(), set()

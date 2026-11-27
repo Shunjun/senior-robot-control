@@ -24,6 +24,7 @@ from senior_mapping.references import decode_fixed_snapshot
 from senior_mapping.shared_scan import LatestScanSlot, decode_qualified_scan
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.lifecycle_events import ResourceProcesses
+from vehicle_core.ros_wiring import TOPICS
 
 
 class RosMappingBackend:
@@ -73,25 +74,25 @@ class RosMappingBackend:
 
         self._services = {
             "grid": (
-                self.node.create_client(ReadMappingGrid, "/senior/slam/read_mapping_grid"),
+                self.node.create_client(ReadMappingGrid, TOPICS.senior_slam_read_mapping_grid),
                 ReadMappingGrid,
             ),
             # //Compatible: retained diagnostic service; no production freshness polling.
             "pose": (
-                self.node.create_client(ReadMappingPose, "/senior/slam/read_mapping_pose"),
+                self.node.create_client(ReadMappingPose, TOPICS.senior_slam_read_mapping_pose),
                 ReadMappingPose,
             ),
-            "graph": (self.node.create_client(ReadGraph, "/senior/slam/read_graph"), ReadGraph),
+            "graph": (self.node.create_client(ReadGraph, TOPICS.senior_slam_read_graph), ReadGraph),
             "next": (
-                self.node.create_client(ReadGraphCommit, "/senior/slam/read_graph_commit"),
+                self.node.create_client(ReadGraphCommit, TOPICS.senior_slam_read_graph_commit),
                 ReadGraphCommit,
             ),
             "capture": (
-                self.node.create_client(CaptureGraph, "/senior/slam/capture_graph"),
+                self.node.create_client(CaptureGraph, TOPICS.senior_slam_capture_graph),
                 CaptureGraph,
             ),
             "gate": (
-                self.node.create_client(MappingGate, "/senior/slam/mapping_gate"),
+                self.node.create_client(MappingGate, TOPICS.senior_slam_mapping_gate),
                 MappingGate,
             ),
         }
@@ -261,7 +262,7 @@ class RosMappingBackend:
             "production_boot_id": expected_boot,
             "production_session": True,
             "capture_directory": str(root),
-            "bounded_scan_topic": "/safety/raw/scan",
+            "bounded_scan_topic": TOPICS.safety_raw_scan,
             "use_map_saver": False,
             "enable_interactive_mode": False,
             "transform_publish_period": 0.0,
@@ -341,7 +342,7 @@ class RosMappingBackend:
         self._scan_subscription = subscribe(
             self.node,
             QualifiedMappingScan,
-            "/senior/slam/qualified_scan",
+            TOPICS.senior_slam_qualified_scan,
             self._on_qualified_scan,
             writer="slam_toolbox",
             qos="reliable",

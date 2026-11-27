@@ -41,6 +41,7 @@ from vehicle_core.launch_recovery import (
     restart_prefix,
 )
 from vehicle_core.lifecycle_events import report_ros_exit, resource_handlers
+from vehicle_core.ros_wiring import publisher
 from vehicle_core.sensor_parameters import ros_sensor_parameters
 
 
@@ -371,7 +372,8 @@ def motion_stack_actions(
             Node(
                 package="senior_robot",
                 executable="agent_adapter",
-                name="command_node",
+                name=publisher("command_node").name,
+                namespace=publisher("command_node").namespace,
                 parameters=[
                     params,
                     ros_sensor_parameters(),

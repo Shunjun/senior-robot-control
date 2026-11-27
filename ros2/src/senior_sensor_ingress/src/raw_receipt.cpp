@@ -1,3 +1,5 @@
+#include <senior_sensor_ingress/publisher_topology.hpp>
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #include "senior_sensor_ingress/raw_receipt.hpp"
 
 #include <algorithm>
@@ -75,7 +77,7 @@ std::string gid_hex(const std::array<uint8_t, RMW_GID_STORAGE_SIZE> & gid)
 
 RawReceipt::RawReceipt(const rclcpp::NodeOptions & options, BeforeVerify before_verify,
                        bool test_reentrant_callbacks)
-: Node("raw_receipt", options), before_verify_(std::move(before_verify))
+: Node(senior_sensor_ingress::wiring::node_raw_receipt, senior_sensor_ingress::wiring::ns_raw_receipt, options), before_verify_(std::move(before_verify))
 {
   input_topics_ = {
     declare_parameter<std::string>("rgb_topic", "/camera/color/image_raw"),
@@ -88,10 +90,10 @@ RawReceipt::RawReceipt(const rclcpp::NodeOptions & options, BeforeVerify before_
     expected_namespaces_[i] = declare_parameter<std::string>(roles[i]+"_publisher_namespace", "");
   }
   const std::array<std::string, 4> outputs = {
-    declare_parameter<std::string>("rgb_output", "/safety/raw/rgb"),
-    declare_parameter<std::string>("depth_output", "/safety/raw/depth"),
-    declare_parameter<std::string>("rgb_info_output", "/safety/raw/rgb_info"),
-    declare_parameter<std::string>("depth_info_output", "/safety/raw/depth_info")};
+    declare_parameter<std::string>("rgb_output", senior_sensor_ingress::wiring::safety_raw_rgb),
+    declare_parameter<std::string>("depth_output", senior_sensor_ingress::wiring::safety_raw_depth),
+    declare_parameter<std::string>("rgb_info_output", senior_sensor_ingress::wiring::safety_raw_rgb_info),
+    declare_parameter<std::string>("depth_info_output", senior_sensor_ingress::wiring::safety_raw_depth_info)};
   std::set<std::string> topics;
   for (const auto & topic : input_topics_) {
     if (!text_ok(topic, 128) || !topics.insert(topic).second)
@@ -105,16 +107,16 @@ RawReceipt::RawReceipt(const rclcpp::NodeOptions & options, BeforeVerify before_
   depth_expected_namespace_ = declare_parameter<std::string>("depth_candidate_publisher_namespace", "");
   semantic_expected_name_ = declare_parameter<std::string>("semantic_candidate_publisher_name", "");
   semantic_expected_namespace_ = declare_parameter<std::string>("semantic_candidate_publisher_namespace", "");
-  depth_input_topic_ = declare_parameter<std::string>("depth_candidate_topic", "/safety/depth_candidate");
-  const auto depth_output = declare_parameter<std::string>("depth_fenced_topic", "/safety/bounded_depth");
+  depth_input_topic_ = declare_parameter<std::string>("depth_candidate_topic", senior_sensor_ingress::wiring::safety_depth_candidate);
+  const auto depth_output = declare_parameter<std::string>("depth_fenced_topic", senior_sensor_ingress::wiring::safety_bounded_depth);
   if (!text_ok(depth_input_topic_, 128) || !topics.insert(depth_input_topic_).second ||
       !text_ok(depth_output, 128) || !topics.insert(depth_output).second) {
     throw std::invalid_argument("invalid depth egress topic configuration");
   }
   semantic_input_topic_ = declare_parameter<std::string>(
-    "semantic_candidate_topic", "/safety/semantic_candidate_unfenced");
+    "semantic_candidate_topic", senior_sensor_ingress::wiring::safety_semantic_candidate_unfenced);
   const auto semantic_output = declare_parameter<std::string>(
-    "semantic_fenced_topic", "/safety/semantic_candidates");
+    "semantic_fenced_topic", senior_sensor_ingress::wiring::safety_semantic_candidates);
   if (!text_ok(semantic_input_topic_, 128) || !topics.insert(semantic_input_topic_).second ||
       !text_ok(semantic_output, 128) || !topics.insert(semantic_output).second) {
     throw std::invalid_argument("invalid semantic egress topic configuration");
@@ -253,10 +255,8 @@ bool RawReceipt::qualify_source(size_t index, const rmw_gid_t & incoming,
 {
   const auto graph = get_publishers_info_by_topic(input_topics_[index]);
   auto & source = sources_[index];
-  if (graph.size() != 1 ||
-      graph.front().topic_type() != (index < 2 ? "sensor_msgs/msg/Image" : "sensor_msgs/msg/CameraInfo") ||
-      (!expected_namespaces_[index].empty() && graph.front().node_namespace() != expected_namespaces_[index]) ||
-      (!expected_names_[index].empty() && graph.front().node_name() != expected_names_[index])) {
+  if (!publisher_matches(graph, expected_names_[index], expected_namespaces_[index],
+      index < 2 ? "sensor_msgs/msg/Image" : "sensor_msgs/msg/CameraInfo")) {
     source.active = false;
     if (!source.invalid) {
       invalidate_all("raw_topology_unavailable", index, &source_header, received_ros_ns,

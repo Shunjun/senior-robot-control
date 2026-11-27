@@ -912,9 +912,12 @@ async def offer_owner_scan(owner, clock, seq, *, offset=0.0, wall=True, beams=No
         Pose2D(0, 0, 0),
         Pose2D(0, 0, 0),
     )
+    revision = (
+        json.loads(owner._scan_path.read_text())["revision"] + 1 if owner._scan_path.exists() else 1
+    )
     row = ScanEnvelope(
         1,
-        seq,
+        revision,
         "valid",
         "",
         "nonce",
@@ -943,6 +946,16 @@ async def test_shared_owner_pending_graph_consumes_independent_scan_and_motion(
         cut = await offer_owner_scan(owner, clock, seq)
     assert owner.graph.sequence == 1
     assert len(cut.supports) == 2
+    # A new mailbox revision can repeat the same capture; ignore it without
+    # erasing independently accumulated free-space evidence.
+    counts = {cell: item.count for cell, item in owner._evidence.free.cells.items()}
+    assert counts
+    row = json.loads(owner._scan_path.read_text())
+    row["revision"] += 1
+    owner._scan_path.write_text(json.dumps(row))
+    await owner._consume_latest_scan()
+    assert {cell: item.count for cell, item in owner._evidence.free.cells.items()} == counts
+    assert owner.active.fixed_snapshot(owner.source) == cut
     original = {s.support_id for s in cut.supports}
     wall = max(cut.supports, key=lambda s: s.local_endpoints[0][1])
     for seq, offset in ((5, 0.2), (6, 0.4), (7, 0.6), (8, 0.8)):
@@ -1486,7 +1499,21 @@ async def test_shared_owner_capacity_keeps_motion_revocation_through_following_f
                 assert owner._evidence.reason == "coverage_limit"
                 assert native.reference.coverage_reason == "coverage_limit"
             assert decode_fixed_snapshot(encode_fixed_snapshot(cut)) == cut
-    assert len(rejected) == 1 and rejected[0].key.sequence == 12
+    # Missing sequence numbers no longer clear accumulated free evidence.
+    # A continuing over-budget observation may reject again, but every rejected
+    # full transaction must still commit its mandatory revocation-only fallback.
+    assert rejected and rejected[0].key.sequence == 12
+    for rejection in rejected:
+        minimal = next(d for d in committed if d.key == rejection.key)
+        assert minimal.expected == rejection.expected
+        assert minimal.evidence_revision == rejection.evidence_revision
+        assert minimal.revocations == rejection.revocations
+        assert not (
+            minimal.upsert_supports
+            or minimal.free_tiles
+            or minimal.support_cell_removals
+            or minimal.legacy_edits
+        )
     assert {r.support_id for r in rejected[0].revocations} == {object_id}
     fallback = next(d for d in committed if d.key.sequence == 12)
     assert fallback.expected == rejected[0].expected and fallback.key == rejected[0].key

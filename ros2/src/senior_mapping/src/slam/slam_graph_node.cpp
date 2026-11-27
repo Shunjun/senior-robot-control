@@ -1,3 +1,4 @@
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #include "bounded_scan_ingress.hpp"
 #include "candidate_stationary_match.hpp"
 #include "graph_commit_history.hpp"
@@ -140,7 +141,7 @@ public:
             throw std::runtime_error("Production graph load returned no vertices");
           }
         }
-        mapping_gate_ = create_service<senior_interfaces::srv::MappingGate>("/senior/slam/mapping_gate",
+        mapping_gate_ = create_service<senior_interfaces::srv::MappingGate>(senior_sensor_ingress::wiring::senior_slam_mapping_gate,
           [this](const senior_interfaces::srv::MappingGate::Request::SharedPtr request,
                  senior_interfaces::srv::MappingGate::Response::SharedPtr response) {
             const std::lock_guard<std::mutex> lock(scan_ingress_mutex_);
@@ -282,7 +283,7 @@ private:
     scan_filter_.reset();
     scan_filter_sub_.reset();
     qualified_publisher_ = create_publisher<Qualified>(
-      declare_parameter<std::string>("qualified_scan_topic", "/senior/slam/qualified_scan"),
+      declare_parameter<std::string>("qualified_scan_topic", senior_sensor_ingress::wiring::senior_slam_qualified_scan),
       rclcpp::QoS(1).reliable().durability_volatile());
     bounded_ingress_ = std::make_unique<BoundedScanIngress>(
       *this, *tf_, topic, odom_frame_, base_frame_,
@@ -376,7 +377,7 @@ private:
   void start_owned_capture()
   {
     capture_graph_ = create_service<CaptureGraph>(
-      "/senior/slam/capture_graph",
+      senior_sensor_ingress::wiring::senior_slam_capture_graph,
       [this](const CaptureGraph::Request::SharedPtr, CaptureGraph::Response::SharedPtr response) {
         response->boot_id = boot_id_;
         response->snapshot_sequence = ++snapshot_sequence_;
@@ -595,7 +596,7 @@ private:
   void start_graph_commit_service()
   {
     read_graph_commit_ = create_service<ReadGraphCommit>(
-      "/senior/slam/read_graph_commit",
+      senior_sensor_ingress::wiring::senior_slam_read_graph_commit,
       [this](const ReadGraphCommit::Request::SharedPtr request,
         ReadGraphCommit::Response::SharedPtr response)
       {
@@ -765,7 +766,7 @@ private:
     }
 
     candidate_receipt_ = create_service<ReadLoadedGraph>(
-      "/senior/slam/read_loaded_graph",
+      senior_sensor_ingress::wiring::senior_slam_read_loaded_graph,
       [this, attempt, loaded_digest = staged.digest()](
         const ReadLoadedGraph::Request::SharedPtr, ReadLoadedGraph::Response::SharedPtr response)
       {
@@ -781,7 +782,7 @@ private:
   void start_stationary_diagnostic(const std::string & attempt, const std::string & digest)
   {
     stationary_match_service_ = create_service<MatchStationaryScan>(
-      "/senior/slam/match_stationary_scan",
+      senior_sensor_ingress::wiring::senior_slam_match_stationary_scan,
       [this, attempt, digest](
         const MatchStationaryScan::Request::SharedPtr request,
         MatchStationaryScan::Response::SharedPtr response)
@@ -874,7 +875,7 @@ private:
   void start_graph_service()
   {
     read_graph_ = create_service<ReadGraph>(
-      "/senior/slam/read_graph",
+      senior_sensor_ingress::wiring::senior_slam_read_graph,
       [this](const ReadGraph::Request::SharedPtr, ReadGraph::Response::SharedPtr response) {
         response->boot_id = boot_id_;
         response->snapshot_sequence = ++snapshot_sequence_;

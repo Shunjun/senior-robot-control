@@ -20,10 +20,10 @@ public:
   enum class Match {exact, old_generation, missing};
 
   explicit ScanLedger(size_t capacity = 128, double age_limit = 3.0)
-  : capacity_(capacity), age_limit_(age_limit)
+  : capacity_(capacity)
   {
-    if (capacity == 0 || capacity > 128 || !std::isfinite(age_limit) ||
-        age_limit <= 0 || age_limit > 5) throw std::invalid_argument("invalid scan ledger limits");
+    (void)age_limit;  //Compatible: legacy setting; safety consumers own observation age.
+    if (capacity == 0 || capacity > 128) throw std::invalid_argument("invalid scan ledger capacity");
   }
 
   bool advance(const std::string & boot, uint64_t generation)
@@ -50,10 +50,8 @@ public:
     if (!header.valid || !std::isfinite(now) ||
         header.clock_generation == 0 || header.sample_steady_ns > header.received_steady_ns ||
         now < steady_seconds(header.received_steady_ns) ||
-        now - steady_seconds(header.sample_steady_ns) > age_limit_ ||
         (!boot_.empty() && header.bridge_boot_id != boot_) ||
         !advance(header.bridge_boot_id, header.capture_generation)) return false;
-    expire(now);
     while (values_.size() >= capacity_) evict_front();
     values_.push_back(scan);
     return true;
@@ -68,7 +66,6 @@ public:
     if (header.bridge_boot_id != boot_ || header.capture_generation != generation_) {
       return Match::missing;
     }
-    expire(now);
     for (const auto & scan : values_) if (same_capture_coordinates(scan.capture, header)) return Match::exact;
     return Match::missing;
   }
@@ -109,15 +106,7 @@ private:
     values_.pop_front();
   }
 
-  void expire(double now)
-  {
-    while (!values_.empty() &&
-           (now < steady_seconds(values_.front().capture.received_steady_ns) ||
-            now - steady_seconds(values_.front().capture.sample_steady_ns) > age_limit_)) evict_front();
-  }
-
   size_t capacity_;
-  double age_limit_;
   std::deque<Scan> values_;
   std::string boot_;
   uint64_t generation_ = 0;

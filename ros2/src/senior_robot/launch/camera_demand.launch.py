@@ -13,6 +13,8 @@ from launch.launch_description_sources import (
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+from vehicle_core.ros_wiring import TOPICS
+
 
 def camera_actions(context):
     component = LaunchConfiguration("component").perform(context)
@@ -39,7 +41,7 @@ def camera_actions(context):
         raise ValueError(f"unsupported vendor camera mode: {mode}")
     if component in {"jpeg", "depth_compressed"}:
         stream = "color" if component == "jpeg" else "depth"
-        limited = f"/senior_camera/{stream}/compression_input"
+        limited = getattr(TOPICS, f"senior_camera_{stream}_compression_input")
         limiter = Node(
             package="senior_sensor_ingress",
             executable="camera_rate_limit",

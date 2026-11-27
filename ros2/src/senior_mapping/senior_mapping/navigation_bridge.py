@@ -27,6 +27,7 @@ from senior_mapping.shared_scan import (
 )
 from senior_mapping.workspace import WorkspaceGrid
 from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.ros_wiring import TOPICS
 from vehicle_core.source_order import SourceOrder
 from vehicle_core.values import MapRef, Pose2D
 
@@ -533,7 +534,7 @@ class NativeNavigationBridge:
         if self._current_publisher is None:
             self._current_publisher = self.node.create_publisher(
                 CurrentObstacles,
-                "/senior/mapping/current_obstacles",
+                TOPICS.senior_mapping_current_obstacles,
                 QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE),
             )
         message = CurrentObstacles()

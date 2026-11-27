@@ -7,12 +7,13 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from vehicle_core.launch_recovery import restart_prefix
+from vehicle_core.ros_wiring import TOPICS
 from vehicle_core.sensor_parameters import ros_sensor_parameters
 
 
 def generate_launch_description():
     remappings = [
-        ("/rgbd_diagnostic/" + stream, "/safety/raw/" + stream)
+        (getattr(TOPICS, f"rgbd_diagnostic_{stream}"), getattr(TOPICS, f"safety_raw_{stream}"))
         for stream in ("rgb", "depth", "rgb_info", "depth_info")
     ]
     common = {

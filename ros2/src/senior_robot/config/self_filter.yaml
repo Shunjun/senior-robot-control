@@ -1,4 +1,4 @@
-scan_adapter:
+/**:
   ros__parameters:
     use_sim_time: true
     body_frame: base_link

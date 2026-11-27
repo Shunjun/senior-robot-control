@@ -1,5 +1,9 @@
 cmake_minimum_required(VERSION 3.8)
 project(senior_sensor_ingress)
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/ros_wiring.cmake")
+set(wiring_include "${CMAKE_CURRENT_BINARY_DIR}/generated")
+senior_generate_wiring("${wiring_include}/senior_sensor_ingress/ros_wiring.hpp")
+include_directories("${wiring_include}")
 find_package(ament_cmake REQUIRED)
 find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
@@ -95,10 +99,12 @@ endif()
 # Public monotonic capture contracts, independent of generated message targets.
 add_library(sensor_timing INTERFACE)
 target_include_directories(sensor_timing INTERFACE
+  "$<BUILD_INTERFACE:${wiring_include}>"
   "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>"
   "$<INSTALL_INTERFACE:include/${PROJECT_NAME}>")
 target_compile_features(sensor_timing INTERFACE cxx_std_17)
 install(DIRECTORY include/ DESTINATION include/${PROJECT_NAME})
+install(DIRECTORY "${wiring_include}/" DESTINATION include/${PROJECT_NAME})
 install(TARGETS sensor_timing EXPORT export_sensor_timing)
 ament_export_targets(export_sensor_timing HAS_LIBRARY_TARGET)
 if(BUILD_TESTING)

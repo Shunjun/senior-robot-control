@@ -1,3 +1,5 @@
+#include <senior_sensor_ingress/publisher_topology.hpp>
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #include "senior_sensor_ingress/scan_receipt.hpp"
 
 #include <algorithm>
@@ -43,23 +45,23 @@ bool layout_ok(const sensor_msgs::msg::LaserScan & scan)
 
 ScanReceipt::ScanReceipt(const rclcpp::NodeOptions & options, BeforeVerify before_verify,
                          bool test_reentrant_callbacks)
-: Node("scan_receipt", options), before_verify_(std::move(before_verify))
+: Node(senior_sensor_ingress::wiring::node_scan_receipt, senior_sensor_ingress::wiring::ns_scan_receipt, options), before_verify_(std::move(before_verify))
 {
   input_topic_ = declare_parameter<std::string>("scan_topic", "/scan");
   expected_node_name_ = declare_parameter<std::string>("expected_node_name", "");
   expected_namespace_ = declare_parameter<std::string>("expected_namespace", "");
-  const auto output = declare_parameter<std::string>("raw_scan_topic", "/safety/raw/scan");
+  const auto output = declare_parameter<std::string>("raw_scan_topic", senior_sensor_ingress::wiring::safety_raw_scan);
   if (!text_ok(input_topic_, 128) || !text_ok(output, 128) || input_topic_ == output) {
     throw std::invalid_argument("invalid scan receipt topics");
   }
-  safety_owner_.topic = declare_parameter<std::string>("safety_candidate_topic", "/safety/scan_candidate");
-  filter_owner_.topic = declare_parameter<std::string>("filter_candidate_topic", "/perception/scan_candidate");
+  safety_owner_.topic = declare_parameter<std::string>("safety_candidate_topic", senior_sensor_ingress::wiring::safety_scan_candidate);
+  filter_owner_.topic = declare_parameter<std::string>("filter_candidate_topic", senior_sensor_ingress::wiring::perception_scan_candidate);
   safety_owner_.expected_name = declare_parameter<std::string>("safety_publisher_name", "");
   safety_owner_.expected_namespace = declare_parameter<std::string>("safety_publisher_namespace", "");
   filter_owner_.expected_name = declare_parameter<std::string>("filter_publisher_name", "");
   filter_owner_.expected_namespace = declare_parameter<std::string>("filter_publisher_namespace", "");
-  const auto safety_output = declare_parameter<std::string>("safety_output_topic", "/safety/bounded_scan");
-  const auto filter_output = declare_parameter<std::string>("filter_output_topic", "/perception/scan_filtered");
+  const auto safety_output = declare_parameter<std::string>("safety_output_topic", senior_sensor_ingress::wiring::safety_bounded_scan);
+  const auto filter_output = declare_parameter<std::string>("filter_output_topic", senior_sensor_ingress::wiring::perception_scan_filtered);
   std::set<std::string> topics{input_topic_, output, safety_owner_.topic, filter_owner_.topic,
                                safety_output, filter_output};
   if (topics.size() != 6 || !text_ok(safety_owner_.topic, 128) ||
@@ -192,9 +194,7 @@ void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rcl
   std::lock_guard<std::mutex> lock(mutex_);
   if (!current_receipt(*receipt)) return;
   const auto graph = get_publishers_info_by_topic(input_topic_);
-  if (graph.size() != 1 || graph.front().topic_type() != "sensor_msgs/msg/LaserScan" ||
-      (!expected_node_name_.empty() && graph.front().node_name() != expected_node_name_) ||
-      (!expected_namespace_.empty() && graph.front().node_namespace() != expected_namespace_)) {
+  if (!publisher_matches(graph, expected_node_name_, expected_namespace_, "sensor_msgs/msg/LaserScan")) {
     active_ = false;
     if (!invalid_) {invalidate("raw_topology_unavailable", &message, received_ros,
                                received_steady_ns, actual); invalid_ = true;}
@@ -256,9 +256,7 @@ bool ScanReceipt::qualify_owner(Owner & owner, const rmw_gid_t & incoming,
   const auto graph = get_publishers_info_by_topic(owner.topic);
   const auto type = &owner == &safety_owner_ ?
     "senior_interfaces/msg/BoundedSafetyScan" : "senior_interfaces/msg/BoundedFilteredScan";
-  if (graph.size() != 1 || graph.front().topic_type() != type ||
-      (!owner.expected_name.empty() && graph.front().node_name() != owner.expected_name) ||
-      (!owner.expected_namespace.empty() && graph.front().node_namespace() != owner.expected_namespace)) {
+  if (!publisher_matches(graph, owner.expected_name, owner.expected_namespace, type)) {
     invalidate_owner(owner, &owner == &safety_owner_ ? 0 : 1, "owner_unavailable", true);
     owner.active = false;
     return false;

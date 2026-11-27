@@ -8,6 +8,7 @@ find_package(pluginlib REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(senior_interfaces REQUIRED)
+find_package(senior_sensor_ingress REQUIRED)
 find_package(tf2 REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
@@ -20,7 +21,7 @@ target_include_directories(senior_current_scan_layer PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(senior_current_scan_layer
-  nav2_costmap_2d geometry_msgs pluginlib rclcpp rcl_interfaces senior_interfaces tf2 tf2_ros tf2_geometry_msgs)
+  nav2_costmap_2d geometry_msgs pluginlib rclcpp rcl_interfaces senior_interfaces senior_sensor_ingress tf2 tf2_ros tf2_geometry_msgs)
 pluginlib_export_plugin_description_file(nav2_costmap_2d current_scan_layer.xml)
 install(TARGETS senior_current_scan_layer EXPORT senior_current_scan_layer
   ARCHIVE DESTINATION lib LIBRARY DESTINATION lib RUNTIME DESTINATION bin)

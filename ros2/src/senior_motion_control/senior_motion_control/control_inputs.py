@@ -4,6 +4,7 @@ import multiprocessing as mp
 import os
 
 from vehicle_core.process_resources import LatestSnapshot, child_lifetime, stop_process
+from vehicle_core.ros_wiring import TOPICS
 
 
 def _receive(parameters, remaps, snapshots, stop, parent_pid):
@@ -53,7 +54,7 @@ class ControlInputs:
             for topic in (
                 str(node._motion_core.profile.wheel_topic),
                 str(node._motion_core.profile.imu_topic),
-                "/motion/scan",
+                TOPICS.motion_scan,
                 "/tf",
                 "/tf_static",
             )

@@ -1085,7 +1085,14 @@ class MapReferenceStore:
             or scan.host_boot_id != w.host_boot_id
             or scan.key.backend_boot != w.backend_boot
             or scan.capture.time.sample_steady_ns <= self._fixed_floor_ns
-            or (previous is not None and scan.key.sequence <= previous.sequence)
+            or (
+                previous is not None
+                and (
+                    scan.key.stamp_ns is None
+                    or previous.stamp_ns is None
+                    or scan.key.stamp_ns <= previous.stamp_ns
+                )
+            )
             or (
                 basis.map_ref,
                 basis.reference_generation,
@@ -1147,7 +1154,14 @@ class MapReferenceStore:
             )
             or self._known_anchors.get(basis.anchor_id) != basis.map_basis
             or scan.capture.time.sample_steady_ns <= self._fixed_floor_ns
-            or (self._fixed_floor is not None and scan.key.sequence <= self._fixed_floor.sequence)
+            or (
+                self._fixed_floor is not None
+                and (
+                    scan.key.stamp_ns is None
+                    or self._fixed_floor.stamp_ns is None
+                    or scan.key.stamp_ns <= self._fixed_floor.stamp_ns
+                )
+            )
             or not scan.capture.time.sample_steady_ns
             <= self._fixed_clock()
             < scan.valid_until_steady_ns
@@ -1224,7 +1238,14 @@ class MapReferenceStore:
             or delta.key != scan.key
             or delta.trigger_anchor_id != basis.anchor_id
             or delta.evidence_revision <= w.evidence_revision
-            or (w.evidence_key is not None and delta.key.sequence <= w.evidence_key.sequence)
+            or (
+                w.evidence_key is not None
+                and (
+                    delta.key.stamp_ns is None
+                    or w.evidence_key.stamp_ns is None
+                    or delta.key.stamp_ns <= w.evidence_key.stamp_ns
+                )
+            )
         ):
             raise DomainError(ErrorCode.CONFLICT, "evidence belongs to a stale graph or scan")
         try:

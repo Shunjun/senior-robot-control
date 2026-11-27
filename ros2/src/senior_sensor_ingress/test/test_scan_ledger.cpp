@@ -32,7 +32,8 @@ TEST(ScanLedger, RawSafetyAndFilteredBeamsRemainBoundToIssuedFrame)
   auto forged = original.capture;
   forged.received_steady_ns += 10000000ULL;
   EXPECT_FALSE(ledger.same_ranges(forged, original.ranges, 10.1));
-  EXPECT_EQ(ledger.match(original.capture, 11.01), ScanLedger::Match::missing);
+  EXPECT_EQ(ledger.match(original.capture, 14.0), ScanLedger::Match::exact);
+  ASSERT_TRUE(ledger.observe(original, 14.0));  // Retention is not safety qualification.
 }
 
 TEST(ScanLedger, OldGenerationAndCapacityDoNotRevokeSuccessor)

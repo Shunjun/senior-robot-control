@@ -1,3 +1,4 @@
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #include "senior_navigation/current_scan_layer.hpp"
 
 #include <algorithm>
@@ -493,7 +494,7 @@ void CurrentScanLayer::receiveQ(CurrentObstacles::ConstSharedPtr scan, const rcl
   PublisherGid gid{};
   std::copy_n(info.get_rmw_message_info().publisher_gid.data, gid.size(), gid.begin());
   try {
-    const auto writers = node->get_publishers_info_by_topic("/senior/mapping/current_obstacles");
+    const auto writers = node->get_publishers_info_by_topic(senior_sensor_ingress::wiring::senior_mapping_current_obstacles);
     const auto maps = node->get_publishers_info_by_topic("/map");
     owner = writers.size() == 1 && maps.size() == 1 &&
       writers[0].topic_type() == "senior_interfaces/msg/CurrentObstacles" &&
@@ -684,7 +685,7 @@ void CurrentScanLayer::onInitialize()
   rclcpp::SubscriptionOptions options;
   options.callback_group = callback_group_;
   subscription_ = node->create_subscription<CurrentObstacles>(
-    "/senior/mapping/current_obstacles", rclcpp::QoS(1).reliable().durability_volatile(),
+    senior_sensor_ingress::wiring::senior_mapping_current_obstacles, rclcpp::QoS(1).reliable().durability_volatile(),
     [weak_self](CurrentObstacles::ConstSharedPtr scan, const rclcpp::MessageInfo & info) {
       if (auto self = weak_self.lock()) {
         static_cast<CurrentScanLayer *>(self.get())->receiveQ(std::move(scan), info);
