@@ -6,6 +6,8 @@ from dataclasses import dataclass
 
 from senior_contracts.wire import SnapshotEnvelope, SnapshotPayload
 
+_ScanScope = tuple[tuple[str, int, str], tuple[str, str]]
+
 
 def snapshot_envelope(
     snapshot: SnapshotPayload,
@@ -72,7 +74,7 @@ class SnapshotCache:
         self._monotonic = monotonic
         self._session_epoch: dict[str, int] = {}
         self._snapshot_sequence: dict[str, int] = {}
-        self._scan_scope: dict[str, tuple] = {}
+        self._scan_scope: dict[str, _ScanScope] = {}
         self._scan_sequence: dict[str, int] = {}
         self._scan_deadline: dict[str, float] = {}
         self._entries: dict[str, tuple[SnapshotPayload, float]] = {}

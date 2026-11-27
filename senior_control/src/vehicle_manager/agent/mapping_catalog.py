@@ -6,10 +6,11 @@ No directory-only edit is acknowledged as starting a SLAM session.
 """
 
 import asyncio
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
     from senior_mapping.active import ActiveMap
+    from senior_mapping.native_session import NativeMappingBackend, NativeSession
     from senior_mapping.runtime import MappingRuntime
 
     from vehicle_core.values import MapRef, Pose2D
@@ -209,7 +210,9 @@ class ProductionMappingRequests:
                 if session is None or ref != session.entry.map_ref:
                     raise DomainError(ErrorCode.CONFLICT, "export needs the selected owner cut")
                 destination = Path(fields["path"])
-                root = self._runtime.backend.root.parent / "map-transfer"
+                # This adapter is constructed with the native backend by its factory.
+                backend = cast("NativeMappingBackend", self._runtime.backend)
+                root = backend.root.parent / "map-transfer"
                 if (
                     not destination.is_absolute()
                     or destination.parent != root
@@ -220,7 +223,7 @@ class ProductionMappingRequests:
                 root.mkdir(mode=0o700, parents=True, exist_ok=True)
                 # Original task dispatcher validates the filename/operation ID;
                 # the mapping owner also enforces the local destination boundary.
-                await session.export_bundle(destination)
+                await cast("NativeSession", session).export_bundle(destination)
                 return {"ok": True, "operation_id": fields.get("operation_id")}
             except DomainError as exc:
                 return {"ok": False, "error": exc.code.value}
