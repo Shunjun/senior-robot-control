@@ -82,14 +82,14 @@ public:
     pose_service_ = node.create_service<Pose>("/senior/slam/read_mapping_pose",
       [this](Pose::Request::SharedPtr request, Pose::Response::SharedPtr response) {
         if (request->boot_id != boot_ || !active_() || !pose_ ||
-          !scan_receipt_admission::fresh(pose_->capture, scan_receipt_admission::steady_seconds()))
+          !scan_receipt_admission::sample_valid(pose_->capture))
         {return;}
         *response = *pose_;
       });
   }
 
   void observe(const senior_interfaces::msg::RawCaptureHeader & capture,
-    const karto::Pose2 & odometry, bool verified_static)
+    const karto::Pose2 & odometry)
   {
     if (!std::isfinite(odometry.GetX()) || !std::isfinite(odometry.GetY()) ||
       !std::isfinite(odometry.GetHeading())) {pose_.reset(); return;}
@@ -97,7 +97,6 @@ public:
     result.boot_id = boot_; result.capture = capture; result.ok = true;
     result.odom_x = odometry.GetX(); result.odom_y = odometry.GetY();
     result.odom_yaw = odometry.GetHeading();
-    result.static_lidar_tf_receipt_valid = verified_static;
     pose_ = std::move(result);
   }
 

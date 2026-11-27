@@ -63,7 +63,7 @@ inline bool disjoint_stationary_match_seeds(
 inline bool valid_stationary_match_query(const StationaryMatchQuery & query)
 {
   const auto count = query.ranges.size();
-  if (count < stationary_match_min_beams || count > 2048 ||
+  if (count < stationary_match_min_beams ||
     !(std::abs(query.first_angle) <= stationary_match_full_turn) ||
     !(query.angle_step > 0 && (count - 1) * query.angle_step <=
     stationary_match_full_turn + stationary_match_layout_tolerance))
@@ -72,10 +72,7 @@ inline bool valid_stationary_match_query(const StationaryMatchQuery & query)
   }
   std::size_t usable = 0;
   for (const auto range : query.ranges) {
-    if (std::isnan(range) || range < 0) {
-      return false;
-    }
-    if (range > 0 && range < stationary_match_range_limit) {
+    if (std::isfinite(range) && range > 0 && range < stationary_match_range_limit) {
       ++usable;
     }
   }

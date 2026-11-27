@@ -34,9 +34,9 @@ class RosMappingBackend:
         self._prepare_live = prepare_live
         self._services: dict[str, tuple[Any, Any]] = {}
         self._child: asyncio.subprocess.Process | None = None
-        self._relay: asyncio.subprocess.Process | None = None
         self._resources = ResourceProcesses("mapping")
         self._boot = ""
+        self._input_deadline: float | None = None
         self._root: Path | None = None
         ram = "/dev/shm" if Path("/dev/shm").is_dir() else None
         self._transfer = tempfile.TemporaryDirectory(prefix="senior-map-", dir=ram)
@@ -151,6 +151,8 @@ class RosMappingBackend:
                     response = await self._call(
                         "gate", boot_id=self._boot, accepting=fields["accepting"]
                     )
+                    if response.ok and fields["accepting"] and response.graph_commit_sequence == 0:
+                        await self._wait_initial_commit()
                     return {"ok": bool(response.ok), "sequence": response.graph_commit_sequence}
                 if method == "grid":
                     if fields.get("purpose") not in ("diagnostic", "migrate_legacy"):
@@ -208,6 +210,35 @@ class RosMappingBackend:
             except (OSError, ValueError, KeyError, TypeError):
                 return {"ok": False, "error": ErrorCode.VALIDATION.value}
 
+    async def _wait_initial_commit(self) -> None:
+        """Wait for a qualified first cut within the original start deadline.
+
+        An owned EMPTY watermark is not a scan witness. Native status and input
+        qualification remain authoritative; no UNAVAILABLE cut is consumed.
+        """
+        deadline = self._input_deadline
+        if deadline is None:
+            raise DomainError(ErrorCode.CONFLICT, "SLAM input deadline is unavailable")
+        loop = asyncio.get_running_loop()
+        while (remaining := deadline - loop.time()) > 0:
+            try:
+                graph = await asyncio.wait_for(self._call("graph"), remaining)
+            except asyncio.TimeoutError:
+                break
+            if graph.boot_id != self._boot:
+                raise DomainError(ErrorCode.CONFLICT, "SLAM boot changed")
+            if loop.time() >= deadline:
+                break
+            if (
+                graph.status == graph.OK
+                and graph.graph_commit_watermark_valid
+                and graph.graph_commit_sequence > 0
+                and graph.last_committed_scan_valid
+            ):
+                return
+            await asyncio.sleep(min(0.02, max(0.0, deadline - loop.time())))
+        raise DomainError(ErrorCode.UNAVAILABLE, "SLAM input did not become ready")
+
     async def _start(self, fields: dict[str, Any]) -> dict[str, Any]:
         from ament_index_python.packages import get_package_prefix, get_package_share_directory
 
@@ -236,11 +267,7 @@ class RosMappingBackend:
             "transform_publish_period": 0.0,
             "odom_frame": fields.get("odom_frame", "odom"),
             "use_sim_time": bool(self.node.get_parameter("use_sim_time").value),
-            "verified_static_lidar_tf_topic": "/senior/slam/static_lidar_tf_receipt",
-            "verified_static_lidar_frame": fields.get("lidar_frame", "laser_link"),
-            "verified_static_lidar_relay_node": "/slam_static_lidar_tf_receipt",
-            "verified_static_lidar_tf_source_topic": "/tf_static",
-            "verified_static_lidar_tf_source_node": "/robot_state_publisher",
+            "lidar_frame": fields.get("lidar_frame", "laser_link"),
         }
         if fields.get("prefix"):
             parameters.update(
@@ -265,34 +292,11 @@ class RosMappingBackend:
             *args, env=environment, start_new_session=True
         )
         self._resources.started(self._child.pid)
-        relay = (
-            Path(get_package_prefix("senior_sensor_ingress"))
-            / "lib/senior_sensor_ingress/static_tf_receipt_node"
-        )
-        relay_parameters = {
-            "input_topic": "/tf_static",
-            "output_topic": "/senior/slam/static_lidar_tf_receipt",
-            "base_frame": "base_link",
-            "camera_frame": fields.get("lidar_frame", "laser_link"),
-            "expected_node_name": "robot_state_publisher",
-            "expected_namespace": "/",
-            "use_sim_time": parameters["use_sim_time"],
-        }
-        relay_args = [str(relay), "--ros-args", "-r", "__node:=slam_static_lidar_tf_receipt"]
-        for key, value in relay_parameters.items():
-            relay_args.extend(["-p", f"{key}:={json.dumps(value)}"])
-        try:
-            self._relay = await asyncio.create_subprocess_exec(
-                *relay_args, env=environment, start_new_session=True
-            )
-            self._resources.started(self._relay.pid)
-        except BaseException:
-            await self._stop()
-            raise
         self._root = root
         self._legacy_raster_used = False
         try:
             deadline = asyncio.get_running_loop().time() + 10
+            self._input_deadline = deadline
             while True:
                 graph = await self._call("graph")
                 if graph.graph_commit_watermark_valid:
@@ -370,38 +374,15 @@ class RosMappingBackend:
         self._scan_accepting = True
         self._scan_timer = self.node.create_timer(0.05, self._poll_scan_channel)
 
-    def _qualified_owner(self) -> bytes | None:
-        endpoints = self.node.get_publishers_info_by_topic("/senior/slam/qualified_scan")
-        if len(endpoints) != 1:
-            return None
-        owner = endpoints[0]
-        if (
-            owner.node_name != "slam_toolbox"
-            or owner.node_namespace != "/"
-            or owner.topic_type != "senior_interfaces/msg/QualifiedMappingScan"
-        ):
-            return None
-        gid = bytes(owner.endpoint_gid)
-        if self._qualified_gid is not None and self._qualified_gid != gid:
-            return None
-        return gid
-
     def _on_qualified_scan(self, message: Any, info: Any) -> None:
         if not self._scan_accepting or message.backend_boot != self._boot:
             return
-        owner = self._qualified_owner()
-        if (
-            owner is None
-            or not isinstance(info, dict)
-            or info.get("native_receipt_authenticated") is not True
-            or bytes(info.get("publisher_gid", b"")) != owner
-        ):
+        # The native receiving entry already checked configured writer/type/namespace.
+        if not isinstance(info, dict) or info.get("native_receipt_authenticated") is not True:
             return
-        self._qualified_gid = owner
+        self._qualified_gid = info.get("publisher_gid")  # Diagnostic only.
         if message.status != message.QUALIFIED:
-            self._navigation.invalidate_current(
-                message.reason or "native_invalid", retired=message.status == message.RETIRED
-            )
+            self._navigation.invalidate_current(message.reason or "native_invalid")
             return
         try:
             view = None if self._learning_client is None else self._learning_client.view
@@ -417,9 +398,8 @@ class RosMappingBackend:
             return
         if self._learning_client is not None:
             self._learning_client.poll()
-        owner = self._qualified_owner()
-        if self._qualified_gid is not None and owner is None:
-            self._navigation.invalidate_current("qualified_owner_changed", retired=True)
+        # Receiving-entry loss is delivered by _invalidate_qualified; do not
+        # repeat graph qualification in this forwarding/housekeeping layer.
         self._navigation.check_current()
         self._navigation.poll_contract()
         if self._scan_slot is not None and self._scan_slot.error is not None:
@@ -440,7 +420,7 @@ class RosMappingBackend:
         if self._scan_slot is not None:
             await asyncio.to_thread(self._scan_slot.close)
             self._scan_slot = self._navigation.slot = None
-        for child in (self._child, self._relay):
+        for child in (self._child,):
             if child is None:
                 continue
             if child.returncode is None:
@@ -454,7 +434,8 @@ class RosMappingBackend:
                     os.killpg(child.pid, signal.SIGKILL)
                     await child.wait()
             self._resources.exited(child.pid)
-        self._child = self._relay = None
+        self._child = None
+        self._input_deadline = None
 
     @staticmethod
     def _graph(response: Any) -> dict[str, Any]:
@@ -468,7 +449,7 @@ class RosMappingBackend:
 
     async def _publish_cut(self, response: Any) -> dict[str, Any]:
         scan = response.scan
-        if not response.static_lidar_tf_receipt_valid or response.raw_ray_angle_sign not in (-1, 1):
+        if response.raw_ray_angle_sign not in (-1, 1):
             raise DomainError(ErrorCode.UNAVAILABLE, "SLAM scan geometry is unavailable")
         cut = self._graph(response)
         cut.update(

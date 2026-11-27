@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstring>
 #include <deque>
-#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -18,7 +17,7 @@ class ScanLedger {
 public:
   using Scan = senior_interfaces::msg::BoundedRawLaserScan;
   using Header = senior_interfaces::msg::RawCaptureHeader;
-  enum class Match {exact, retired, missing};
+  enum class Match {exact, old_generation, missing};
 
   explicit ScanLedger(size_t capacity = 128, double age_limit = 3.0)
   : capacity_(capacity), age_limit_(age_limit)
@@ -29,11 +28,10 @@ public:
 
   bool advance(const std::string & boot, uint64_t generation)
   {
-    if (closed_ || boot.empty() || boot.size() > 64 || generation == 0 ||
-        retired_boots_.count(boot) != 0) return false;
-    if (!boot_.empty() && boot != boot_) {
-      retired_boots_.insert(boot_);
-      if (retired_boots_.size() >= 256) {closed_ = true; return false;}
+    if (boot.empty() || generation == 0) return false;
+    // Explicit owner transition; observe() never switches boot on an arriving packet.
+    if (boot != boot_) {
+      values_.clear();
       boot_ = boot;
       generation_ = 0;
     }
@@ -41,7 +39,6 @@ public:
     if (boot_.empty()) boot_ = boot;
     if (generation > generation_) {
       values_.clear();
-      retired_sequence_ = 0;
       generation_ = generation;
     }
     return true;
@@ -50,40 +47,36 @@ public:
   bool observe(const Scan & scan, double now)
   {
     const auto & header = scan.capture;
-    if (!header.valid || header.sequence == 0 || scan.ranges.size() > 2048 ||
-        scan.intensities.size() > 2048 || !std::isfinite(now) ||
+    if (!header.valid || !std::isfinite(now) ||
         header.clock_generation == 0 || header.sample_steady_ns > header.received_steady_ns ||
         now < steady_seconds(header.received_steady_ns) ||
         now - steady_seconds(header.sample_steady_ns) > age_limit_ ||
+        (!boot_.empty() && header.bridge_boot_id != boot_) ||
         !advance(header.bridge_boot_id, header.capture_generation)) return false;
     expire(now);
-    if ((!values_.empty() && header.sequence <= values_.back().capture.sequence) ||
-        header.sequence <= retired_sequence_) return false;
-    while (values_.size() >= capacity_) retire_front();
+    while (values_.size() >= capacity_) evict_front();
     values_.push_back(scan);
     return true;
   }
 
   Match match(const Header & header, double now)
   {
-    if (closed_ || header.sequence == 0 || !std::isfinite(now)) return Match::missing;
-    if (retired_boots_.count(header.bridge_boot_id) != 0 ||
-        (header.bridge_boot_id == boot_ && header.capture_generation < generation_)) {
-      return Match::retired;
+    if (!std::isfinite(now)) return Match::missing;
+    if (header.bridge_boot_id == boot_ && header.capture_generation < generation_) {
+      return Match::old_generation;
     }
     if (header.bridge_boot_id != boot_ || header.capture_generation != generation_) {
       return Match::missing;
     }
     expire(now);
-    if (header.sequence <= retired_sequence_) return Match::retired;
-    for (const auto & scan : values_) if (scan.capture == header) return Match::exact;
+    for (const auto & scan : values_) if (same_capture_coordinates(scan.capture, header)) return Match::exact;
     return Match::missing;
   }
 
   const Scan * find(const Header & header, double now)
   {
     if (match(header, now) != Match::exact) return nullptr;
-    for (const auto & scan : values_) if (scan.capture == header) return &scan;
+    for (const auto & scan : values_) if (same_capture_coordinates(scan.capture, header)) return &scan;
     return nullptr;
   }
 
@@ -111,11 +104,8 @@ public:
   }
 
 private:
-  void retire_front()
+  void evict_front()
   {
-    if (values_.front().capture.sequence > retired_sequence_) {
-      retired_sequence_ = values_.front().capture.sequence;
-    }
     values_.pop_front();
   }
 
@@ -123,15 +113,13 @@ private:
   {
     while (!values_.empty() &&
            (now < steady_seconds(values_.front().capture.received_steady_ns) ||
-            now - steady_seconds(values_.front().capture.sample_steady_ns) > age_limit_)) retire_front();
+            now - steady_seconds(values_.front().capture.sample_steady_ns) > age_limit_)) evict_front();
   }
 
   size_t capacity_;
   double age_limit_;
   std::deque<Scan> values_;
   std::string boot_;
-  std::set<std::string> retired_boots_;
-  uint64_t generation_ = 0, retired_sequence_ = 0;
-  bool closed_ = false;
+  uint64_t generation_ = 0;
 };
 }  // namespace senior_sensor_ingress

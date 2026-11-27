@@ -11,7 +11,7 @@ import os
 import stat
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -24,15 +24,13 @@ from vehicle_core.config import DeviceProfile
 from vehicle_core.sample_time import SampleTime
 from vehicle_core.values import Pose2D
 
-# 320 encoded bytes/beam includes four worst-case binary64 coordinates, index,
-# kind and optional limit, field names and punctuation. 32KiB bounds the envelope.
-MAX_BEAMS = 2048
-MAX_SLOT_BYTES = MAX_BEAMS * 320 + 32768
+# The existing serialized-slot byte budget is independent of scan beam count.
+MAX_SLOT_BYTES = 672 * 1024
 
 
 def _text(value: str, limit: int) -> None:
-    if not isinstance(value, str) or not 1 <= len(value.encode("utf-8")) <= limit:
-        raise ValueError("scan metadata text exceeds bound")
+    if not isinstance(value, str) or not value:
+        raise ValueError("scan metadata text must be nonempty")
 
 
 def _u64(value: int) -> None:
@@ -44,21 +42,23 @@ def _u64(value: int) -> None:
 class ScanKey:
     backend_boot: str
     bridge_boot_id: str
-    source_epoch: str
+    source_epoch: str = field(compare=False)
     capture_generation: int
     clock_generation: int
-    raw_gid: str
-    bridge_gid: str
-    sequence: int
+    raw_gid: str = field(compare=False)
+    bridge_gid: str = field(compare=False)
+    sequence: int = field(compare=False)
+    stamp_ns: int | None = None
 
     def __post_init__(self) -> None:
         _text(self.backend_boot, 36)
-        for value in (self.bridge_boot_id, self.source_epoch):
-            _text(value, 64)
-        for value in (self.raw_gid, self.bridge_gid):
-            _text(value, 128)
+        _text(self.bridge_boot_id, 64)
         for value in (self.capture_generation, self.clock_generation, self.sequence):
             _u64(value)
+        if self.stamp_ns is not None and (
+            type(self.stamp_ns) is not int or not 0 <= self.stamp_ns < 1 << 63
+        ):
+            raise ValueError("invalid capture stamp")
 
     @classmethod
     def of(cls, boot: str, capture: RawCaptureHeader) -> "ScanKey":
@@ -71,11 +71,33 @@ class ScanKey:
             capture.raw_gid,
             capture.bridge_gid,
             capture.sequence,
+            capture.stamp_ns,
         )
 
     @property
     def source(self) -> tuple:
-        return tuple(asdict(self).values())[:-1]
+        return (
+            self.backend_boot,
+            self.bridge_boot_id,
+            "",
+            self.capture_generation,
+            self.clock_generation,
+            "",
+            "",
+        )
+
+    @property
+    def source_payload(self) -> dict:
+        names = (
+            "backend_boot",
+            "bridge_boot_id",
+            "source_epoch",
+            "capture_generation",
+            "clock_generation",
+            "raw_gid",
+            "bridge_gid",
+        )
+        return dict(zip(names, self.source, strict=True))
 
 
 @dataclass(frozen=True)
@@ -89,7 +111,7 @@ class Beam:
     def __post_init__(self) -> None:
         if (
             type(self.index) is not int
-            or not 0 <= self.index < MAX_BEAMS
+            or self.index < 0
             or self.kind not in ("hit", "self", "invalid", "clear")
             or len(self.origin_odom) != 2
             or not all(math.isfinite(v) for v in self.origin_odom)
@@ -121,7 +143,6 @@ class QualifiedScan:
         if (
             self.key != ScanKey.of(self.key.backend_boot, self.capture)
             or not self.capture.valid
-            or len(self.beams) > MAX_BEAMS
             or tuple(beam.index for beam in self.beams) != tuple(range(len(self.beams)))
             or self.valid_until_steady_ns != self.capture.time.sample_steady_ns + 500_000_000
         ):
@@ -146,10 +167,9 @@ def decode_qualified_scan(
     if (
         message.status != 1
         or not capture.valid
-        or not message.static_receipt_valid
         or message.raw_ray_angle_sign not in (-1, 1)
-        or not 1 <= len(raw.ranges) <= MAX_BEAMS
-        or not 1 <= len(message.geometry_id) <= 128
+        or not raw.ranges
+        or not message.geometry_id
     ):
         raise ValueError("unqualified scan")
     mount, odom = message.base_lidar, message.odom_base
@@ -300,8 +320,6 @@ def _decode(data: dict) -> ScanEnvelope:
             )
             for b in scan["beams"]
         )
-        if len(beams) > MAX_BEAMS:
-            raise ValueError("scan capacity")
         scan = QualifiedScan(
             **{
                 **scan,
@@ -402,10 +420,8 @@ class LatestScanSlot:
                 or scan.capture.time.sample_steady_ns <= self._floor_steady_ns
             ):
                 return False
-            if self._last is not None and (
-                scan.key.source != self._last.source or scan.key.sequence <= self._last.sequence
-            ):
-                return False
+            if self._last == scan.key:
+                return False  # Coalesce the identical immutable sample; never renew its deadline.
             self._last = scan.key
             self._offer("valid", scan, "")
             return True
@@ -640,7 +656,7 @@ def _contract_decode(row, record_type):
         source = data["source"]
         if not isinstance(source, dict) or "sequence" in source:
             raise ValueError("invalid source")
-        _contract_decode({**source, "sequence": 0}, ScanKey)
+        _contract_decode({**source, "sequence": 0, "stamp_ns": None}, ScanKey)
     if data.get("updated_bounds") is not None:
         bounds = data["updated_bounds"]
         if (

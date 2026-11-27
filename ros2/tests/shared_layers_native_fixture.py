@@ -412,28 +412,43 @@ class NativeFixture:
         from tf2_ros import TransformException
 
         next_observation = next_topics = 0
-        while True:
-            self.executor.spin_once(timeout_sec=0)
-            for key, row in tuple(self.pending_tf.items()):
-                try:
-                    transform = self.tf.lookup_transform(
-                        "map", "odom", Time(nanoseconds=row["stamp_ns"])
+        observation = None
+        try:
+            while True:
+                if observation is not None and observation.done():
+                    observation.result()  # The original assertion/error must reach wait().
+                    observation = None
+                self.executor.spin_once(timeout_sec=0)
+                for key, row in tuple(self.pending_tf.items()):
+                    try:
+                        transform = self.tf.lookup_transform(
+                            "map", "odom", Time(nanoseconds=row["stamp_ns"])
+                        )
+                    except TransformException:
+                        continue
+                    stamp = (
+                        transform.header.stamp.sec * 1_000_000_000 + transform.header.stamp.nanosec
                     )
-                except TransformException:
-                    continue
-                stamp = transform.header.stamp.sec * 1_000_000_000 + transform.header.stamp.nanosec
-                assert stamp == row["stamp_ns"], "TF was not exact original scan stamp"
-                self.index.add("tf", row)
-                self.trace.emit("tf", **row)
-                del self.pending_tf[key]
-            now = time.monotonic_ns()
-            if now >= next_topics:
-                self._observe_controller_topics()
-                next_topics = now + 1_000_000_000
-            if self.observed_session is not None and now >= next_observation:
-                await self.observe(self.observed_session)
-                next_observation = now + 100_000_000
-            await asyncio.sleep(0.005)
+                    assert stamp == row["stamp_ns"], "TF was not exact original scan stamp"
+                    self.index.add("tf", row)
+                    self.trace.emit("tf", **row)
+                    del self.pending_tf[key]
+                now = time.monotonic_ns()
+                if now >= next_topics:
+                    self._observe_controller_topics()
+                    next_topics = now + 1_000_000_000
+                if (
+                    observation is None
+                    and self.observed_session is not None
+                    and now >= next_observation
+                ):
+                    observation = asyncio.create_task(self.observe(self.observed_session))
+                    next_observation = now + 100_000_000
+                await asyncio.sleep(0.005)
+        finally:
+            if observation is not None:
+                # Join immutable IO reads before closing trace, files, or ROS nodes.
+                await observation
 
     def _observe_controller_topics(self):
         from geometry_msgs.msg import Twist
@@ -978,7 +993,18 @@ class NativeFixture:
         finally:
             if self.pump_task:
                 self.pump_task.cancel()
-                await asyncio.gather(self.pump_task, return_exceptions=True)
+                results = await asyncio.gather(self.pump_task, return_exceptions=True)
+                error = results[0]
+                if isinstance(error, BaseException) and not isinstance(
+                    error, asyncio.CancelledError
+                ):
+                    # A prior body exception remains primary; retain the observer failure too.
+                    if getattr(self, "trace", None):
+                        self.trace.emit("observation_failure", reason=repr(error))
+                    if exc is None and not any(error is item for item in failures):
+                        failures.append(error)
+                    elif exc is not None:
+                        failures = [item for item in failures if item is not error]
             cleanup = []
             if getattr(self, "resources", None):
                 cleanup.append(self.resources.close)

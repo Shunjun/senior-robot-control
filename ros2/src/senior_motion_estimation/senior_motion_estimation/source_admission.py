@@ -19,6 +19,7 @@ from senior_motion_estimation.observations import (
 from senior_motion_estimation.sample_types import MotionSample, physical_support
 from senior_motion_estimation.source_modes import SourceView
 from vehicle_core.sample_time import ClockTracker
+from vehicle_core.source_order import SourceOrder, source_context
 
 
 @dataclass(frozen=True)
@@ -30,7 +31,7 @@ class AdmissionDecision:
 @dataclass
 class _State:
     epoch: str | None = None
-    retired: set[str] = field(default_factory=set)
+    order: SourceOrder = field(default_factory=SourceOrder)
     sequence: int = 0
     end_steady: float = -math.inf
     received_steady: float = -math.inf
@@ -60,7 +61,6 @@ class AdmissionOwner:
         self._now_steady: float | None = None
         self._tracker = ClockTracker()
         self._heading_epoch: str | None = None
-        self._retired_headings: set[str] = set()
         self._heading_stamp = -math.inf
         self._heading_received = -math.inf
 
@@ -76,13 +76,11 @@ class AdmissionOwner:
             for state in self._states.values():
                 state.interrupt()
                 if rollback and state.epoch is not None:
-                    state.retired.add(state.epoch)
                     state.epoch = None
                     state.sequence = 0
                     state.end_steady = -math.inf
                     state.received_steady = -math.inf
         if rollback and self._heading_epoch is not None:
-            self._retired_headings.add(self._heading_epoch)
             self._heading_epoch = None
             self._heading_stamp = -math.inf
             self._heading_received = -math.inf
@@ -92,28 +90,33 @@ class AdmissionOwner:
 
     @staticmethod
     def _source_order(observation: MotionSample, state: _State) -> str | None:
-        if observation.epoch in state.retired:
-            return "retired_epoch"
-        coordinate = physical_support(observation).end_ns
-        if (
-            observation.epoch == state.epoch
-            and state.stamp_ns is not None
-            and (coordinate < state.stamp_ns)
-        ):
-            return "physical_measurement_reordering"
-        if observation.epoch == state.epoch and (
-            observation.sequence <= state.sequence
-            or observation.end_steady <= state.end_steady
-            or observation.received_steady < state.received_steady
-        ):
-            return "replay_or_reordering"
-        if (
-            state.epoch is not None
-            and observation.epoch != state.epoch
-            and observation.received_steady < state.received_steady
-        ):
-            return "delayed_new_epoch"
+        # MotionSample is constructed by the native adapter/session owner, not
+        # decoded from arbitrary DDS body identities at this algorithm boundary.
+        boot, generation = source_context(observation.epoch)
+        sample_time = getattr(observation, "time", None)
+        if sample_time is None:
+            sample_time = observation.last_time
+        # Adapter-owned structured lifetimes carry immutable native first receipts.
+        accepted = (
+            state.order.accept_capture(
+                boot,
+                generation,
+                physical_support(observation).end_ns,
+                sample_time.received_steady_ns,
+            )
+            if observation.epoch != boot
+            else state.order.accept(boot, generation, physical_support(observation).end_ns)
+        )
+        if not accepted:
+            return state.order.reason
         return None
+
+    def confirm_source_boot(self, source: Source, boot_id: str) -> None:
+        """Explicit receiving-session replacement, never an arbitrary sample epoch."""
+        state = self._states[source]
+        if state.order.boot_id != boot_id:
+            state.order.confirm_boot(boot_id)
+            state.interrupt()
 
     @staticmethod
     def _reject_evidence(
@@ -138,13 +141,7 @@ class AdmissionOwner:
             heading.epoch == self._heading_epoch and heading.time.stamp_ns < self._heading_stamp
         ):
             return "heading_reordering"
-        if heading.epoch in self._retired_headings:
-            return "retired_heading"
         if self._heading_epoch is not None and heading.epoch != self._heading_epoch:
-            if len(self._retired_headings) >= self.config.epoch_history_limit:
-                state.interrupt()
-                return "heading_history_exhausted"
-            self._retired_headings.add(self._heading_epoch)
             state.interrupt()
         self._heading_epoch = heading.epoch
         self._heading_stamp = heading.time.stamp_ns
@@ -154,11 +151,6 @@ class AdmissionOwner:
     def _admit_epoch(self, observation: MotionSample, state: _State) -> str | None:
         if observation.epoch == state.epoch:
             return None
-        if len(state.retired) >= self.config.epoch_history_limit:
-            state.interrupt()
-            return "epoch_history_exhausted"
-        if state.epoch is not None:
-            state.retired.add(state.epoch)
         state.interrupt()
         state.epoch = observation.epoch
         state.sequence = 0

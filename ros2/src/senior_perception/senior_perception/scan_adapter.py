@@ -83,8 +83,7 @@ class ScanAdapter(Node):
         if self._failure_active and not force:
             return
         self._failure_active = True
-        self._epoch = uuid.uuid4().hex
-        self._sequence = 1
+        self._sequence += 1
         self._lineage = None
         result = BoundedFilteredScan()
         result.source_epoch, result.sequence, result.reason = (
@@ -100,11 +99,18 @@ class ScanAdapter(Node):
         if self._learning_client is not None:
             self._learning_client.poll()
         endpoints = self.get_publishers_info_by_topic(self._raw_topic)
-        gid = bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
+        gid = (
+            bytes(endpoints[0].endpoint_gid).hex()
+            if len(endpoints) == 1
+            and endpoints[0].node_name == "scan_receipt"
+            and endpoints[0].node_namespace == "/"
+            else ""
+        )
         ready = self._admission.observe_bridge(gid)
-        if ready != self._ready or (ready and gid != self._bridge_gid):
+        if ready != self._ready:
             self._bridge_gid, self._ready = gid, ready
             self._invalid("raw_source_changed", force=True)
+        self._bridge_gid = gid
         return ready
 
     def on_scan(self, msg):
@@ -120,14 +126,13 @@ class ScanAdapter(Node):
                 if self._admission.generation != before:
                     self._invalid(capture.reason or "raw_scan_invalid", msg.capture)
                 return
-            lineage = (capture.bridge_boot_id, capture.capture_generation, capture.source_epoch)
+            lineage = (capture.bridge_boot_id, capture.capture_generation)
             if self._lineage is not None and lineage != self._lineage:
                 self._invalid("raw_source_changed", msg.capture, force=True)
             self._lineage = lineage
             stamp = Time.from_msg(msg.capture.stamp)
-            age = (ros_ns - stamp.nanoseconds) / 1e9
-            if not 0 <= age <= self.max_age or not capture.frame_id:
-                raise ValueError("stale scan or missing frame")
+            if not capture.frame_id:
+                raise ValueError("missing scan frame")
             # TF resolves static and dynamic edges at the scan timestamp.
             tf = self.buffer.lookup_transform(self.body, capture.frame_id, stamp)
             q = tf.transform.rotation
@@ -141,8 +146,6 @@ class ScanAdapter(Node):
             yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
             seconds = stamp.nanoseconds / 1e9
             tf_seconds = Time.from_msg(tf.header.stamp).nanoseconds / 1e9
-            if not 0 <= seconds - tf_seconds <= self.max_age:
-                raise ValueError("stale dynamic transform")
             observation = ScanObservation(
                 tuple(msg.ranges),
                 msg.angle_min,

@@ -144,6 +144,10 @@ class NativeGraph:
             # A native capture slot is consumed only after copying and verifying both files.
             for suffix in (".posegraph", ".data"):
                 Path(str(prefix) + suffix).unlink()
+            # The native response is sent after both writers close. This owner
+            # serially consumes the verified pair before requesting another slot.
+            # rmdir preserves unknown files and reports an incomplete release.
+            prefix.parent.rmdir()
 
         self._io = asyncio.create_task(asyncio.to_thread(materialize))
         await asyncio.shield(self._io)
@@ -469,6 +473,16 @@ class NativeSession:
         row = result.envelope
         self._scan_revision = row.revision
         if row.status != "valid":
+            # An unbound bootstrap status predates any reference/acceptance floor.
+            # It grants no scan authority and cannot revoke a newly bound reference.
+            if (
+                row.status == "invalid"
+                and row.basis is None
+                and row.acceptance_floor_steady_ns == 0
+                and self._last_scan_capture is None
+            ):
+                self._evidence.reset()
+                return
             if row.reason in ("starting", "reference_changed") and row.status != "retired":
                 self._evidence.reset()
                 return
@@ -521,7 +535,9 @@ class NativeSession:
             )
         if row.acceptance_floor is not None and (
             row.key.source != row.acceptance_floor.source
-            or row.key.sequence <= row.acceptance_floor.sequence
+            or row.key.stamp_ns is None
+            or row.acceptance_floor.stamp_ns is None
+            or row.key.stamp_ns <= row.acceptance_floor.stamp_ns
         ):
             self._retire_fixed()
             return

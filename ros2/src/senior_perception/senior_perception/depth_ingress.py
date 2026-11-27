@@ -147,12 +147,14 @@ class DepthIngress(Node):
 
     def _source(self, topic):
         endpoints = self.get_publishers_info_by_topic(topic)
-        if len(endpoints) != 1:
+        if (
+            len(endpoints) != 1
+            or endpoints[0].node_name != "raw_receipt"
+            or endpoints[0].node_namespace != "/"
+        ):
             return ""
         endpoint = endpoints[0]
         gid_bytes = bytes(endpoint.endpoint_gid)
-        if not gid_bytes or not any(gid_bytes):
-            return ""
         return gid_bytes.hex()
 
     def _check_sources(self):
@@ -161,11 +163,12 @@ class DepthIngress(Node):
         ready_depth = self._capture_group.observe_bridge("depth", depth)
         ready_info = self._capture_group.observe_bridge("info", info)
         ready = ready_depth and ready_info
-        if (depth, info, ready) != (self._depth_source, self._info_source, self._ready):
+        if ready != self._ready:
             self._depth_source, self._info_source, self._ready = depth, info, ready
             self._new_epoch(
                 "raw_source_changed", self.get_clock().now().nanoseconds, time.monotonic()
             )
+        self._depth_source, self._info_source = depth, info
         return ready
 
     def _clock_ok(self, ros_ns, steady):

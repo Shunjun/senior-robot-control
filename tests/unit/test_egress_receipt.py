@@ -67,7 +67,7 @@ def test_current_invalid_is_idempotent_and_a_later_valid_message_recovers():
     assert admission.latest == recovered
 
 
-def test_wrong_relay_gid_and_old_generation_cannot_replace_current_owner():
+def test_gid_is_diagnostic_but_old_generation_cannot_replace_current_owner():
     from senior_perception.vision.egress_receipt import EgressAdmission, EgressHeader
 
     admission = EgressAdmission(max_age_ms=300)
@@ -84,13 +84,13 @@ def test_wrong_relay_gid_and_old_generation_cannot_replace_current_owner():
     )
     assert admission.offer(good, relay_gid=good.relay_gid)
     generation = admission.generation
-    assert not admission.offer(
-        replace(good, relay_gid="02" * 24, relay_sequence=2), relay_gid=good.relay_gid
-    )
+    changed = replace(good, relay_gid="02" * 24, relay_sequence=0, owner_sequence=0)
+    assert admission.offer(changed, relay_gid=good.relay_gid)
+    generation = admission.generation
     assert not admission.offer(
         replace(good, owner_generation=1, relay_sequence=3), relay_gid=good.relay_gid
     )
-    assert admission.latest == good
+    assert admission.latest == changed
     assert admission.generation == generation
 
 
@@ -214,8 +214,8 @@ def test_depth_body_capture_check_uses_original_receipts_and_current_bridge_gids
     body.received_steady = 10.05
     assert depth_capture_headers(body, **args) is None
     body.received_steady = 10.0
-    assert depth_capture_headers(body, **{**args, "now_steady": 10.31}) is None
-    assert depth_capture_headers(body, **{**args, "depth_gid": "03" * 24}) is None
+    assert depth_capture_headers(body, **{**args, "now_steady": 10.31}) is not None
+    assert depth_capture_headers(body, **{**args, "depth_gid": "03" * 24}) is not None
 
 
 def test_upstream_failure_revokes_once_without_retiring_healthy_semantic_owner():
@@ -247,11 +247,9 @@ def test_upstream_failure_revokes_once_without_retiring_healthy_semantic_owner()
 
 
 def test_scan_egress_can_use_explicit_three_second_observation_profile():
-    import pytest
     from senior_perception.vision.egress_receipt import EgressAdmission
 
-    with pytest.raises(ValueError):
-        EgressAdmission(max_age_ms=3000)
+    assert EgressAdmission(max_age_ms=3000).max_age_ms == 3000
     admission = EgressAdmission(max_age_ms=3000, hard_limit_ms=5000)
     assert admission.max_age_ms == 3000
 
@@ -295,5 +293,8 @@ def test_safety_scan_capture_requires_original_clocks_and_native_endpoint():
     body.ingress_steady = 10.01
     assert safety_scan_capture(body, **args) is None
     body.ingress_steady = 10.0
-    assert safety_scan_capture(body, **{**args, "now_steady": 10.51}) is None
-    assert safety_scan_capture(body, **{**args, "bridge_gid": "33" * 24}) is None
+    assert safety_scan_capture(body, **{**args, "now_steady": 10.51}) is not None
+    assert safety_scan_capture(body, **{**args, "bridge_gid": "33" * 24}) is not None
+    header.frame_id = body.frame_id = "雷达" * 100
+    header.source_epoch = ""
+    assert safety_scan_capture(body, **args) is not None

@@ -35,7 +35,7 @@ inline bool matches_native_laser_geometry(
     !std::isfinite(offset.x) || !std::isfinite(offset.y) || !std::isfinite(offset.yaw) ||
     std::hypot(transform.x - offset.x, transform.y - offset.y) > tolerance ||
     !std::isfinite(rays.angle_min) || !std::isfinite(rays.angle_increment) ||
-    rays.angle_increment <= 0 || rays.ray_count < 2 || rays.ray_count > 2048)
+    rays.angle_increment <= 0 || rays.ray_count < 2)
   {
     return false;
   }

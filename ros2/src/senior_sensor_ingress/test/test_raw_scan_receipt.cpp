@@ -1,4 +1,6 @@
 #include <atomic>
+#include <cmath>
+#include <limits>
 #include <chrono>
 #include <condition_variable>
 #include <functional>
@@ -30,7 +32,7 @@ bool wait_until(const std::function<bool()> & predicate,
   return predicate();
 }
 
-TEST(RawScanReceipt, RealMessageIdentityAndRetiredPublisherAfterSuccessor)
+TEST(RawScanReceipt, RawForwardingPreservesQueuedFramesAndIndividualInvalidReturns)
 {
   rclcpp::init(0, nullptr);
   std::mutex mutex;
@@ -124,33 +126,36 @@ TEST(RawScanReceipt, RealMessageIdentityAndRetiredPublisherAfterSuccessor)
     resume = true;
     condition.notify_all();
   }
-  std::this_thread::sleep_for(100ms);
-  {
+  ASSERT_TRUE(wait_until([&] {
     std::lock_guard<std::mutex> lock(mutex);
-    ASSERT_FALSE(received.empty());
-    EXPECT_TRUE(received.back().capture.valid);
-    EXPECT_EQ(received.back().capture.raw_gid, new_gid);
-  }
+    // Original data is forwarded even when an older publisher callback was queued.
+    return !received.empty() && received.back().capture.valid &&
+           received.back().capture.raw_gid == old_gid;
+  }));
   scan.time_increment = 0.001;
+  scan.ranges = {std::numeric_limits<float>::quiet_NaN(), -1.0f,
+                 std::numeric_limits<float>::infinity()};
   scan.header.stamp = fixture->now();
   current->publish(scan);
-  EXPECT_TRUE(wait_until([&] {
+  ASSERT_TRUE(wait_until([&] {
     std::lock_guard<std::mutex> lock(mutex);
     for (const auto & msg : received) {
-      if (!msg.capture.valid && msg.capture.reason == "raw_scan_invalid") return true;
+      if (msg.capture.valid && msg.capture.stamp == scan.header.stamp &&
+          msg.time_increment == scan.time_increment && msg.ranges.size() == 3 &&
+          std::isnan(msg.ranges[0]) && msg.ranges[1] == -1.0f &&
+          std::isinf(msg.ranges[2])) return true;
     }
     return false;
   }));
-  for (int i = 0; i < 3; ++i) current->publish(scan);
-  std::this_thread::sleep_for(100ms);
-  {
+  scan.ranges.clear();
+  scan.header.stamp = fixture->now();
+  current->publish(scan);
+  ASSERT_TRUE(wait_until([&] {
     std::lock_guard<std::mutex> lock(mutex);
-    size_t failures = 0;
-    for (const auto & msg : received) {
-      if (!msg.capture.valid && msg.capture.reason == "raw_scan_invalid") ++failures;
-    }
-    EXPECT_EQ(failures, 1u);
-  }
+    return !received.empty() && !received.back().capture.valid &&
+      received.back().capture.reason == "raw_scan_invalid";
+  }));
+  scan.ranges = {1, 2, 3};
   scan.time_increment = 0;
   scan.header.stamp = fixture->now();
   current->publish(scan);
@@ -160,14 +165,34 @@ TEST(RawScanReceipt, RealMessageIdentityAndRetiredPublisherAfterSuccessor)
            received.back().capture.raw_gid == new_gid &&
            received.back().capture.stamp == scan.header.stamp;
   }));
-  scan.ranges.assign(2049, 1.0f);
+  scan.ranges.resize(5400);
+  scan.intensities.resize(5400);
+  for (size_t i = 0; i < scan.ranges.size(); ++i) {
+    scan.ranges[i] = 1.0f + static_cast<float>(i) / 10000.0f;
+    scan.intensities[i] = static_cast<float>(i);
+  }
+  scan.angle_increment = 2.0f / static_cast<float>(scan.ranges.size() - 1);
   scan.header.stamp = fixture->now();
   current->publish(scan);
   ASSERT_TRUE(wait_until([&] {
     std::lock_guard<std::mutex> lock(mutex);
-    return !received.empty() && !received.back().capture.valid &&
-           received.back().capture.reason == "raw_scan_invalid";
+    return !received.empty() && received.back().capture.valid &&
+           received.back().capture.stamp == scan.header.stamp &&
+           received.back().ranges.size() == scan.ranges.size();
   }));
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    const auto & forwarded = received.back();
+    EXPECT_EQ(forwarded.capture.raw_gid, new_gid);
+    EXPECT_EQ(forwarded.capture.bridge_gid, bridge_gid);
+    EXPECT_EQ(forwarded.ranges, scan.ranges);
+    EXPECT_EQ(forwarded.intensities, scan.intensities);
+    EXPECT_EQ(forwarded.angle_increment, scan.angle_increment);
+    RecordProperty("forwarded_beams", static_cast<int>(forwarded.ranges.size()));
+    RecordProperty("forwarded_intensities", static_cast<int>(forwarded.intensities.size()));
+    RecordProperty("actual_raw_gid", forwarded.capture.raw_gid);
+    RecordProperty("actual_bridge_gid", forwarded.capture.bridge_gid);
+  }
   (void)output;
 }
 

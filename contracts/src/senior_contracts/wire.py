@@ -486,7 +486,7 @@ class ScanLayerPayload(StrictModel):
     sampled_at: float = Field(ge=0)
     expires_at: float = Field(ge=0)
     remaining_s: float = Field(ge=0, le=0.5)
-    hit_count: int = Field(ge=0, le=2048)
+    hit_count: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
     preview_count: int = Field(ge=0, le=96)
     display_mode: Literal["preview"]
     valid: bool

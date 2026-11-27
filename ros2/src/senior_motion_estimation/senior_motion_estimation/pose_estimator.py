@@ -9,6 +9,7 @@ from senior_motion_estimation.consensus import Vote, combine
 from senior_motion_estimation.estimator import MotionEstimate, Origin, validate_origins
 from senior_motion_estimation.kinematics import compose, exponential, logarithm
 from vehicle_core.sensor_policy import Age, default_policy
+from vehicle_core.source_order import SourceOrder, source_context
 from vehicle_core.values import Pose2D
 
 
@@ -150,7 +151,7 @@ class PoseEstimation:
         self._path_owner = uuid4().hex
         self._path_serial = 0
         self._previous_motion: MotionEstimate | None = None
-        self._retired: dict[str, set[str]] = {}
+        self._source_orders: dict[str, SourceOrder] = {}
         self.frame_generation = 0
         self._absolute_frame_aligned = False
         self._clock_epochs: dict[str, str] = {}
@@ -370,6 +371,13 @@ class PoseEstimation:
             + sum(len(history) for history in self._sources.values())
         )
 
+    def confirm_source_boot(self, source: str, boot_id: str) -> None:
+        order = self._source_orders.setdefault(source, SourceOrder())
+        if order.boot_id != boot_id:
+            order.confirm_boot(boot_id)
+            self._sources.pop(source, None)
+            self._positive_frontiers.pop(source, None)
+
     def ingest(self, o: PoseObservation) -> bool:
         validate_origins(o.roots)
         if (
@@ -394,24 +402,6 @@ class PoseEstimation:
         if o.source not in self._sources and len(self._sources) >= 8:
             raise ValueError("pose source capacity")
         history = self._sources.setdefault(o.source, deque(maxlen=128))
-        if history:
-            prior = history[-1]
-            root, old = o.roots[0], prior.roots[0]
-            retired = self._retired.setdefault(o.source, set())
-            if root.epoch in retired:
-                return False
-            if old.epoch != root.epoch:
-                if root.received_steady < old.received_steady or len(retired) >= 32:
-                    return False
-                retired.add(old.epoch)
-                history.clear()
-                self._clear_relative()
-                self._previous_motion = None
-                self.frame_generation += 1
-            elif root.sequence <= old.sequence:
-                return False
-            elif o.coordinate < prior.coordinate:
-                return False
         positive = self._positive_frontiers.get(o.source)
         if (
             o.quality > 0
@@ -420,10 +410,26 @@ class PoseEstimation:
             and o.measurement_steady <= positive.measurement_steady
         ):
             return False
+        root = o.roots[0]
+        boot, generation = source_context(root.epoch)
+        order = self._source_orders.setdefault(o.source, SourceOrder())
+        previous_boot, previous_generation = order.boot_id, order.generation
+        accepted = (
+            order.accept_capture(boot, generation, o.coordinate, root.time.received_steady_ns)
+            if root.epoch != boot
+            else order.accept(boot, generation, o.coordinate)
+        )
+        if not accepted:
+            return False
         if o.quality == 0:
             history.clear()
         else:
             self._positive_frontiers[o.source] = o
+        if history and (boot != previous_boot or generation != previous_generation):
+            history.clear()
+            self._clear_relative()
+            self._previous_motion = None
+            self.frame_generation += 1
         history.append(o)
         return True
 

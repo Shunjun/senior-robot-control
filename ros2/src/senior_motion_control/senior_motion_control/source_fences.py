@@ -1,8 +1,8 @@
 """Producer incarnation fences; retired wall-clock deferred queues are removed."""
 
 
-class SourceEpochFence:
-    """Remember retired producer identities; exhaustion blocks rather than forgetting."""
+class RuntimeEpochFence:
+    """Existing command-runtime session fence; not a raw sensor admission rule."""
 
     def __init__(self, *, max_retired: int) -> None:
         if max_retired < 1:
@@ -46,6 +46,28 @@ class SourceEpochFence:
         return True
 
 
+class SourceEpochFence:
+    """Diagnostic producer label. RawCaptureAdmission owns boot/generation/stamp."""
+
+    def __init__(self, *, max_retired: int) -> None:
+        # //Compatible: retain old callers while removing origin blacklists.
+        self.active: str | None = None
+
+    def retire_active(self) -> None:
+        self.active = None
+
+    def is_retired(self, epoch: str) -> bool:
+        return False
+
+    def retire_unadmitted(self, epoch: str) -> None:
+        if self.active == epoch:
+            self.active = None
+
+    def accept(self, epoch: str) -> bool:
+        self.active = epoch
+        return True
+
+
 class ProducerTopology:
     """Require one expected ROS graph endpoint; this is not DDS authentication."""
 
@@ -55,13 +77,15 @@ class ProducerTopology:
         self._name = name
         self._namespace = namespace
         self._gid: bytes | None = None
+        self._ready = False
 
     def observe(self, endpoints: list[tuple[str, str, bytes]]) -> tuple[bool, bool]:
         gid = None
         if len(endpoints) == 1:
             name, namespace, candidate = endpoints[0]
-            if name == self._name and namespace == self._namespace and candidate and any(candidate):
+            if name == self._name and namespace == self._namespace:
                 gid = candidate
-        changed = gid != self._gid
-        self._gid = gid
-        return gid is not None, changed
+        ready = gid is not None
+        changed = ready != self._ready
+        self._gid, self._ready = gid, ready
+        return ready, changed

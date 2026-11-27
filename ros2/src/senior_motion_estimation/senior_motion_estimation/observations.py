@@ -227,12 +227,7 @@ def metadata_error(
         observation, (Observation, PointObservation, DeltaObservation)
     ) or not isinstance(observation.source, Source):
         return "invalid_source"
-    if (
-        type(observation.epoch) is not str
-        or not observation.epoch
-        or type(observation.sequence) is not int
-        or observation.sequence < 1
-    ):
+    if type(observation.epoch) is not str or not observation.epoch:
         return "invalid_metadata"
     if not isinstance(observation.frame, Frame) or not isinstance(observation.status, SourceStatus):
         return "invalid_structure"
@@ -258,6 +253,10 @@ def metadata_error(
     )
     if not all(_number(value) and math.isfinite(value) for value in stamps):
         return "invalid_metadata"
+    # Algorithm evidence cannot be from a future acquisition or first receipt.
+    # This is not a raw-data age limit.
+    if observation.end_ros > now_ros or observation.received_steady > now_steady:
+        return "future_or_invalid_interval"
     if isinstance(observation, DeltaObservation) and not isinstance(observation.delta, Pose2D):
         return "invalid_delta"
     if isinstance(observation, (PointObservation, DeltaObservation)):

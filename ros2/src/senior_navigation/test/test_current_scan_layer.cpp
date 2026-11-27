@@ -61,6 +61,9 @@ public:
     capture.raw_gid = std::string(48, 'a');
     capture.bridge_gid = std::string(48, 'b');
     capture.sequence = ++sequence;
+    capture.stamp.sec = sequence / 1000000000ULL;
+    capture.stamp.nanosec = sequence % 1000000000ULL;
+    capture.received_ros = capture.stamp;
     capture.sample_steady_ns = deadline >= 500000000 ? deadline - 500000000 : 0;
     capture.received_steady_ns = capture.sample_steady_ns;
     q->valid = valid;

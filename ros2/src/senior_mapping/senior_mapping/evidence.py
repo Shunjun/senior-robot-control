@@ -4,7 +4,7 @@ import hashlib
 import json
 import math
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal
 
 from senior_mapping.shared_scan import ScanKey
@@ -212,20 +212,40 @@ def fixed_points(points: tuple[tuple[float, float], ...], limit: int) -> None:
 class SourceIdentity:
     backend_boot: str
     bridge_boot_id: str
-    source_epoch: str
+    source_epoch: str = field(compare=False)
     capture_generation: int
     clock_generation: int
-    raw_gid: str
-    bridge_gid: str
+    raw_gid: str = field(compare=False)
+    bridge_gid: str = field(compare=False)
 
     def __post_init__(self) -> None:
         ScanKey(**self.__dict__, sequence=0)
-        for name in ("backend_boot", "bridge_boot_id", "source_epoch", "raw_gid", "bridge_gid"):
-            fixed_text(getattr(self, name), 36 if name == "backend_boot" else 128)
+        if not self.backend_boot or not self.bridge_boot_id:
+            raise ValueError("source boot must be nonempty")
 
     @classmethod
     def from_key(cls, key: ScanKey) -> "SourceIdentity":
-        return cls(*key.source)
+        return cls(
+            key.backend_boot,
+            key.bridge_boot_id,
+            key.source_epoch,
+            key.capture_generation,
+            key.clock_generation,
+            key.raw_gid,
+            key.bridge_gid,
+        )
+
+    @property
+    def coordinates(self) -> tuple:
+        return (
+            self.backend_boot,
+            self.bridge_boot_id,
+            "",
+            self.capture_generation,
+            self.clock_generation,
+            "",
+            "",
+        )
 
 
 @dataclass(frozen=True)
@@ -357,7 +377,9 @@ class StableSupport:
         if (
             self.first_key is not None
             and self.last_key is not None
-            and self.first_key.sequence > self.last_key.sequence
+            and self.first_key.stamp_ns is not None
+            and self.last_key.stamp_ns is not None
+            and self.first_key.stamp_ns > self.last_key.stamp_ns
         ):
             raise ValueError("support key interval reversed")
         if self.provenance == "geometric" and any(

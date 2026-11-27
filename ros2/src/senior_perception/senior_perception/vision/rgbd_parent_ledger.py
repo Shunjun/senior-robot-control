@@ -1,7 +1,7 @@
 """Parent capture frontier and bounded retained tickets for diagnostic workers.
 
-The caller must authenticate each bridge GID with MessageInfo and current graph
-before calling. This contract cannot authenticate a DDS publisher itself.
+The receiving entry owns publisher and capture ordering checks. This ledger
+associates worker tickets with the already accepted capture lifetime.
 """
 
 import math
@@ -24,9 +24,7 @@ def _lineage(headers: tuple[RawCaptureHeader, ...]) -> tuple[tuple[object, ...],
         (
             h.bridge_boot_id,
             h.capture_generation,
-            h.bridge_gid,
-            h.raw_gid,
-            h.source_epoch,
+            h.time.clock_generation,
             h.frame_id,
         )
         for h in headers
@@ -49,11 +47,6 @@ class CaptureLedger:
         self._number = 0
         self._lineage: tuple[tuple[object, ...], ...] | None = None
         self._frontier: tuple[RawCaptureHeader, ...] | None = None
-        self._retired: set[tuple[tuple[object, ...], ...]] = set()
-        self._retired_streams: tuple[set[tuple[object, ...]], ...] = tuple(set() for _ in range(4))
-        self._retired_raw_gids: tuple[set[str], ...] = tuple(set() for _ in range(4))
-        self._retired_bridge_gids: tuple[set[str], ...] = tuple(set() for _ in range(4))
-        self._retired_boots: set[str] = set()
         self._tickets: dict[int, CaptureTicket] = {}
         self._closed = False
         self._last_clock: float | None = None
@@ -74,7 +67,6 @@ class CaptureLedger:
             or (self._last_clock is not None and steady < self._last_clock)
         ):
             self.invalidate()
-            self._closed = True
             raise ValueError("invalid_fresh_floor")
         self._fresh_after_steady = steady
         self.invalidate()
@@ -94,12 +86,11 @@ class CaptureLedger:
     def observe_clock(self, now_ros_ns: int, now_steady: float) -> bool:
         if type(now_steady) not in (float, int) or not math.isfinite(now_steady) or now_steady <= 0:
             self.invalidate()
-            self._closed = True
             return False
         if self._last_clock is not None:
             if now_steady < self._last_clock:
                 self.invalidate()
-                self._closed = True
+                self._last_clock = now_steady
                 return False
         self._last_clock = now_steady
         return not self._closed
@@ -128,72 +119,31 @@ class CaptureLedger:
         if any(h.start_steady <= self._fresh_after_steady for h in headers):
             return None
         source = _lineage(headers)
-        if (
-            source in self._retired
-            or any(value in self._retired_streams[i] for i, value in enumerate(source))
-            or any(
-                h.raw_gid in self._retired_raw_gids[i]
-                or h.bridge_gid in self._retired_bridge_gids[i]
-                or h.bridge_boot_id in self._retired_boots
-                for i, h in enumerate(headers)
-            )
-        ):
-            return None
-        if len(bridges) != 4 or any(
-            h.bridge_gid != gid for h, gid in zip(headers, bridges, strict=True)
-        ):
+        if len(bridges) != 4:
             self.invalidate()
             return None
-        if self._lineage is not None and source != self._lineage:
-            assert self._frontier is not None
-            old = self._frontier
-            same_boot = all(
-                a.bridge_boot_id == b.bridge_boot_id for a, b in zip(old, headers, strict=True)
-            )
-            if same_boot:
-                replacement = all(
-                    a.bridge_gid == b.bridge_gid for a, b in zip(old, headers, strict=True)
-                ) and all(
-                    b.capture_generation > a.capture_generation
-                    for a, b in zip(old, headers, strict=True)
-                )
-            else:
-                replacement = all(
-                    a.bridge_boot_id != b.bridge_boot_id and a.bridge_gid != b.bridge_gid
-                    for a, b in zip(old, headers, strict=True)
-                )
-            if not replacement or len(self._retired) >= 64:
-                self.invalidate()
-                self._closed = True
-                return None
-            self._retired.add(self._lineage)
-            for i, (a, b) in enumerate(zip(old, headers, strict=True)):
-                if a.raw_gid != b.raw_gid:
-                    self._retired_raw_gids[i].add(a.raw_gid)
-                if a.bridge_gid != b.bridge_gid:
-                    self._retired_bridge_gids[i].add(a.bridge_gid)
-                if a.bridge_boot_id != b.bridge_boot_id:
-                    self._retired_boots.add(a.bridge_boot_id)
-            for i, (previous, current) in enumerate(zip(self._lineage, source, strict=True)):
-                if previous != current:
-                    self._retired_streams[i].add(previous)
-            self.invalidate()
-            self._lineage, self._frontier = source, None
-        if self._frontier is not None and any(
-            b.sequence <= a.sequence
-            or b.measurement_steady <= a.measurement_steady
-            or b.received_steady <= a.received_steady
-            for a, b in zip(self._frontier, headers, strict=True)
-        ):
-            return None
-        self._lineage, self._frontier = source, headers
+        if self._frontier is not None:
+            # Worker tickets cannot cross an already adopted source batch. No
+            # origin blacklist, GID comparison or second sample-order frontier.
+            for incoming, prior in zip(headers, self._frontier, strict=True):
+                if incoming.bridge_boot_id == prior.bridge_boot_id:
+                    if incoming.capture_generation < prior.capture_generation:
+                        return None
+                elif incoming.time.received_steady_ns <= prior.time.received_steady_ns:
+                    return None
+            if source == self._lineage and all(
+                a.stamp_ns == b.stamp_ns for a, b in zip(headers, self._frontier, strict=True)
+            ):
+                return None  # Same capture already has a ticket, regardless of sequence.
         if (
             not _headers_valid(headers, now_ros_ns, now_steady)
             or type(binding_generation) is not int
             or binding_generation <= 0
         ):
-            self.invalidate()
             return None
+        if self._lineage is not None and source != self._lineage:
+            self.invalidate()
+        self._lineage, self._frontier = source, headers
         expired = [
             n
             for n, t in self._tickets.items()

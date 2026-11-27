@@ -78,7 +78,7 @@ class BoundDetectionResult:
 
 def _bounded(value: str, limit: int = 128) -> bool:
     try:
-        return bool(value) and len(value.encode("utf-8")) <= limit
+        return isinstance(value, str) and bool(value) and len(value.encode("utf-8")) <= limit
     except UnicodeError:
         return False
 
@@ -86,17 +86,12 @@ def _bounded(value: str, limit: int = 128) -> bool:
 def _qualified(frame: RetainedFrame, max_skew_ns: int) -> bool:
     identity, rgb, geometry = frame.identity, frame.rgb, frame.geometry
     return (
-        _bounded(identity.source_epoch, 64)
+        isinstance(identity.source_epoch, str)
         and all(
-            _bounded(value)
-            for value in (
-                identity.rgb_source,
-                identity.depth_source,
-                identity.rgb_frame,
-                identity.depth_frame,
-                identity.registration_id,
-            )
+            isinstance(value, str) and bool(value)
+            for value in (identity.rgb_frame, identity.depth_frame)
         )
+        and _bounded(identity.registration_id)
         and identity.rgb_frame == identity.depth_frame
         and min(
             identity.rgb_stamp_ns,
@@ -241,9 +236,7 @@ class SpawnInferenceWorker:
         self._generation = 0
         self._serial = 0
         self._active: str | None = None
-        self._retired: set[str] = set()
         self._identity: tuple[str, ...] | None = None
-        self._identity_failed = False
         self._last_rgb_steady = self._last_depth_steady = 0.0
         self._retained: OrderedDict[int, RetainedFrame] = OrderedDict()
         self._results: deque[BoundDetectionResult] = DiagnosticDeque(
@@ -280,11 +273,8 @@ class SpawnInferenceWorker:
         self._pending = None
 
     def _retire_locked(self) -> None:
-        if self._active is not None:
-            self._retired.add(self._active)
         self._active = None
         self._identity = None
-        self._identity_failed = False
         self._last_rgb_steady = self._last_depth_steady = 0.0
         self._discard_pending()
         self._retained.clear()
@@ -305,8 +295,6 @@ class SpawnInferenceWorker:
             return False
         identity = frame.identity
         lineage = (
-            identity.rgb_source,
-            identity.depth_source,
             identity.rgb_frame,
             identity.depth_frame,
             identity.registration_id,
@@ -316,30 +304,18 @@ class SpawnInferenceWorker:
                 self._closed
                 or self._status[0] == "disabled"
                 or self._status == ("failed", "worker_supervisor_failed")
-                or identity.source_epoch in self._retired
             ):
                 return False
             if self._active != identity.source_epoch:
-                if len(self._retired) >= 256:
-                    self._status = ("disabled", "epoch_capacity")
-                    self._retire_locked()
-                    return False
                 self._retire_locked()
                 self._active = identity.source_epoch
             if self._identity is not None and self._identity != lineage:
-                self._identity_failed = True
-                self._retained.clear()
-                self._results.clear()
-                self._issued.clear()
-                self._discard_pending()
-                self._generation += 1
-                return False
+                self._retire_locked()  # Local algorithm caches, never an origin blacklist.
+                self._active = identity.source_epoch
             if (
-                self._identity_failed
-                or identity.rgb_measurement_steady <= self._last_rgb_steady
+                identity.rgb_measurement_steady <= self._last_rgb_steady
                 or identity.depth_measurement_steady <= self._last_depth_steady
             ):
-                self._retire_locked()
                 return False
             self._identity = lineage
             self._last_rgb_steady, self._last_depth_steady = (
@@ -388,7 +364,6 @@ class SpawnInferenceWorker:
                 and result.generation == self._generation
                 and self._issued.get(result.serial) is result
                 and capture.source_epoch == self._active
-                and not self._identity_failed
                 and all(
                     0 <= measured <= received <= now_steady and now_steady - measured <= max_age_s
                     for measured, received in (

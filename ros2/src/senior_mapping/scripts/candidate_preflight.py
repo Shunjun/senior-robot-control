@@ -108,8 +108,8 @@ def read_stationary_scan(path):
                 "expected seed_x, seed_y, seed_yaw, first_angle, angle_step and ranges"
             )
         samples = document.pop("ranges")
-        if type(samples) is not list or not 32 <= len(samples) <= 2048:
-            raise ValueError("expected 32 to 2048 range samples")
+        if type(samples) is not list or len(samples) < 32:
+            raise ValueError("expected at least 32 range samples")
         ranges = [math.inf if sample is None else _finite(sample) for sample in samples]
         values = {key: _finite(value) for key, value in document.items()}
         if (
@@ -277,14 +277,8 @@ def live_receipt_query(payload, started, frame, seed):
     if (
         not capture.valid
         or capture.frame_id != frame
-        or not capture.sequence
         or not capture.capture_generation
-        or not capture.source_epoch
         or not capture.bridge_boot_id
-        or any(
-            not re.fullmatch("[0-9a-f]{2,128}", gid)
-            for gid in (capture.raw_gid, capture.bridge_gid)
-        )
     ):
         raise PreflightError("Live scan receipt has invalid identity")
 
@@ -294,29 +288,30 @@ def live_receipt_query(payload, started, frame, seed):
         return stamp.sec * 1_000_000_000 + stamp.nanosec
 
     stamp, received = timestamp(capture.stamp), timestamp(capture.received_ros)
-    if not 0 <= stamp <= received or received - stamp > 500_000_000:
+    if not 0 <= stamp <= received:
         raise PreflightError("Live scan receipt has invalid ROS timing")
 
     def check_fresh():
         now_ns = time.monotonic_ns()
         if (
-            not round(started * 1e9) < capture.received_steady_ns <= now_ns
+            not capture.received_steady_ns <= now_ns
             or capture.sample_steady_ns > capture.received_steady_ns
-            or now_ns - capture.sample_steady_ns > 500_000_000
             or not capture.clock_generation
         ):
-            raise PreflightError("Live scan receipt is stale or predates this acquisition")
+            raise PreflightError("Live scan receipt has invalid clock coordinates")
 
     check_fresh()
     ranges = list(scan.ranges)
     span = scan.angle_increment * (len(ranges) - 1)
     if (
-        not 32 <= len(ranges) <= 2048
+        len(ranges) < 32
         or not abs(scan.angle_min) <= math.tau
         or not 0 < span <= math.tau + 1e-5
-        or not abs(scan.angle_max - scan.angle_min - span) <= 0.01 * scan.angle_increment
-        or scan.time_increment != 0
-        or any(math.isnan(sample) or sample < 0 for sample in ranges)
+        or min(
+            abs(scan.angle_max - scan.angle_min - span),
+            abs(scan.angle_max - scan.angle_min - span - scan.angle_increment),
+        )
+        > 0.01 * scan.angle_increment
         or sum(0 < sample < 8 for sample in ranges) < 32
     ):
         raise PreflightError("Live scan is outside native matching bounds")

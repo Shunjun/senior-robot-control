@@ -501,17 +501,14 @@ class GeometryTracker:
         if previous is not None:
             old, new = previous.capture.time, scan.capture.time
             if (
-                scan.key.sequence <= previous.key.sequence
-                or new.stamp_ns <= old.stamp_ns
+                new.stamp_ns <= old.stamp_ns
                 or new.sample_steady_ns <= old.sample_steady_ns
                 or new.received_steady_ns <= old.received_steady_ns
             ):
                 return self._evidence(scan, "non_independent")
-            if (
-                scan.key.sequence != previous.key.sequence + 1
-                or new.sample_steady_ns - old.sample_steady_ns > math.floor(profile.max_gap_s * 1e9)
-                or new.stamp_ns - old.stamp_ns > math.floor(profile.max_gap_s * 1e9)
-            ):
+            if new.sample_steady_ns - old.sample_steady_ns > math.floor(
+                profile.max_gap_s * 1e9
+            ) or new.stamp_ns - old.stamp_ns > math.floor(profile.max_gap_s * 1e9):
                 self._tracks.clear()
         self._previous, self._profile = scan, profile
         self._revision += 1

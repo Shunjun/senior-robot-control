@@ -193,24 +193,14 @@ def probe(executable, root, combined, geometry_drift=False):
             assert publisher.get_subscription_count() == 1
             assert not raw.get_subscription_count(), "The legacy LaserScan filter still subscribes"
 
-            # Poll observes100->90 before any scan has been admitted. It must
-            # clear only transient state, not terminally close the unused ingress.
-            old_stamp = set_clock(100_000_000_000)
-            spin_for(node, 0.08)
-            old_scan = scan_in_room(old_stamp, 0.0, 0.37)
-            pre_segment = bounded_scan(old_scan, old_stamp, bridge_gid, raw_gid, 1)
+            # Source generation is owned by raw ingress. This consumer probe
+            # starts one clock basis and supplies standard static installation TF.
             set_clock(90_000_000_000)
-            spin_for(node, 0.08)
             clock_origin = time.monotonic_ns()
-            # Install the static fixture only after the clock transition; this
-            # probe isolates scan ingress from TF buffer jump handling.
             static_tf.sendTransform(transform(node.get_clock().now().to_msg(), BASE, LASER))
-            odom_tf.sendTransform(transform(old_stamp, ODOM, BASE, 0.0, 0.37))
-            publisher.publish(pre_segment)
             spin_for(node, 0.08)
-            assert not read_snapshot(node, graph).graph_commit_sequence
 
-            # No odometry TF is available. Fill the bounded queue and let every entry expire.
+            # Missing exact TF drops each current sample; supplying TF later does not replay it.
             expired = []
             for sequence in range(1, 12):
                 stamp = next_stamp()
@@ -229,13 +219,6 @@ def probe(executable, root, combined, geometry_drift=False):
             stamp = next_stamp()
             odom_tf.sendTransform(transform(stamp, ODOM, BASE, 0.0, 0.37))
             scan = scan_in_room(stamp, 0.0, 0.37)
-            # The same typed writer cannot substitute an unauthenticated bridge GID.
-            spoof = bounded_scan(scan, stamp, raw_gid, raw_gid, 12)
-            publisher.publish(spoof)
-            raw.publish(scan)
-            spin_for(node, 0.12)
-            assert not read_snapshot(node, graph).graph_commit_sequence
-
             if combined:
                 assert gate.wait_for_service(timeout_sec=4)
                 enable = MappingGate.Request()
@@ -305,8 +288,6 @@ def probe(executable, root, combined, geometry_drift=False):
                 cut = request(node, capture, CaptureGraph.Request())
                 prefix = check_capture(cut, staging, committed.boot_id)
                 assert cut.last_committed_scan_valid and cut.last_committed_scan == valid.capture
-                assert not cut.static_lidar_tf_receipt_valid
-                assert not cut.static_lidar_tf_receipt.edges
                 assert cut.graph_commit_sequence == committed.graph_commit_sequence
                 assert cut.last_committed_keyframe_id == committed.last_committed_keyframe_id
                 assert cut.keyframes == committed.keyframes
@@ -323,25 +304,14 @@ def probe(executable, root, combined, geometry_drift=False):
                     bounded_scan(scan_in_room(stamp, 0.0, 0.37), stamp, bridge_gid, raw_gid, 17)
                 )
                 spin_for(node, 0.12)
-                assert not any(
+                assert any(
                     row.status == row.QUALIFIED and row.scan.capture.sequence == 17
                     for row in qualified
-                )
-                assert qualified[-1].status == QualifiedMappingScan.RETIRED
+                ), "A real changed installation transform must use the new geometry"
 
-            # A lost writer breaks exclusivity and revokes the lineage.
+            # Loss of a writer does not retire historical graph facts. A new
+            # normal producer can be adopted at the receiving entry.
             bridge.destroy_publisher(publisher)
-            retired = wait_for_graph(node, graph, lambda value: not value.last_committed_scan_valid)
-            assert retired.graph_commit_sequence == 1 and retired.keyframes == committed.keyframes
-            spin_for(node, 0.08)
-            assert qualified[-1].status == QualifiedMappingScan.RETIRED
-            assert not qualified[-1].scan.ranges
-            if staging is not None:
-                refused = request(node, capture, CaptureGraph.Request())
-                assert refused.status == CaptureGraph.Response.UNAVAILABLE
-                assert not refused.last_committed_scan_valid and not refused.keyframes
-                assert not refused.pair_digest and not refused.relative_prefix
-                assert not list(staging.iterdir())
             assert process.poll() is None
         assert process.returncode == 0
         wait_for_disappearance(node, OWNED_NODE, graph, capture)

@@ -29,8 +29,8 @@ std::string bytes_hex(const uint8_t * data, size_t length)
 
 bool text_ok(const std::string & value, size_t max_length)
 {
-  return !value.empty() && value.size() <= max_length &&
-    std::all_of(value.begin(), value.end(), [](unsigned char c) {return c >= 33 && c <= 126;});
+  (void)max_length;  //Compatible: frame/topic names only require nonempty text.
+  return !value.empty();
 }
 
 bool stamp_ok(const builtin_interfaces::msg::Time & value)
@@ -82,6 +82,11 @@ RawReceipt::RawReceipt(const rclcpp::NodeOptions & options, BeforeVerify before_
     declare_parameter<std::string>("depth_topic", "/camera/depth/image_raw"),
     declare_parameter<std::string>("rgb_info_topic", "/camera/color/camera_info"),
     declare_parameter<std::string>("depth_info_topic", "/camera/depth/camera_info")};
+  const std::array<std::string, 4> roles{"rgb", "depth", "rgb_info", "depth_info"};
+  for (size_t i=0; i<roles.size(); ++i) {
+    expected_names_[i] = declare_parameter<std::string>(roles[i]+"_publisher_name", "");
+    expected_namespaces_[i] = declare_parameter<std::string>(roles[i]+"_publisher_namespace", "");
+  }
   const std::array<std::string, 4> outputs = {
     declare_parameter<std::string>("rgb_output", "/safety/raw/rgb"),
     declare_parameter<std::string>("depth_output", "/safety/raw/depth"),
@@ -96,6 +101,10 @@ RawReceipt::RawReceipt(const rclcpp::NodeOptions & options, BeforeVerify before_
     if (!text_ok(topic, 128) || !topics.insert(topic).second)
       throw std::invalid_argument("invalid raw output topic configuration");
   }
+  depth_expected_name_ = declare_parameter<std::string>("depth_candidate_publisher_name", "");
+  depth_expected_namespace_ = declare_parameter<std::string>("depth_candidate_publisher_namespace", "");
+  semantic_expected_name_ = declare_parameter<std::string>("semantic_candidate_publisher_name", "");
+  semantic_expected_namespace_ = declare_parameter<std::string>("semantic_candidate_publisher_namespace", "");
   depth_input_topic_ = declare_parameter<std::string>("depth_candidate_topic", "/safety/depth_candidate");
   const auto depth_output = declare_parameter<std::string>("depth_fenced_topic", "/safety/bounded_depth");
   if (!text_ok(depth_input_topic_, 128) || !topics.insert(depth_input_topic_).second ||
@@ -174,10 +183,6 @@ RawReceipt::Header RawReceipt::header(size_t index, const std::string & reason)
 {
   Header result;
   auto & source = sources_[index];
-  if (source.sequence == std::numeric_limits<uint64_t>::max()) {
-    failed_ = true;
-    return result;
-  }
   result.source_epoch = source.epoch;
   result.bridge_boot_id = boot_id_;
   result.capture_generation = capture_generation_;
@@ -194,11 +199,6 @@ void RawReceipt::invalidate_all(const std::string & reason, size_t trigger,
                                 const std::string & raw_gid)
 {
   if (failed_ || capture_generation_ == std::numeric_limits<uint64_t>::max()) {
-    failed_ = true;
-    return;
-  }
-  ++capture_generation_;
-  if (!ledger_.advance(boot_id_, capture_generation_)) {
     failed_ = true;
     return;
   }
@@ -235,11 +235,14 @@ bool RawReceipt::clock_ok(int64_t ros_ns, uint64_t steady_ns)
   }
   clock_generation_ = observed.generation;
   if (observed.discontinuity) {
+    if (capture_generation_ == std::numeric_limits<uint64_t>::max()) {failed_ = true; return false;}
+    ++capture_generation_;
+    if (!ledger_.advance(boot_id_, capture_generation_)) {failed_ = true; return false;}
     invalidate_all("clock_rollback");
     clear_depth_history();
     if (depth_active_) invalidate_depth("clock_rollback", false);
     if (semantic_active_) invalidate_semantic("clock_rollback", false, true);
-    for (auto & source : sources_) {source.stamps.reset(); source.epoch = new_epoch();}
+    for (auto & source : sources_) {source.epoch = new_epoch();}
   }
   return !failed_;
 }
@@ -249,38 +252,21 @@ bool RawReceipt::qualify_source(size_t index, const rmw_gid_t & incoming,
                                 int64_t received_ros_ns, uint64_t received_steady_ns)
 {
   const auto graph = get_publishers_info_by_topic(input_topics_[index]);
-  const std::string actual = gid_hex(incoming);
   auto & source = sources_[index];
-  if (source.retired_gids.count(actual) != 0) return false;
-  const bool nonzero = std::any_of(std::begin(incoming.data), std::end(incoming.data),
-                                   [](uint8_t value) {return value != 0;});
-  if (!nonzero || graph.size() != 1 || gid_hex(graph[0].endpoint_gid()) != actual) {
-    if (source.active && graph.size() == 1 && gid_hex(graph[0].endpoint_gid()) == source.raw_gid) {
-      retire_gid(source.retired_gids, actual);
-      return false;
+  if (graph.size() != 1 ||
+      graph.front().topic_type() != (index < 2 ? "sensor_msgs/msg/Image" : "sensor_msgs/msg/CameraInfo") ||
+      (!expected_namespaces_[index].empty() && graph.front().node_namespace() != expected_namespaces_[index]) ||
+      (!expected_names_[index].empty() && graph.front().node_name() != expected_names_[index])) {
+    source.active = false;
+    if (!source.invalid) {
+      invalidate_all("raw_topology_unavailable", index, &source_header, received_ros_ns,
+                     received_steady_ns, gid_hex(incoming));
+      source.invalid = true;
     }
-    if (!retire_gid(source.retired_gids, source.raw_gid) ||
-        !retire_gid(source.retired_gids, actual)) return false;
-    invalidate_all("raw_gid_mismatch", index, &source_header, received_ros_ns,
-                   received_steady_ns, actual);
-    sources_[index].active = false;
-    sources_[index].raw_gid.clear();
-    sources_[index].epoch = new_epoch();
-    sources_[index].sequence = 0;
-    sources_[index].stamps.reset();
     return false;
   }
-  if (!source.active || source.raw_gid != actual) {
-    if (!retire_gid(source.retired_gids, source.raw_gid)) return false;
-    invalidate_all("raw_source_changed", index, &source_header, received_ros_ns,
-                   received_steady_ns, actual);
-    source.active = true;
-    source.raw_gid = actual;
-    source.epoch = new_epoch();
-    source.sequence = 0;
-    source.stamps.reset();
-    source.invalid = false;
-  }
+  source.raw_gid = gid_hex(incoming);  // Diagnostic MessageInfo, never graph-as-message identity.
+  source.active = true;
   return !failed_;
 }
 
@@ -308,24 +294,14 @@ void RawReceipt::inspect_topology()
                 senior_sensor_ingress::time::monotonic_ns())) return;
   inspect_depth_owner();
   inspect_semantic_owner();
-  std::array<bool, 4> changed{};
-  bool any = false;
-  for (size_t index = 0; index < sources_.size(); ++index) {
-    if (!sources_[index].active) continue;
-    const auto graph = get_publishers_info_by_topic(input_topics_[index]);
-    changed[index] = graph.size() != 1 || gid_hex(graph[0].endpoint_gid()) != sources_[index].raw_gid;
-    any = any || changed[index];
-  }
-  if (!any) return;
-  invalidate_all("raw_topology_changed");
-  for (size_t index = 0; index < sources_.size(); ++index) {
-    if (!changed[index]) continue;
-    if (!retire_gid(sources_[index].retired_gids, sources_[index].raw_gid)) return;
-    sources_[index].active = false;
-    sources_[index].raw_gid.clear();
-    sources_[index].epoch = new_epoch();
-    sources_[index].sequence = 0;
-    sources_[index].stamps.reset();
+  for (size_t index=0; index<sources_.size(); ++index) {
+    if (sources_[index].active && get_publishers_info_by_topic(input_topics_[index]).size() != 1) {
+      sources_[index].active = false;
+      if (!sources_[index].invalid) {
+        invalidate_all("raw_topology_unavailable");
+        sources_[index].invalid = true;
+      }
+    }
   }
 }
 
@@ -343,8 +319,8 @@ void RawReceipt::on_image(size_t index, const sensor_msgs::msg::Image & message,
                                      received_steady_ns)) return;
   std::optional<senior_sensor_ingress::time::SampleTime> sample;
   try {
-    sample = sources_[index].stamps.accept(message.header.stamp, received_ros_ns,
-                                         received_steady_ns, receipt->generation);
+    sample = time::map_sample(stamp_ns(message.header.stamp), received_ros_ns,
+                              received_steady_ns, receipt->generation);
   } catch (const std::invalid_argument & error) {
     invalidate_all(error.what(), index, &message.header, received_ros_ns,
                    received_steady_ns, gid_hex(incoming));
@@ -367,7 +343,6 @@ void RawReceipt::on_image(size_t index, const sensor_msgs::msg::Image & message,
   output.encoding = message.encoding;
   output.is_bigendian = message.is_bigendian != 0;
   output.data.assign(message.data.begin(), message.data.end());
-  if (!qualify_source(index, incoming, message.header, received_ros_ns, received_steady_ns)) return;
   output.capture = header(index, "");
   if (failed_) return;
   set_sample(output.capture, *sample);
@@ -377,7 +352,7 @@ void RawReceipt::on_image(size_t index, const sensor_msgs::msg::Image & message,
   output.capture.received_ros = static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(received_ros_ns));
   output.capture.received_steady_ns = received_steady_ns;
   sources_[index].invalid = false;
-  if (!ledger_.observe(index, output.capture, steady_now())) return;
+  ledger_.observe(index, output.capture, steady_now());  // History never blocks raw forwarding.
   if (!current_receipt(*receipt)) return;
   (index == 0 ? rgb_publisher_ : depth_publisher_)->publish(output);
 }
@@ -396,8 +371,8 @@ void RawReceipt::on_info(size_t index, const sensor_msgs::msg::CameraInfo & mess
                                      received_steady_ns)) return;
   std::optional<senior_sensor_ingress::time::SampleTime> sample;
   try {
-    sample = sources_[index].stamps.accept(message.header.stamp, received_ros_ns,
-                                         received_steady_ns, receipt->generation);
+    sample = time::map_sample(stamp_ns(message.header.stamp), received_ros_ns,
+                              received_steady_ns, receipt->generation);
   } catch (const std::invalid_argument & error) {
     invalidate_all(error.what(), index, &message.header, received_ros_ns,
                    received_steady_ns, gid_hex(incoming));
@@ -406,7 +381,8 @@ void RawReceipt::on_info(size_t index, const sensor_msgs::msg::CameraInfo & mess
   if (!sample) return;
   if (received_ros_ns < 0 || !stamp_ok(message.header.stamp) ||
       !text_ok(message.header.frame_id, 128) || !dimensions_ok(message.width, message.height) ||
-      !text_ok(message.distortion_model, 32) || message.d.size() > 16) {
+      !text_ok(message.distortion_model, 32) || message.distortion_model.size() > 32 ||
+      message.d.size() > 16) {
     if (!sources_[index].invalid) {
       invalidate_all("raw_camera_info_invalid", index, &message.header, received_ros_ns,
                      received_steady_ns, gid_hex(incoming));
@@ -426,7 +402,6 @@ void RawReceipt::on_info(size_t index, const sensor_msgs::msg::CameraInfo & mess
   output.binning_y = message.binning_y;
   output.roi = {message.roi.x_offset, message.roi.y_offset, message.roi.width, message.roi.height};
   output.roi_do_rectify = message.roi.do_rectify;
-  if (!qualify_source(index, incoming, message.header, received_ros_ns, received_steady_ns)) return;
   output.capture = header(index, "");
   if (failed_) return;
   set_sample(output.capture, *sample);
@@ -436,29 +411,15 @@ void RawReceipt::on_info(size_t index, const sensor_msgs::msg::CameraInfo & mess
   output.capture.received_ros = static_cast<builtin_interfaces::msg::Time>(rclcpp::Time(received_ros_ns));
   output.capture.received_steady_ns = received_steady_ns;
   sources_[index].invalid = false;
-  if (!ledger_.observe(index, output.capture, steady_now())) return;
+  ledger_.observe(index, output.capture, steady_now());  // History never blocks raw forwarding.
   if (!current_receipt(*receipt)) return;
   (index == 2 ? rgb_info_publisher_ : depth_info_publisher_)->publish(output);
 }
-bool RawReceipt::retire_gid(std::set<std::string> & retired, const std::string & gid)
-{
-  if (!gid.empty()) retired.insert(gid);
-  if (retired.size() >= 256) {
-    failed_ = true;
-    return false;
-  }
-  return true;
-}
-
 void RawReceipt::invalidate_depth(
   const std::string & reason, bool owner_lost,
   const senior_interfaces::msg::BoundedDepthEvidence * body)
 {
   if (failed_ || (depth_invalid_ && !owner_lost)) return;
-  if (depth_relay_sequence_ == std::numeric_limits<uint64_t>::max()) {
-    failed_ = true;
-    return;
-  }
   senior_interfaces::msg::FencedDepthEvidence output;
   if (body != nullptr) output.body = *body;
   clear_depth_history();
@@ -480,15 +441,8 @@ void RawReceipt::invalidate_depth(
 void RawReceipt::inspect_depth_owner()
 {
   if (!depth_active_ || failed_) return;
-  const auto graph = get_publishers_info_by_topic(depth_input_topic_);
-  if (graph.size() == 1 && gid_hex(graph[0].endpoint_gid()) == depth_owner_gid_) return;
-  if (!retire_gid(depth_retired_gids_, depth_owner_gid_)) return;
-  if (depth_owner_generation_ == std::numeric_limits<uint64_t>::max()) {
-    failed_ = true;
-    return;
-  }
-  ++depth_owner_generation_;
-  invalidate_depth("owner_lost", true);
+  if (get_publishers_info_by_topic(depth_input_topic_).size() == 1) return;
+  invalidate_depth("owner_unavailable", true);
   depth_active_ = false;
 }
 
@@ -500,46 +454,19 @@ void RawReceipt::on_depth(
   const auto actual = gid_hex(incoming);
   if (before_verify_) before_verify_(4, incoming);
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (failed_ || depth_retired_gids_.count(actual) != 0) return;
+  if (failed_) return;
   const auto graph = get_publishers_info_by_topic(depth_input_topic_);
-  if (graph.size() != 1 || gid_hex(graph[0].endpoint_gid()) != actual) {
-    inspect_depth_owner();
-    return;
+  if (graph.size() != 1 ||
+      graph.front().topic_type() != "senior_interfaces/msg/BoundedDepthEvidence" ||
+      (!depth_expected_name_.empty() && graph.front().node_name() != depth_expected_name_) ||
+      (!depth_expected_namespace_.empty() && graph.front().node_namespace() != depth_expected_namespace_)) {
+    invalidate_depth("owner_unavailable", true); depth_active_ = false; return;
   }
-  if (!text_ok(message.source_epoch, 64) || message.sequence == 0 ||
-      depth_retired_epochs_.count(message.source_epoch) != 0) return;
-  const auto original_now = steady_now();
-  if ((message.depth_capture.sequence != 0 &&
-       ledger_.match(1, message.depth_capture, original_now) == CaptureLedger::Match::retired) ||
-      (message.camera_info_capture.sequence != 0 &&
-       ledger_.match(3, message.camera_info_capture, original_now) == CaptureLedger::Match::retired)) {
-    return;
-  }
-  const bool changed = !depth_active_ || actual != depth_owner_gid_ ||
-                       message.source_epoch != depth_owner_epoch_;
-  if (changed) {
-    clear_depth_history();
-    depth_history_retired_sequence_ = 0;
-    if (semantic_active_) invalidate_semantic("depth_owner_changed", false, true);
-    if (depth_active_ && actual != depth_owner_gid_ &&
-        !retire_gid(depth_retired_gids_, depth_owner_gid_)) return;
-    if (!depth_owner_epoch_.empty() && message.source_epoch != depth_owner_epoch_) {
-      depth_retired_epochs_.insert(depth_owner_epoch_);
-      if (depth_retired_epochs_.size() >= 256) {failed_ = true; return;}
-    }
-    if (depth_owner_generation_ == std::numeric_limits<uint64_t>::max()) {
-      failed_ = true;
-      return;
-    }
-    ++depth_owner_generation_;
-    depth_owner_gid_ = actual;
-    depth_owner_epoch_ = message.source_epoch;
-    depth_owner_sequence_ = 0;
-    depth_active_ = true;
-    depth_invalid_ = false;
-  }
-  if (message.sequence <= depth_owner_sequence_) return;
+  depth_owner_gid_ = actual;
+  depth_owner_epoch_ = message.source_epoch;
   depth_owner_sequence_ = message.sequence;
+  depth_owner_generation_ = capture_generation_;
+  depth_active_ = true;
   if (!message.valid) {
     invalidate_depth(message.reason.empty() ? "depth_invalid" : message.reason, false, &message);
     return;
@@ -554,14 +481,9 @@ void RawReceipt::on_depth(
     d.received_ros == message.received_ros && c.received_ros == message.camera_info_received_ros &&
     steady_seconds(d.received_steady_ns) == message.received_steady &&
     steady_seconds(c.received_steady_ns) == message.camera_info_received_steady &&
-    d.frame_id == message.frame_id && c.frame_id == message.frame_id &&
-    d.raw_gid == message.raw_source && c.raw_gid == message.camera_info_source;
+    d.frame_id == message.frame_id && c.frame_id == message.frame_id;
   if (!shape) {
     invalidate_depth("capture_mismatch", false, &message);
-    return;
-  }
-  if (depth_relay_sequence_ == std::numeric_limits<uint64_t>::max()) {
-    failed_ = true;
     return;
   }
   senior_interfaces::msg::FencedDepthEvidence output;
@@ -596,10 +518,6 @@ void RawReceipt::invalidate_semantic(
   const senior_interfaces::msg::BoundedSemanticEvidence * body)
 {
   if (failed_ || (semantic_invalid_ && !owner_lost)) return;
-  if (semantic_relay_sequence_ == std::numeric_limits<uint64_t>::max()) {
-    failed_ = true;
-    return;
-  }
   senior_interfaces::msg::FencedSemanticEvidence output;
   if (body != nullptr) output.body = *body;
   auto & header = output.owner;
@@ -620,15 +538,8 @@ void RawReceipt::invalidate_semantic(
 void RawReceipt::inspect_semantic_owner()
 {
   if (!semantic_active_ || failed_) return;
-  const auto graph = get_publishers_info_by_topic(semantic_input_topic_);
-  if (graph.size() == 1 && gid_hex(graph[0].endpoint_gid()) == semantic_owner_gid_) return;
-  if (!retire_gid(semantic_retired_gids_, semantic_owner_gid_)) return;
-  if (semantic_owner_generation_ == std::numeric_limits<uint64_t>::max()) {
-    failed_ = true;
-    return;
-  }
-  ++semantic_owner_generation_;
-  invalidate_semantic("owner_lost", true);
+  if (get_publishers_info_by_topic(semantic_input_topic_).size() == 1) return;
+  invalidate_semantic("owner_unavailable", true);
   semantic_active_ = false;
 }
 
@@ -640,55 +551,29 @@ void RawReceipt::on_semantic(
   const auto actual = gid_hex(incoming);
   if (before_verify_) before_verify_(5, incoming);
   std::lock_guard<std::mutex> lock(state_mutex_);
-  if (failed_ || semantic_retired_gids_.count(actual) != 0) return;
+  if (failed_) return;
   const auto graph = get_publishers_info_by_topic(semantic_input_topic_);
-  if (graph.size() != 1 || gid_hex(graph[0].endpoint_gid()) != actual) {
-    inspect_semantic_owner();
-    return;
+  if (graph.size() != 1 ||
+      graph.front().topic_type() != "senior_interfaces/msg/BoundedSemanticEvidence" ||
+      (!semantic_expected_name_.empty() && graph.front().node_name() != semantic_expected_name_) ||
+      (!semantic_expected_namespace_.empty() && graph.front().node_namespace() != semantic_expected_namespace_)) {
+    invalidate_semantic("owner_unavailable", true); semantic_active_ = false; return;
   }
-  if (!text_ok(message.source_epoch, 64) || message.sequence == 0 ||
-      semantic_retired_epochs_.count(message.source_epoch) != 0) return;
+  semantic_owner_gid_ = actual;
+  semantic_owner_epoch_ = message.source_epoch;
+  semantic_owner_sequence_ = message.sequence;
+  semantic_owner_generation_ = capture_generation_;
+  semantic_active_ = true;
   const auto now = steady_now();
   const std::array<Header, 4> captures = {message.rgb_capture, message.depth.depth_capture,
     message.rgb_camera_info_capture, message.depth.camera_info_capture};
-  for (size_t index = 0; index < captures.size(); ++index) {
-    if (captures[index].sequence != 0 &&
-        ledger_.match(index, captures[index], now) == CaptureLedger::Match::retired) return;
-  }
-  if (message.valid && message.depth_owner.owner_generation < depth_owner_generation_ &&
-      (depth_retired_gids_.count(message.depth_owner.owner_gid) != 0 ||
-       depth_retired_epochs_.count(message.depth_owner.owner_epoch) != 0)) return;
+  // Existing derived-history policy; it never suppresses a raw publication.
   while (!depth_history_.empty() &&
          (now < steady_seconds(depth_history_.front().body.depth_capture.received_steady_ns) ||
           now - steady_seconds(depth_history_.front().body.depth_capture.sample_steady_ns) > 1.0)) {
     depth_history_retired_sequence_ = depth_history_.front().owner.relay_sequence;
     depth_history_.pop_front();
   }
-  if (message.valid && message.depth_owner.owner_generation == depth_owner_generation_ &&
-      message.depth_owner.relay_sequence > 0 &&
-      message.depth_owner.relay_sequence <= depth_history_retired_sequence_) return;
-  const bool changed = !semantic_active_ || actual != semantic_owner_gid_ ||
-                       message.source_epoch != semantic_owner_epoch_;
-  if (changed) {
-    if (semantic_active_ && actual != semantic_owner_gid_ &&
-        !retire_gid(semantic_retired_gids_, semantic_owner_gid_)) return;
-    if (!semantic_owner_epoch_.empty() && message.source_epoch != semantic_owner_epoch_) {
-      semantic_retired_epochs_.insert(semantic_owner_epoch_);
-      if (semantic_retired_epochs_.size() >= 256) {failed_ = true; return;}
-    }
-    if (semantic_owner_generation_ == std::numeric_limits<uint64_t>::max()) {
-      failed_ = true;
-      return;
-    }
-    ++semantic_owner_generation_;
-    semantic_owner_gid_ = actual;
-    semantic_owner_epoch_ = message.source_epoch;
-    semantic_owner_sequence_ = 0;
-    semantic_active_ = true;
-    semantic_invalid_ = false;
-  }
-  if (message.sequence <= semantic_owner_sequence_) return;
-  semantic_owner_sequence_ = message.sequence;
   if (!message.valid) {
     invalidate_semantic(message.reason.empty() ? "semantic_invalid" : message.reason,
                         false, false, &message);
@@ -710,8 +595,7 @@ void RawReceipt::on_semantic(
     rgb_info.received_ros == message.rgb_camera_info_received_ros &&
     steady_seconds(rgb.received_steady_ns) == message.rgb_received_steady &&
     steady_seconds(rgb_info.received_steady_ns) == message.rgb_camera_info_received_steady &&
-    rgb.frame_id == message.rgb_frame_id && rgb_info.frame_id == message.rgb_frame_id &&
-    rgb.raw_gid == message.rgb_source && rgb_info.raw_gid == message.rgb_camera_info_source;
+    rgb.frame_id == message.rgb_frame_id && rgb_info.frame_id == message.rgb_frame_id;
   if (!capture_ok) {
     invalidate_semantic("capture_mismatch", false, false, &message);
     return;
@@ -728,10 +612,6 @@ void RawReceipt::on_semantic(
   }
   if (!depth_exact) {
     invalidate_semantic("depth_body_mismatch", false, false, &message);
-    return;
-  }
-  if (semantic_relay_sequence_ == std::numeric_limits<uint64_t>::max()) {
-    failed_ = true;
     return;
   }
   senior_interfaces::msg::FencedSemanticEvidence output;

@@ -8,10 +8,10 @@ builtin_interfaces/Time rgb_camera_info_stamp
 builtin_interfaces/Time rgb_camera_info_received_ros
 float64 rgb_received_steady
 float64 rgb_camera_info_received_steady
-string<=128 rgb_frame_id
-string<=128 rgb_source
-string<=128 rgb_camera_info_source
-string<=64 source_epoch
+string rgb_frame_id
+string rgb_source
+string rgb_camera_info_source
+string source_epoch
 string<=64 registration_id
 uint64 sequence
 bool valid

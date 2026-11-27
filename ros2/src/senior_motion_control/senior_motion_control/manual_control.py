@@ -130,9 +130,9 @@ class MotionRuntimeReceiver:
     """A trusted local sample frontier, with no state-machine transitions."""
 
     def __init__(self) -> None:
-        from senior_motion_control.source_fences import SourceEpochFence
+        from senior_motion_control.source_fences import RuntimeEpochFence
 
-        self._sources = SourceEpochFence(max_retired=32)
+        self._sources = RuntimeEpochFence(max_retired=32)
         self.value: MotionRuntimeState | None = None
         self._available = False
 

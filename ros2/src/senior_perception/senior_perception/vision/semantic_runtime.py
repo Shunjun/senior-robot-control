@@ -32,7 +32,7 @@ class SampledGeometry:
 
 def _text(value: str, limit: int) -> bool:
     try:
-        return bool(value) and len(value.encode("utf-8")) <= limit
+        return isinstance(value, str) and bool(value)
     except (AttributeError, UnicodeError):
         return False
 
@@ -66,10 +66,6 @@ def qualify_registration(
         or not _text(rgb_frame, 128)
         or info.frame_id != rgb_frame
         or depth.frame_id != rgb_frame
-        or not _text(info.raw_source, 128)
-        or not _text(depth.raw_source, 128)
-        or not _text(depth.info_source, 128)
-        or not _text(depth.source_epoch, 64)
         or not _text(depth.calibration_id, 64)
         or info.width != depth.width
         or info.height != depth.height
@@ -238,12 +234,8 @@ def _depth_snapshot(message: object) -> DepthSnapshot:
         or info_stamp != stamp
         or received < 0
         or info_received < 0
-        or int(wire.sequence) <= 0
         or not _text(wire.frame_id, 128)
         or not _text(wire.body_frame, 128)
-        or not _text(wire.raw_source, 128)
-        or not _text(wire.camera_info_source, 128)
-        or not _text(wire.source_epoch, 64)
         or not _text(wire.calibration_id, 64)
         or not 1 <= width <= 4096
         or not 1 <= height <= 4096

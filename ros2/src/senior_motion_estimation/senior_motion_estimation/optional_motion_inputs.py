@@ -5,6 +5,7 @@ RGB-D is a statistical input, never a hard error or stopping-speed certificate.
 No publisher, topic discovery, or assumed calibration enables these inputs.
 """
 
+import json
 import math
 import time
 from typing import Any
@@ -23,10 +24,10 @@ from vehicle_core.values import Pose2D
 def static_matrix(status: Any, base: str, camera: str) -> Any:
     import numpy as np
 
-    if not status.valid or not status.admitted or not 1 <= len(status.edges) <= 32:
+    if not status.transforms:
         raise ValueError("RGB-D static calibration unavailable")
-    edges = {e.child_frame: e for e in status.edges}
-    if len(edges) != len(status.edges):
+    edges = {e.child_frame_id: e for e in status.transforms}
+    if len(edges) != len(status.transforms):
         raise ValueError("ambiguous static frame parent")
     result = np.eye(4)
     visited = set()
@@ -35,7 +36,8 @@ def static_matrix(status: Any, base: str, camera: str) -> Any:
             raise ValueError("missing/cyclic camera calibration chain")
         visited.add(camera)
         edge = edges[camera]
-        x, y, z, w = (float(v) for v in edge.rotation_xyzw)
+        q = edge.transform.rotation
+        x, y, z, w = float(q.x), float(q.y), float(q.z), float(q.w)
         if (
             not all(math.isfinite(v) for v in (x, y, z, w))
             or abs(x * x + y * y + z * z + w * w - 1) > 1e-6
@@ -47,9 +49,10 @@ def static_matrix(status: Any, base: str, camera: str) -> Any:
             [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
             [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
         ]
-        matrix[:3, 3] = edge.translation
+        t = edge.transform.translation
+        matrix[:3, 3] = (t.x, t.y, t.z)
         result = matrix @ result
-        camera = edge.parent_frame
+        camera = edge.header.frame_id
     if not np.isfinite(result).all():
         raise ValueError("nonfinite static calibration")
     return result
@@ -63,26 +66,28 @@ def rgbd_observation(message: Any) -> MotionObservation:
         raise ValueError("RGB-D source unavailable")
     roots = []
     # Preserve all original captures; worker completion cannot renew any dependency.
-    for header in (
-        body.first_rgb,
-        body.first_depth,
-        body.first_rgb_info,
-        body.first_depth_info,
-        body.second_rgb,
-        body.second_depth,
-        body.second_rgb_info,
-        body.second_depth_info,
+    for role, header in zip(
+        ("rgb", "depth", "rgb_info", "depth_info") * 2,
+        (
+            body.first_rgb,
+            body.first_depth,
+            body.first_rgb_info,
+            body.first_depth_info,
+            body.second_rgb,
+            body.second_depth,
+            body.second_rgb_info,
+            body.second_depth_info,
+        ),
+        strict=True,
     ):
         if not header.valid:
             raise ValueError("invalid original RGB-D capture")
         roots.append(
             Origin(
-                "camera:" + header.raw_gid,
-                header.bridge_boot_id
-                + ":"
-                + header.source_epoch
-                + ":"
-                + str(header.capture_generation),
+                "camera:" + role,
+                json.dumps(
+                    {"boot_id": header.bridge_boot_id, "generation": header.capture_generation}
+                ),
                 int(header.sequence),
                 capture_from_message(header).time,
             )
@@ -246,11 +251,12 @@ class OptionalMotionInputs:
     def _gps_root(self, message, info, origin, ros, sample):
         return Origin(
             self._gps_family,
-            str(origin.sample_gid)
-            + ":"
-            + str(info["receipt_generation"])
-            + ":"
-            + str(sample.clock_generation),
+            json.dumps(
+                {
+                    "boot_id": info.get("receipt_boot_id", "legacy-receiver"),
+                    "generation": int(info["receipt_generation"]),
+                }
+            ),
             int(info["receipt_sequence"]),
             sample,
         )

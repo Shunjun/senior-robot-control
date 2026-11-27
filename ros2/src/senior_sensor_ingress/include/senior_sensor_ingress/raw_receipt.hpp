@@ -42,13 +42,11 @@ public:
 
 private:
   struct Source {
-    StampFrontier stamps;
     bool active = false;
     std::string raw_gid;
     std::string epoch;
     uint64_t sequence = 0;
     bool invalid = false;
-    std::set<std::string> retired_gids;
   };
   using RawImage = senior_interfaces::msg::BoundedRawImage;
   using RawInfo = senior_interfaces::msg::BoundedRawCameraInfo;
@@ -77,7 +75,6 @@ private:
   void inspect_depth_owner();
   void invalidate_depth(const std::string & reason, bool owner_lost,
                         const senior_interfaces::msg::BoundedDepthEvidence * body = nullptr);
-  bool retire_gid(std::set<std::string> & retired, const std::string & gid);
   void on_semantic(const senior_interfaces::msg::BoundedSemanticEvidence & message,
                    const rclcpp::MessageInfo & info);
   void inspect_semantic_owner();
@@ -93,7 +90,6 @@ private:
   std::deque<senior_interfaces::msg::FencedDepthEvidence> depth_history_;
   uint64_t depth_history_retired_sequence_ = 0;
   std::string semantic_input_topic_, semantic_owner_gid_, semantic_owner_epoch_;
-  std::set<std::string> semantic_retired_gids_, semantic_retired_epochs_;
   uint64_t semantic_owner_generation_ = 0, semantic_owner_sequence_ = 0;
   uint64_t semantic_relay_sequence_ = 0;
   bool semantic_active_ = false, semantic_invalid_ = false;
@@ -101,12 +97,14 @@ private:
   rclcpp::Subscription<senior_interfaces::msg::BoundedSemanticEvidence>::SharedPtr semantic_body_sub_;
   std::string depth_input_topic_;
   std::string depth_owner_gid_, depth_owner_epoch_;
-  std::set<std::string> depth_retired_gids_, depth_retired_epochs_;
+  std::string depth_expected_name_, depth_expected_namespace_;
+  std::string semantic_expected_name_, semantic_expected_namespace_;
   uint64_t depth_owner_generation_ = 0, depth_owner_sequence_ = 0, depth_relay_sequence_ = 0;
   bool depth_active_ = false, depth_invalid_ = false;
   rclcpp::Publisher<senior_interfaces::msg::FencedDepthEvidence>::SharedPtr depth_fenced_pub_;
   rclcpp::Subscription<senior_interfaces::msg::BoundedDepthEvidence>::SharedPtr depth_body_sub_;
   std::array<std::string, 4> input_topics_;
+  std::array<std::string, 4> expected_names_, expected_namespaces_;
   std::array<Source, 4> sources_;
   std::string boot_id_;
   uint64_t counter_ = 0;

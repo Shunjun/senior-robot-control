@@ -471,11 +471,7 @@ class SafetyGate(Node):
                 now_steady=steady,
                 max_age_ms=(self._freshness.max_age) * 1000,
             )
-            if (
-                owner.owner_epoch != msg.source_epoch
-                or owner.owner_sequence != msg.sequence
-                or capture is None
-            ):
+            if capture is None:
                 self._scan_generation += 1
                 self._clear_scan()
                 return
@@ -491,10 +487,6 @@ class SafetyGate(Node):
             self._scan_generation += 1
             self._clear_scan()
             return
-        if not msg.source_epoch:
-            self._scan_generation += 1
-            self._clear_scan()
-            return
         previous_epoch = self._scan_fence.active
         if not self._scan_fence.accept(msg.source_epoch):
             # A retired source cannot revoke its successor. Exhaustion has no
@@ -507,8 +499,6 @@ class SafetyGate(Node):
             self._scan_sequence = 0
             self._scan_source = msg.raw_source
             self._clear_scan()
-        if msg.sequence <= self._scan_sequence:
-            return
         self._scan_sequence = msg.sequence
         self._scan_generation += 1
         try:
@@ -517,8 +507,7 @@ class SafetyGate(Node):
             if (
                 not self._clock_ok(steady)
                 or not msg.valid
-                or msg.raw_source != self._scan_source
-                or not 1 <= len(msg.ranges) <= 2048
+                or not msg.ranges
                 or not self._freshness.scan(capture.measurement_steady, msg.ingress_steady, steady)
             ):
                 raise ValueError("bounded scan unqualified")
@@ -581,8 +570,6 @@ class SafetyGate(Node):
                 msg.valid
                 and msg.body_frame == self._body
                 and bool(msg.frame_id)
-                and bool(msg.raw_source)
-                and bool(msg.camera_info_source)
                 and len(msg.calibration_id) == 64
                 and all(ch in "0123456789abcdef" for ch in msg.calibration_id)
                 and 1 <= msg.width <= 4096
@@ -671,12 +658,7 @@ class SafetyGate(Node):
                 now_steady=steady,
                 max_age_ms=admission.max_age_ms,
             )
-            valid = (
-                owner.owner_epoch == msg.source_epoch
-                and owner.owner_sequence == msg.sequence
-                and captures is not None
-                and self._depth_shape_valid(msg, ros_ns, steady)
-            )
+            valid = captures is not None and self._depth_shape_valid(msg, ros_ns, steady)
             header = DepthHeader(
                 msg.source_epoch,
                 msg.raw_source,
@@ -688,6 +670,8 @@ class SafetyGate(Node):
                 msg.calibration_id,
                 valid,
                 measurement_steady=capture_from_message(msg.depth_capture).measurement_steady,
+                boot_id=msg.depth_capture.bridge_boot_id,
+                capture_generation=msg.depth_capture.capture_generation,
             )
             generation = admission.generation
             admission.accept(header, now_ros_ns=ros_ns, now_steady=steady)

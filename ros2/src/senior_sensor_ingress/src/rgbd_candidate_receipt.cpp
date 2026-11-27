@@ -1,569 +1,239 @@
 #include "senior_sensor_ingress/rgbd_candidate_receipt.hpp"
-#include "senior_sensor_ingress/sample_time.hpp"
-#include "senior_sensor_ingress/static_tf_receipt.hpp"
+#include "senior_sensor_ingress/raw_receipt.hpp"
+#include "senior_sensor_ingress/sample_record.hpp"
 
 #include <algorithm>
-#include <chrono>
 #include <cmath>
 #include <iomanip>
-#include <limits>
 #include <random>
 #include <sstream>
-#include <stdexcept>
-#include <tf2_msgs/msg/tf_message.hpp>
 
 namespace senior_sensor_ingress {
 namespace {
-using namespace std::chrono_literals;
-std::string hex_gid(const uint8_t * data, size_t length)
-{
-  std::ostringstream out;
-  out << std::hex << std::setfill('0');
-  for (size_t i = 0; i < length; ++i) out << std::setw(2) << unsigned(data[i]);
-  return out.str();
-}
-std::string actual_gid(const rclcpp::MessageInfo & info)
-{
-  const auto value = info.get_rmw_message_info().publisher_gid;
-  return hex_gid(value.data, RMW_GID_STORAGE_SIZE);
-}
 std::string new_boot()
 {
   std::random_device random;
   std::ostringstream out;
   out << std::hex << std::setfill('0');
-  for (int i = 0; i < 4; ++i) out << std::setw(8) << random();
+  for (int i=0; i<4; ++i) out << std::setw(8) << random();
   return out.str();
-}
-double steady_now()
-{
-  return static_cast<double>(senior_sensor_ingress::time::monotonic_ns()) / 1e9;
-}
-int64_t nanos(const builtin_interfaces::msg::Time & stamp)
-{
-  if (stamp.sec < 0 || stamp.nanosec >= 1000000000u) return -1;
-  return int64_t(stamp.sec) * 1000000000LL + stamp.nanosec;
-}
-bool text_ok(const std::string & value, size_t maximum)
-{
-  return !value.empty() && value.size() <= maximum &&
-    std::all_of(value.begin(), value.end(), [](unsigned char c) {return c >= 33 && c <= 126;});
-}
-bool valid_gid(const std::string & value)
-{
-  if (value.size() != 2 * RMW_GID_STORAGE_SIZE) return false;
-  bool any = false;
-  for (const char c : value) {
-    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return false;
-    any = any || c != '0';
-  }
-  return any;
 }
 bool rigid(const std::array<double, 16> & m)
 {
   for (const double v : m) if (!std::isfinite(v)) return false;
-  if (std::abs(m[12]) > 1e-8 || std::abs(m[13]) > 1e-8 || std::abs(m[14]) > 1e-8 ||
-      std::abs(m[15]-1) > 1e-8) return false;
+  if (std::abs(m[12]) > 1e-8 || std::abs(m[13]) > 1e-8 ||
+      std::abs(m[14]) > 1e-8 || std::abs(m[15]-1) > 1e-8) return false;
   for (int i=0; i<3; ++i) for (int j=0; j<3; ++j) {
     double dot = 0;
     for (int k=0; k<3; ++k) dot += m[k*4+i] * m[k*4+j];
     if (!std::isfinite(dot) || std::abs(dot - (i==j ? 1.0 : 0.0)) > 1e-6) return false;
   }
-  const double det = m[0]*(m[5]*m[10]-m[6]*m[9]) - m[1]*(m[4]*m[10]-m[6]*m[8]) +
-                     m[2]*(m[4]*m[9]-m[5]*m[8]);
+  const double det = m[0]*(m[5]*m[10]-m[6]*m[9]) -
+    m[1]*(m[4]*m[10]-m[6]*m[8]) + m[2]*(m[4]*m[9]-m[5]*m[8]);
   return std::isfinite(det) && std::abs(det-1) <= 1e-6;
 }
-}  // namespace
+bool sample_valid(const senior_interfaces::msg::RawCaptureHeader & h)
+{
+  try {
+    const auto stamp = stamp_ns(h.stamp), received = stamp_ns(h.received_ros);
+    return h.valid && h.clock_generation > 0 && received >= stamp &&
+      h.sample_steady_ns <= h.received_steady_ns &&
+      h.received_steady_ns-h.sample_steady_ns == static_cast<uint64_t>(received-stamp);
+  } catch (const std::invalid_argument &) {return false;}
+}
+bool transform_matches(const geometry_msgs::msg::TransformStamped & a,
+                       const geometry_msgs::msg::TransformStamped & b)
+{
+  const auto & at=a.transform.translation; const auto & bt=b.transform.translation;
+  const auto & aq=a.transform.rotation; const auto & bq=b.transform.rotation;
+  const std::array<double, 7> left{at.x, at.y, at.z, aq.x, aq.y, aq.z, aq.w};
+  const std::array<double, 7> right{bt.x, bt.y, bt.z, bq.x, bq.y, bq.z, bq.w};
+  for (size_t i=0; i<left.size(); ++i)
+    if (!std::isfinite(left[i]) || std::abs(left[i]-right[i]) > 1e-9) return false;
+  return a.header.frame_id == b.header.frame_id && a.child_frame_id == b.child_frame_id;
+}
+}
 
 RgbdCandidateReceipt::RgbdCandidateReceipt(const rclcpp::NodeOptions & options)
-: Node("rgbd_candidate_receipt", options), relay_boot_(new_boot()), sensor_policy_(
-    declare_parameter<double>("sensor_soft_age_ms", -1.0),
-    declare_parameter<double>("sensor_hard_age_ms", -1.0),
-    declare_parameter<double>("sensor_diagnostics_period_s", -1.0))
+: Node("rgbd_candidate_receipt", options), relay_boot_(new_boot())
 {
-  queue_policy_ = std::make_unique<sensor_timing::QueuePolicy>(
-    declare_parameter<int>("queue_warn_count", -1), declare_parameter<double>("queue_warn_ratio", -1.),
-    declare_parameter<double>("queue_warn_repeat_s", -1.),
-    declare_parameter<double>("queue_warn_recovery_ratio", -1.),
-    declare_parameter<double>("queue_warn_oldest_wait_ms", -1.));
-  const auto prefix = declare_parameter<std::string>("topic_prefix", "/rgbd_diagnostic");
-  if (!text_ok(prefix, 100)) throw std::invalid_argument("invalid RGB-D receipt prefix");
-  raw_topics_ = {prefix+"/rgb", prefix+"/depth", prefix+"/rgb_info", prefix+"/depth_info"};
-  tf_topic_ = prefix+"/tf";
-  candidate_topic_ = prefix+"/candidate";
-  output_topic_ = prefix+"/fenced";
-  base_ = declare_parameter<std::string>("base_frame", "base_link");
-  camera_ = declare_parameter<std::string>("camera_frame", "camera_color_optical_frame");
-  if (!text_ok(base_, 128) || !text_ok(camera_, 128) || base_ == camera_)
-    throw std::invalid_argument("invalid RGB-D frame configuration");
-  const auto qos = rclcpp::SensorDataQoS().keep_last(4);
-  publisher_ = create_publisher<Fenced>(output_topic_, qos);
+  const auto prefix=declare_parameter<std::string>("topic_prefix", "/rgbd_diagnostic");
+  raw_topics_={prefix+"/rgb", prefix+"/depth", prefix+"/rgb_info", prefix+"/depth_info"};
+  candidate_topic_=prefix+"/candidate";
+  base_=declare_parameter<std::string>("base_frame", "base_link");
+  camera_=declare_parameter<std::string>("camera_frame", "camera_color_optical_frame");
+  if (prefix.empty() || base_.empty() || camera_.empty() || base_ == camera_)
+    throw std::invalid_argument("invalid RGB-D topics or frames");
+  tf_buffer_=std::make_unique<tf2_ros::Buffer>(get_clock());
+  tf_listener_=std::make_unique<tf2_ros::TransformListener>(*tf_buffer_, this, false);
+  const auto qos=rclcpp::SensorDataQoS().keep_last(4);
+  publisher_=create_publisher<Fenced>(prefix+"/fenced", qos);
   for (size_t i=0; i<2; ++i) {
-    images_[i] = create_subscription<Image>(raw_topics_[i], qos,
-      [this, i](Image::ConstSharedPtr body, const rclcpp::MessageInfo & info) {image(i, *body, info);});
-    infos_[i] = create_subscription<Info>(raw_topics_[i+2], qos,
-      [this, i](Info::ConstSharedPtr body, const rclcpp::MessageInfo & info) {camera_info(i, *body, info);});
+    images_[i]=create_subscription<Image>(raw_topics_[i], qos,
+      [this,i](Image::ConstSharedPtr body) {image(i,*body);});
+    infos_[i]=create_subscription<Info>(raw_topics_[i+2], qos,
+      [this,i](Info::ConstSharedPtr body) {camera_info(i,*body);});
   }
-  tf_sub_ = create_subscription<Static>(tf_topic_, rclcpp::QoS(1).reliable().transient_local(),
-    [this](Static::ConstSharedPtr body, const rclcpp::MessageInfo & info) {tf(*body, actual_gid(info));});
-  candidate_sub_ = create_subscription<Candidate>(candidate_topic_, qos,
-    [this](Candidate::ConstSharedPtr body, const rclcpp::MessageInfo & info) {candidate(*body, info);});
-  timer_ = create_wall_timer(20ms, [this] {inspect();});
+  candidate_sub_=create_subscription<Candidate>(candidate_topic_, qos,
+    [this](Candidate::ConstSharedPtr body,const rclcpp::MessageInfo & info) {candidate(*body,info);});
+}
+std::string RgbdCandidateReceipt::output_gid() const {return gid_hex(publisher_->get_gid());}
+
+bool RgbdCandidateReceipt::graph_matches(const std::string & topic,const std::string & node)
+{
+  const auto graph=get_publishers_info_by_topic(topic);
+  const std::string type = topic==candidate_topic_ ?
+    "senior_interfaces/msg/RgbdMotionCandidate" :
+    (topic==raw_topics_[0] || topic==raw_topics_[1] ?
+      "senior_interfaces/msg/BoundedRawImage" : "senior_interfaces/msg/BoundedRawCameraInfo");
+  return graph.size()==1 && graph[0].node_name()==node && graph[0].node_namespace()=="/" &&
+    graph[0].topic_type()==type;
 }
 
-std::string RgbdCandidateReceipt::output_gid() const
-{
-  const auto value = publisher_->get_gid();
-  return hex_gid(value.data, RMW_GID_STORAGE_SIZE);
-}
-bool RgbdCandidateReceipt::graph_matches(const std::string & topic, const std::string & node,
-                                         const std::string & gid)
-{
-  const auto graph = get_publishers_info_by_topic(topic);
-  return graph.size() == 1 && graph[0].node_name() == node && graph[0].node_namespace() == "/" &&
-    hex_gid(graph[0].endpoint_gid().data(), RMW_GID_STORAGE_SIZE) == gid;
-}
-void RgbdCandidateReceipt::invalidate(const std::string & reason, bool owner_lost)
+void RgbdCandidateReceipt::invalidate(const std::string & reason)
 {
   Fenced output;
-  output.owner.relay_gid = output_gid();
-  output.owner.relay_boot = relay_boot_;
-  output.owner.relay_sequence = ++relay_sequence_;
-  output.owner.owner_gid = producer_gid_;
-  output.owner.owner_epoch = producer_boot_;
-  output.owner.owner_generation = producer_generation_;
-  output.owner.owner_sequence = producer_sequence_;
-  output.owner.valid = false;
-  output.owner.owner_lost = owner_lost;
-  output.owner.reason = reason;
-  output.body = last_candidate_;
+  output.owner.relay_gid=output_gid(); output.owner.relay_boot=relay_boot_;
+  output.owner.relay_sequence=++relay_sequence_;
+  output.owner.owner_gid=last_candidate_.producer_gid;
+  output.owner.owner_epoch=last_candidate_.producer_boot_id;
+  output.owner.owner_generation=last_candidate_.owner_generation;
+  output.owner.owner_sequence=last_candidate_.sequence;
+  output.owner.reason=reason; output.body=last_candidate_;
   publisher_->publish(output);
 }
-bool RgbdCandidateReceipt::clocks_ok(int64_t ros_ns, double steady)
+
+bool RgbdCandidateReceipt::clocks_ok(int64_t ros_ns,uint64_t steady)
 {
-  if (failed_) return false;
-  if (ros_ns < 0 || !std::isfinite(steady) || steady < 0 ||
-      steady >= static_cast<double>(std::numeric_limits<uint64_t>::max()) / 1e9) {
-    ledger_.clear(); invalidate("clock_invalid"); return false;
-  }
-  const auto observed = clock_.observe(ros_ns, static_cast<uint64_t>(steady * 1e9));
-  if (observed.discontinuity) {
-    ledger_.clear();
-    tf_queue_dropped_ += pending_tf_.size();
-    pending_tf_.clear();
-    producer_floor_steady_ = steady;
-    invalidate("clock_rollback");
-    last_candidate_ = {};
+  try {
+    if (clock_.observe(ros_ns,steady).discontinuity) {
+      ledger_.clear(); invalidate("clock_rollback");
+      return false;
+    }
+    return true;
+  } catch (const std::invalid_argument &) {invalidate("clock_invalid"); return false;}
+}
+
+bool RgbdCandidateReceipt::accept_raw(size_t stream,const Header & h)
+{
+  if (!graph_matches(raw_topics_[stream],"raw_receipt")) return false;
+  auto & source=sources_[stream];
+  if (!h.valid) {
+    if (h.capture_generation < raw_generation_ ||
+        !source.observe_generation(h.bridge_boot_id,h.capture_generation)) return false;
+    if (h.capture_generation > raw_generation_) {
+      ledger_.clear(); raw_generation_=h.capture_generation;
+    }
+    invalidate("raw_invalid");
     return false;
   }
-  return true;
-}
-
-bool RgbdCandidateReceipt::accept_raw(size_t stream, const Header & h, const std::string & actual)
-{
-  auto & source = sources_[stream];
-  if (source.retired_bridge.count(actual) || source.retired_raw.count(h.raw_gid) ||
-      retired_boots_.count(h.bridge_boot_id)) return false;
-  if (!valid_gid(actual) || h.bridge_gid != actual || !graph_matches(raw_topics_[stream], "raw_receipt", actual)) {
-    ledger_.clear(); invalidate("raw_owner_invalid", true); return false;
-  }
-  if (!text_ok(h.bridge_boot_id, 64) || h.capture_generation == 0 || h.sequence == 0) {
-    ledger_.clear(); invalidate("raw_header_invalid"); return false;
-  }
-  bool boot_replaced = false;
+  if (!sample_valid(h) || h.frame_id.empty()) return false;
   if (!raw_boot_.empty() && h.bridge_boot_id != raw_boot_) {
-    const auto & prior_bridge = source.bridge_gid.empty() ? source.last_bridge_gid : source.bridge_gid;
-    if (prior_bridge.empty() || prior_bridge == actual || retired_boots_.size() >= 64) {
-      ledger_.clear(); invalidate("raw_boot_invalid"); failed_ = true; return false;
-    }
-    retired_boots_.insert(raw_boot_);
-    for (auto & item : sources_) {
-      if (!item.bridge_gid.empty()) {
-        if (item.retired_bridge.size() >= 64) {ledger_.clear(); invalidate("retirement_exhausted", true); failed_ = true; return false;}
-        item.last_bridge_gid = item.bridge_gid;
-        item.last_bridge_boot = raw_boot_;
-        item.retired_bridge.insert(item.bridge_gid);
-      }
-      item.bridge_gid.clear(); item.sequence = 0; item.has_last_header = false;
-    }
-    raw_boot_ = h.bridge_boot_id;
-    boot_replaced = true;
-    raw_generation_ = 0;
-    ledger_.clear(); invalidate("raw_restarted");
+    if (h.received_steady_ns <= raw_last_receipt_) return false;
+    for (auto & order : sources_) order.confirm_boot(h.bridge_boot_id);
+    ledger_.clear(); raw_generation_=0;
   }
-  if (!boot_replaced && !raw_boot_.empty() && h.bridge_boot_id == raw_boot_ && source.bridge_gid.empty() &&
-      !source.last_bridge_gid.empty() && source.last_bridge_boot == raw_boot_ &&
-      source.last_bridge_gid != actual) {
-    ledger_.clear(); invalidate("raw_boot_invalid"); failed_ = true; return false;
-  }
-  if (h.capture_generation < raw_generation_) return false;
+  if (h.capture_generation < raw_generation_ ||
+      !source.accept_capture(h.bridge_boot_id,h.capture_generation,
+                             stamp_ns(h.stamp),h.received_steady_ns)) return false;
   if (h.capture_generation > raw_generation_) {
-    if (raw_generation_) {ledger_.clear(); invalidate("raw_generation_changed");}
-    raw_generation_ = h.capture_generation;
-    for (auto & item : sources_) {item.sequence = 0; item.epoch.clear(); item.has_last_header = false;}
+    ledger_.clear(); raw_generation_=h.capture_generation;
   }
-  raw_boot_ = h.bridge_boot_id;
-  if (!source.bridge_gid.empty() && source.bridge_gid != actual) {
-    ledger_.clear(); invalidate("raw_owner_changed"); failed_ = true; return false;
-  }
-  if (source.sequence && h.sequence < source.sequence) return false;
-  if (source.sequence && h.sequence == source.sequence &&
-      (!source.has_last_header || h != source.last_header)) {
-    ledger_.clear(); invalidate("raw_header_conflict"); return false;
-  }
-  if (!h.valid) {
-    source.bridge_gid = actual;
-    source.sequence = h.sequence;
-    source.last_header = h; source.has_last_header = true;
-    ledger_.clear(); invalidate("raw_invalid"); return false;
-  }
-  if (!text_ok(h.source_epoch, 64) || !text_ok(h.frame_id, 128) || !text_ok(h.raw_gid, 128)) {
-    source.bridge_gid = actual;
-    source.sequence = h.sequence;
-    source.last_header = h; source.has_last_header = true;
-    ledger_.clear(); invalidate("raw_header_invalid"); return false;
-  }
-  if (!source.raw_gid.empty() && source.raw_gid != h.raw_gid) {
-    if (source.retired_raw.size() >= 64) {ledger_.clear(); invalidate("retirement_exhausted", true); failed_ = true; return false;}
-    source.retired_raw.insert(source.raw_gid);
-    ledger_.clear(); invalidate("raw_source_changed");
-  } else if (!source.epoch.empty() && source.epoch != h.source_epoch && source.sequence != 0) {
-    ledger_.clear(); invalidate("raw_epoch_changed"); failed_ = true; return false;
-  }
-  source.bridge_gid = actual; source.raw_gid = h.raw_gid; source.epoch = h.source_epoch;
-  source.sequence = h.sequence;
-  source.last_header = h; source.has_last_header = true;
+  raw_boot_=h.bridge_boot_id;
+  raw_last_receipt_=std::max(raw_last_receipt_,h.received_steady_ns);
   return true;
 }
-void RgbdCandidateReceipt::image(size_t stream, const Image & body, const rclcpp::MessageInfo & info)
+
+void RgbdCandidateReceipt::image(size_t stream,const Image & body)
 {
-  const auto actual = actual_gid(info);
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!clocks_ok(get_clock()->now().nanoseconds(), steady_now()) || !accept_raw(stream, body.capture, actual)) return;
-  if (!ledger_.remember_image(stream, body) || !graph_matches(raw_topics_[stream], "raw_receipt", actual)) {
-    ledger_.clear(); invalidate("raw_image_invalid");
-  }
+  if (!clocks_ok(get_clock()->now().nanoseconds(),time::monotonic_ns()) ||
+      !accept_raw(stream,body.capture)) return;
+  if (!ledger_.remember_image(stream,body)) {ledger_.clear(); invalidate("raw_image_invalid");}
 }
-void RgbdCandidateReceipt::camera_info(size_t stream, const Info & body, const rclcpp::MessageInfo & info)
+void RgbdCandidateReceipt::camera_info(size_t stream,const Info & body)
 {
-  const auto actual = actual_gid(info);
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!clocks_ok(get_clock()->now().nanoseconds(), steady_now()) || !accept_raw(stream+2, body.capture, actual)) return;
-  if (!ledger_.remember_info(stream, body) || !graph_matches(raw_topics_[stream+2], "raw_receipt", actual)) {
-    ledger_.clear(); invalidate("raw_info_invalid");
-  }
+  if (!clocks_ok(get_clock()->now().nanoseconds(),time::monotonic_ns()) ||
+      !accept_raw(stream+2,body.capture)) return;
+  if (!ledger_.remember_info(stream,body)) {ledger_.clear(); invalidate("raw_info_invalid");}
 }
 
-void RgbdCandidateReceipt::tf(const Static & body, const std::string & actual)
+bool RgbdCandidateReceipt::originals_current(const Candidate & body)
 {
-  std::lock_guard<std::mutex> lock(mutex_);
-  const bool clock_ready = clocks_ok(get_clock()->now().nanoseconds(), steady_now());
-  if (failed_ || retired_tf_gids_.count(actual) || !valid_gid(actual) ||
-      body.bridge_gid != actual) return;
-  // A transient-local status can arrive before graph discovery catches up.
-  auto prior = std::find_if(pending_tf_.begin(), pending_tf_.end(),
-    [&](const auto & entry) {return entry.first == actual;});
-  if (prior != pending_tf_.end()) {
-    const auto & previous = prior->second;
-    if (body.generation < previous.generation ||
-        (body.generation == previous.generation &&
-        (body.sequence < previous.sequence ||
-        (body.sequence == previous.sequence && !previous.valid && body.valid)))) return;
-    pending_tf_.erase(prior); ++tf_queue_overwritten_;
-  }
-  if (pending_tf_.size() == 4) {pending_tf_.pop_front(); ++tf_queue_dropped_;}
-  pending_tf_.push_back({actual, body, steady_now()});
-  tf_queue_monitor_.note(pending_tf_.size(),4,0.,steady_now(),*queue_policy_);
-  if (clock_ready) retry_tf();
-}
-
-void RgbdCandidateReceipt::retry_tf()
-{
-  for (auto pending = pending_tf_.begin(); pending != pending_tf_.end();) {
-    if (retired_tf_gids_.count(pending->first)) {
-      ++tf_queue_dropped_;
-      pending = pending_tf_.erase(pending);
-      continue;
+  const std::array<const Header *,4> first{&body.first_rgb,&body.first_depth,
+    &body.first_rgb_info,&body.first_depth_info};
+  const std::array<const Header *,4> second{&body.second_rgb,&body.second_depth,
+    &body.second_rgb_info,&body.second_depth_info};
+  const auto begin=stamp_ns(first[0]->stamp), end=stamp_ns(second[0]->stamp);
+  if (end <= begin || end-begin > 200000000LL ||
+      stamp_ns(body.interval_start)!=begin || stamp_ns(body.interval_end)!=end) return false;
+  for (size_t i=0;i<4;++i) {
+    for (const auto * h : {first[i],second[i]}) {
+      if (!sample_valid(*h) || h->bridge_boot_id!=sources_[i].boot_id() ||
+          h->capture_generation!=raw_generation_ || h->frame_id!=camera_) return false;
     }
-    if (graph_matches(tf_topic_, "static_tf_receipt", pending->first)) {
-      accept_tf(pending->second, pending->first);
-      pending_tf_.erase(pending);
+    if (first[i]->clock_generation!=second[i]->clock_generation ||
+        stamp_ns(first[i]->stamp)!=begin || stamp_ns(second[i]->stamp)!=end) return false;
+  }
+  if (!same_capture_coordinates(body.first_rgb_layout.capture,body.first_rgb) ||
+      !same_capture_coordinates(body.first_depth_layout.capture,body.first_depth) ||
+      !same_capture_coordinates(body.second_rgb_layout.capture,body.second_rgb) ||
+      !same_capture_coordinates(body.second_depth_layout.capture,body.second_depth) ||
+      !same_capture_coordinates(body.first_rgb_calibration.capture,body.first_rgb_info) ||
+      !same_capture_coordinates(body.first_depth_calibration.capture,body.first_depth_info) ||
+      !same_capture_coordinates(body.second_rgb_calibration.capture,body.second_rgb_info) ||
+      !same_capture_coordinates(body.second_depth_calibration.capture,body.second_depth_info)) return false;
+  return ledger_.match_image(0,body.first_rgb_layout) && ledger_.match_image(1,body.first_depth_layout) &&
+    ledger_.match_image(0,body.second_rgb_layout) && ledger_.match_image(1,body.second_depth_layout) &&
+    ledger_.match_info(0,body.first_rgb_calibration) && ledger_.match_info(1,body.first_depth_calibration) &&
+    ledger_.match_info(0,body.second_rgb_calibration) && ledger_.match_info(1,body.second_depth_calibration);
+}
+
+bool RgbdCandidateReceipt::actual_transforms(const Candidate & body)
+{
+  if (body.first_tf.transforms.size()!=1 || body.second_tf.transforms.size()!=1) return false;
+  try {
+    const auto first=tf_buffer_->lookupTransform(base_,camera_,rclcpp::Time(body.first_rgb.stamp));
+    const auto second=tf_buffer_->lookupTransform(base_,camera_,rclcpp::Time(body.second_rgb.stamp));
+    return transform_matches(first,body.first_tf.transforms.front()) &&
+      transform_matches(second,body.second_tf.transforms.front());
+  } catch (const tf2::TransformException &) {return false;}
+}
+
+void RgbdCandidateReceipt::candidate(const Candidate & body,const rclcpp::MessageInfo & info)
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!clocks_ok(get_clock()->now().nanoseconds(),time::monotonic_ns()) ||
+      !graph_matches(candidate_topic_,"rgbd_candidate_producer")) return;
+  if (!body.valid) {
+    if (!candidate_order_.observe_generation(body.producer_boot_id,body.owner_generation)) return;
+    last_candidate_=body;
+    invalidate(body.reason.empty() ? "candidate_invalid" : body.reason); return;
+  }
+  last_candidate_=body;
+  try {
+    if (!candidate_order_.accept_capture(body.producer_boot_id,body.owner_generation,
+        stamp_ns(body.interval_end),body.second_rgb.received_steady_ns))
       return;
+    if (body.hard_error_qualified || body.profile_id.empty() || body.calibration_id.empty() ||
+        body.registration_id.empty() || body.body_frame!=base_ ||
+        body.raw_rgb_encoding!="rgb8" || body.preprocessing_version!="rgb8-mono-v1" ||
+        body.first_rgb_layout.encoding!="rgb8" || body.second_rgb_layout.encoding!="rgb8" ||
+        body.first_depth_layout.encoding!="32FC1" || body.second_depth_layout.encoding!="32FC1" ||
+        body.matched>500 || body.inliers>body.matched || !rigid(body.camera_transform) ||
+        !std::isfinite(body.median_reprojection_px) || body.median_reprojection_px<0 ||
+        !std::isfinite(body.median_depth_residual_m) || body.median_depth_residual_m<0 ||
+        !originals_current(body) || !actual_transforms(body)) {
+      invalidate("candidate_invalid"); return;
     }
-    ++pending;
-  }
-}
-
-void RgbdCandidateReceipt::accept_tf(const Static & body, const std::string & actual)
-{
-  if (!tf_gid_.empty() && tf_gid_ != actual) {
-    if (retired_tf_gids_.size() >= 64) {ledger_.clear(); invalidate("retirement_exhausted", true); failed_ = true; return;}
-    retired_tf_gids_.insert(tf_gid_); tf_ready_ = false; ledger_.clear(); invalidate("tf_owner_changed");
-    tf_generation_ = 0; tf_boot_.clear(); tf_raw_gid_.clear(); tf_needs_new_generation_ = false;
-  }
-  tf_gid_ = actual;
-  if (retired_tf_raw_gids_.count(body.raw_gid) || body.generation < tf_generation_) return;
-  if (!tf_boot_.empty() && body.bridge_boot_id != tf_boot_) {
-    tf_ready_ = false; ledger_.clear(); invalidate("tf_boot_invalid"); failed_ = true; return;
-  }
-  if (tf_needs_new_generation_ && body.generation <= tf_generation_) return;
-  if (body.valid && !body.admitted && tf_ready_ && body.generation == tf_generation_) {
-    Static previous = body;
-    previous.sequence = body.first_sequence;
-    previous.received_ros = body.first_received_ros;
-    previous.received_steady = body.first_received_steady;
-    previous.admitted = true;
-    previous.admitted_from_ros = tf_first_.admitted_from_ros;
-    previous.admitted_from_steady = tf_first_.admitted_from_steady;
-    if (previous == tf_first_) return;
-  }
-  if (!body.valid || !body.admitted || !text_ok(body.bridge_boot_id, 64) ||
-      !text_ok(body.raw_gid, 128) || body.generation == 0 || body.first_sequence == 0 ||
-      body.sequence < body.first_sequence || body.edges.empty() || body.edges.size() > 32 ||
-      nanos(body.first_received_ros) < 0 || nanos(body.admitted_from_ros) < 0 ||
-      !std::isfinite(body.first_received_steady) || !std::isfinite(body.admitted_from_steady) ||
-      body.first_received_steady < 0 || body.admitted_from_steady < body.first_received_steady) {
-    if (!body.valid && text_ok(body.bridge_boot_id, 64) && body.generation > tf_generation_) {
-      tf_generation_ = body.generation;
-      tf_boot_ = body.bridge_boot_id;
-      if (tf_raw_gid_.empty() && text_ok(body.raw_gid, 128)) tf_raw_gid_ = body.raw_gid;
-    }
-    tf_ready_ = false; tf_needs_new_generation_ = true;
-    ledger_.clear(); invalidate("tf_invalid"); return;
-  }
-  tf2_msgs::msg::TFMessage tree;
-  for (const auto & edge : body.edges) {
-    geometry_msgs::msg::TransformStamped value;
-    value.header.frame_id = edge.parent_frame; value.child_frame_id = edge.child_frame;
-    value.header.stamp = edge.stamp;
-    value.transform.translation.x = edge.translation[0]; value.transform.translation.y = edge.translation[1];
-    value.transform.translation.z = edge.translation[2];
-    value.transform.rotation.x = edge.rotation_xyzw[0]; value.transform.rotation.y = edge.rotation_xyzw[1];
-    value.transform.rotation.z = edge.rotation_xyzw[2]; value.transform.rotation.w = edge.rotation_xyzw[3];
-    tree.transforms.push_back(value);
-  }
-  if (!validate_static_tf(tree, base_, camera_)) {
-    tf_ready_ = false; ledger_.clear(); invalidate("tf_invalid"); return;
-  }
-  Static first = body;
-  first.sequence = body.first_sequence;
-  first.received_ros = body.first_received_ros;
-  first.received_steady = body.first_received_steady;
-  if (tf_generation_ && body.generation == tf_generation_ && tf_first_ != first) {
-    tf_ready_ = false; tf_needs_new_generation_ = true;
-    ledger_.clear(); invalidate("tf_invalid"); return;
-  }
-  if (tf_generation_ && body.generation > tf_generation_) {
-    if (!tf_raw_gid_.empty() && tf_raw_gid_ != body.raw_gid) {
-      if (retired_tf_raw_gids_.size() >= 64) {ledger_.clear(); invalidate("retirement_exhausted", true); failed_ = true; return;}
-      retired_tf_raw_gids_.insert(tf_raw_gid_);
-    }
-    ledger_.clear(); invalidate("tf_changed");
-  }
-  tf_first_ = first; tf_generation_ = body.generation;
-  tf_boot_ = body.bridge_boot_id; tf_raw_gid_ = body.raw_gid;
-  tf_needs_new_generation_ = false; tf_ready_ = true;
-}
-
-std::optional<int64_t> RgbdCandidateReceipt::capture_age(
-  const Header & header, double steady) noexcept
-{
-  const auto stamp = nanos(header.stamp), received_ros = nanos(header.received_ros);
-  if (header.clock_generation == 0 || stamp < 0 || received_ros < stamp ||
-      header.sample_steady_ns > header.received_steady_ns ||
-      header.received_steady_ns - header.sample_steady_ns !=
-        static_cast<uint64_t>(received_ros - stamp)) {
-    sensor_ages_.reject_invalid_clock();
-    return std::nullopt;
-  }
-  const auto age = sensor_policy_.try_age_ns(header.sample_steady_ns,
-    (static_cast<double>(header.received_steady_ns) / 1e9), steady);
-  if (!age) sensor_ages_.reject_invalid_clock();
-  return age;
-}
-
-bool RgbdCandidateReceipt::originals_current(const Candidate & body, double steady)
-{
-  const std::array<const Header *, 4> first = {&body.first_rgb, &body.first_depth,
-    &body.first_rgb_info, &body.first_depth_info};
-  const std::array<const Header *, 4> second = {&body.second_rgb, &body.second_depth,
-    &body.second_rgb_info, &body.second_depth_info};
-  const int64_t first_stamp = nanos(first[0]->stamp), second_stamp = nanos(second[0]->stamp);
-  if (first_stamp < 0 || second_stamp < 0 ||
-      second_stamp <= first_stamp || second_stamp-first_stamp > 200000000LL ||
-      nanos(body.interval_start) != first_stamp || nanos(body.interval_end) != second_stamp) return false;
-  for (size_t i=0; i<4; ++i) {
-    const auto & current = sources_[i];
-    if (current.bridge_gid.empty() || !graph_matches(raw_topics_[i], "raw_receipt", current.bridge_gid)) return false;
-    for (const auto * h : {first[i], second[i]}) {
-      const auto age = capture_age(*h, steady);
-      if (!age) return false;
-      sensor_ages_.observe(*age,sensor_policy_);
-      if (!h->valid || *age >= sensor_policy_.hard_ns || h->bridge_gid != current.bridge_gid || h->raw_gid != current.raw_gid ||
-          h->source_epoch != current.epoch || h->bridge_boot_id != raw_boot_ ||
-          h->capture_generation != raw_generation_ || h->frame_id != camera_ || h->sequence == 0 ||
-          static_cast<double>(h->sample_steady_ns) / 1e9 <= producer_floor_steady_ ||
-          static_cast<double>(h->sample_steady_ns) / 1e9 < tf_first_.admitted_from_steady ||
-          !std::isfinite((static_cast<double>(h->received_steady_ns) / 1e9)) ||
-          (static_cast<double>(h->received_steady_ns) / 1e9) > steady || steady-(static_cast<double>(h->received_steady_ns) / 1e9) >= sensor_policy_.hard) return false;
-    }
-    // Generations are local to each source; only compare the same stream's pair.
-    if (first[i]->clock_generation != second[i]->clock_generation ||
-        nanos(first[i]->stamp) != first_stamp || nanos(second[i]->stamp) != second_stamp ||
-        second[i]->sequence <= first[i]->sequence) return false;
-  }
-  if (body.first_rgb_layout.capture != body.first_rgb || body.first_depth_layout.capture != body.first_depth ||
-      body.second_rgb_layout.capture != body.second_rgb || body.second_depth_layout.capture != body.second_depth ||
-      body.first_rgb_calibration.capture != body.first_rgb_info ||
-      body.first_depth_calibration.capture != body.first_depth_info ||
-      body.second_rgb_calibration.capture != body.second_rgb_info ||
-      body.second_depth_calibration.capture != body.second_depth_info) return false;
-  return ledger_.match_image(0, body.first_rgb_layout) && ledger_.match_image(1, body.first_depth_layout) &&
-    ledger_.match_image(0, body.second_rgb_layout) && ledger_.match_image(1, body.second_depth_layout) &&
-    ledger_.match_info(0, body.first_rgb_calibration) && ledger_.match_info(1, body.first_depth_calibration) &&
-    ledger_.match_info(0, body.second_rgb_calibration) && ledger_.match_info(1, body.second_depth_calibration);
-}
-
-void RgbdCandidateReceipt::candidate(const Candidate & body, const rclcpp::MessageInfo & info)
-{
-  const auto actual = actual_gid(info);
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto steady = steady_now();
-  if (!clocks_ok(get_clock()->now().nanoseconds(), steady) || retired_producer_gids_.count(actual)) return;
-  if (!producer_ready_ || actual != producer_gid_ || body.producer_gid != actual ||
-      !graph_matches(candidate_topic_, "rgbd_candidate_producer", actual)) return;
-  if (!text_ok(body.producer_boot_id, 64) || body.owner_generation == 0 || body.worker_generation == 0 ||
-      body.sequence == 0) {
-    last_candidate_ = body; invalidate("producer_invalid"); return;
-  }
-  if (producer_boot_.empty()) {producer_boot_ = body.producer_boot_id; producer_generation_ = body.owner_generation;}
-  if (body.producer_boot_id != producer_boot_) {
-    last_candidate_ = body;
-    invalidate("producer_boot_invalid", true);
-    if (retired_producer_gids_.size() >= 64) {ledger_.clear(); invalidate("retirement_exhausted", true); failed_ = true; return;}
-    retired_producer_gids_.insert(actual);
-    producer_ready_ = false;
-    producer_gid_.clear(); producer_boot_.clear(); producer_generation_ = producer_sequence_ = 0;
-    return;
-  }
-  if (body.owner_generation < producer_generation_ || body.sequence <= producer_sequence_) return;
-  if (body.owner_generation > producer_generation_) {
-    producer_generation_ = body.owner_generation;
-    producer_floor_steady_ = steady;
-    invalidate("producer_generation_changed");
-  }
-  producer_sequence_ = body.sequence;
-  last_candidate_ = body;
-  if (!body.valid || body.hard_error_qualified || !tf_ready_ ||
-      body.first_tf != tf_first_ || body.second_tf != tf_first_ ||
-      !graph_matches(tf_topic_, "static_tf_receipt", tf_gid_) ||
-      !text_ok(body.profile_id, 128) || !text_ok(body.calibration_id, 128) ||
-      !text_ok(body.registration_id, 128) || body.body_frame != base_ ||
-      body.raw_rgb_encoding != "rgb8" || body.preprocessing_version != "rgb8-mono-v1" ||
-      body.first_rgb_layout.encoding != "rgb8" || body.second_rgb_layout.encoding != "rgb8" ||
-      body.first_depth_layout.encoding != "32FC1" || body.second_depth_layout.encoding != "32FC1" ||
-      body.matched > 500 || body.inliers > body.matched || !rigid(body.camera_transform) ||
-      !std::isfinite(body.median_reprojection_px) || body.median_reprojection_px < 0 ||
-      !std::isfinite(body.median_depth_residual_m) || body.median_depth_residual_m < 0 ||
-      !originals_current(body, steady)) {
-    invalidate("candidate_invalid");
-    return;
-  }
+  } catch (const std::invalid_argument &) {invalidate("candidate_timestamp_invalid"); return;}
   Fenced output;
-  output.owner.relay_gid = output_gid(); output.owner.relay_boot = relay_boot_;
-  output.owner.owner_gid = actual;
-  output.owner.owner_epoch = producer_boot_; output.owner.owner_generation = producer_generation_;
-  output.owner.owner_sequence = producer_sequence_; output.owner.valid = true;
-  output.body = body;
-
-  // Body matching and copying can outlive the capture deadline or graph owners.
-  for (size_t stream = 0; stream < sources_.size(); ++stream) {
-    if (!graph_matches(raw_topics_[stream], "raw_receipt", sources_[stream].bridge_gid)) {
-      invalidate("raw_owner_lost", true);
-      return;
-    }
-  }
-  if (!graph_matches(candidate_topic_, "rgbd_candidate_producer", actual) ||
-      !graph_matches(tf_topic_, "static_tf_receipt", tf_gid_)) {
-    invalidate("candidate_owner_lost", true);
-    return;
-  }
-  const auto final_steady = steady_now();
-  if (!clocks_ok(get_clock()->now().nanoseconds(), final_steady)) return;
-  for (const auto * header : {&body.first_rgb, &body.first_depth, &body.first_rgb_info,
-      &body.first_depth_info, &body.second_rgb, &body.second_depth, &body.second_rgb_info,
-      &body.second_depth_info}) {
-    const auto age = capture_age(*header, final_steady);
-    if (!age) {
-      invalidate("candidate_invalid");
-      return;
-    }
-    if (*age >= sensor_policy_.hard_ns ||
-        final_steady - (static_cast<double>(header->received_steady_ns) / 1e9) >= sensor_policy_.hard) {
-      invalidate("candidate_expired");
-      return;
-    }
-  }
-  output.owner.relay_sequence = ++relay_sequence_;
+  output.owner.relay_gid=output_gid(); output.owner.relay_boot=relay_boot_;
+  output.owner.relay_sequence=++relay_sequence_;
+  output.owner.owner_gid=gid_hex(info.get_rmw_message_info().publisher_gid);
+  output.owner.owner_epoch=body.producer_boot_id; output.owner.owner_generation=body.owner_generation;
+  output.owner.owner_sequence=body.sequence; output.owner.valid=true; output.body=body;
   publisher_->publish(output);
-}
-
-void RgbdCandidateReceipt::inspect()
-{
-  std::lock_guard<std::mutex> lock(mutex_);
-  const auto steady = steady_now();
-  if (!clocks_ok(get_clock()->now().nanoseconds(), steady)) return;
-  if (steady-last_age_report_ >= sensor_policy_.period) {
-    RCLCPP_DEBUG(get_logger(), "sensor_use_age avg=%.6f max=%.6f count=%llu over_soft=%llu over_hard=%llu invalid_clock=%llu",
-      sensor_ages_.count ? sensor_ages_.sum/sensor_ages_.count : 0., sensor_ages_.maximum,
-      static_cast<unsigned long long>(sensor_ages_.count),
-      static_cast<unsigned long long>(sensor_ages_.over_soft),
-      static_cast<unsigned long long>(sensor_ages_.over_hard),
-      static_cast<unsigned long long>(sensor_ages_.invalid_clock));
-    sensor_ages_ = {}; last_age_report_ = steady;
-  }
-  const auto oldest = std::min_element(pending_tf_.begin(),pending_tf_.end(),
-    [](const auto &a,const auto &b) {return a.queued<b.queued;});
-  const double wait_ms = pending_tf_.empty() ? 0. : (steady-oldest->queued)*1000;
-  const int event = tf_queue_monitor_.observe(pending_tf_.size(),4,wait_ms,steady,*queue_policy_);
-  if (event==1) RCLCPP_WARN(get_logger(),
-    "queue=rgbd.pending_tf.native pending=%zu trigger_pending=%zu peak=%zu threshold=%zu capacity=4 oldest_wait_ms=%.3f dropped_total=%llu overwritten_total=%llu",
-    pending_tf_.size(),tf_queue_monitor_.warning_pending,tf_queue_monitor_.peak,queue_policy_->threshold(4),wait_ms,
-    static_cast<unsigned long long>(tf_queue_dropped_),
-    static_cast<unsigned long long>(tf_queue_overwritten_));
-  else if (event==-1) RCLCPP_INFO(get_logger(),"queue_recovered queue=rgbd.pending_tf.native");
-
-  for (size_t i=0; i<4; ++i) {
-    auto & source = sources_[i];
-    if (!source.bridge_gid.empty() && !graph_matches(raw_topics_[i], "raw_receipt", source.bridge_gid)) {
-      if (source.retired_bridge.size() >= 64) {ledger_.clear(); invalidate("retirement_exhausted", true); failed_ = true; return;}
-      source.retired_bridge.insert(source.bridge_gid);
-      source.last_bridge_gid = source.bridge_gid;
-      source.last_bridge_boot = raw_boot_;
-      ledger_.clear(); invalidate("raw_owner_lost", true);
-      source.bridge_gid.clear(); source.sequence = 0; source.has_last_header = false;
-    }
-  }
-  if (tf_ready_ && !graph_matches(tf_topic_, "static_tf_receipt", tf_gid_)) {
-    if (retired_tf_gids_.size() >= 64) {ledger_.clear(); invalidate("retirement_exhausted", true); failed_ = true; return;}
-    retired_tf_gids_.insert(tf_gid_);
-    tf_ready_ = false; ledger_.clear(); invalidate("tf_owner_lost", true); tf_gid_.clear();
-    tf_generation_ = 0; tf_boot_.clear(); tf_raw_gid_.clear(); tf_needs_new_generation_ = false;
-  }
-  retry_tf();
-  const auto graph = get_publishers_info_by_topic(candidate_topic_);
-  const bool unique = graph.size() == 1 && graph[0].node_name() == "rgbd_candidate_producer" &&
-                      graph[0].node_namespace() == "/";
-  const std::string current = unique ? hex_gid(graph[0].endpoint_gid().data(), RMW_GID_STORAGE_SIZE) : "";
-  if (producer_ready_ && current != producer_gid_) {
-    if (retired_producer_gids_.size() >= 64) {ledger_.clear(); invalidate("retirement_exhausted", true); failed_ = true; return;}
-    retired_producer_gids_.insert(producer_gid_);
-    producer_ready_ = false; invalidate("producer_lost", true);
-    producer_gid_.clear(); producer_boot_.clear(); producer_generation_ = producer_sequence_ = 0;
-  }
-  if (!producer_ready_ && valid_gid(current) && !retired_producer_gids_.count(current)) {
-    producer_gid_ = current; producer_floor_steady_ = steady;
-    producer_ready_ = true;
-  }
 }
 }  // namespace senior_sensor_ingress

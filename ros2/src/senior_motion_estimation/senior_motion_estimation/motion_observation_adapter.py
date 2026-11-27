@@ -52,6 +52,7 @@ class PublisherOrigin:
     sample_gid: bytes | None
     topology_gid: bytes
     basis: str
+    receiver_boot: str = ""
 
 
 def observation_origin(
@@ -63,35 +64,25 @@ def observation_origin(
 ) -> PublisherOrigin | None:
     """Validate real metadata; never label a discovery GID as a sample GID."""
     if isinstance(info, dict) and info.get("native_receipt_authenticated") is True:
-        # The private inherited channel binds configuration to the native
-        # consumer, which checked sole-writer topology AND this MessageInfo GID.
-        # Python discovery may lag native discovery; it supplies no sample ID.
-        gid = publisher_gid(info)
-        if (
-            gid
-            and any(gid)
-            and info.get("native_writer_name") == expected_name
-            and info.get("native_writer_namespace") == expected_namespace
-        ):
-            return PublisherOrigin(gid, gid, "native_message_info_and_writer_binding")
-        return None
+        # The inherited channel's native subscriber owns configured topology.
+        # Actual message GID remains diagnostic; graph GID is unavailable here.
+        return PublisherOrigin(
+            publisher_gid(info) or None,
+            b"",
+            "native_configured_writer",
+            str(info.get("receipt_boot_id", "")),
+        )
     if (
         len(endpoints) != 1
         or endpoints[0].node_name != expected_name
         or endpoints[0].node_namespace != expected_namespace
     ):
         return None
-    topology_gid = bytes(endpoints[0].endpoint_gid)
-    if not topology_gid or not any(topology_gid):
-        return None
-    gid = publisher_gid(info)
-    if gid and any(gid):
-        return (
-            PublisherOrigin(gid, topology_gid, "per_sample_dds_gid")
-            if gid == topology_gid
-            else None
-        )
-    return None
+    return PublisherOrigin(
+        publisher_gid(info) or None,
+        bytes(endpoints[0].endpoint_gid),
+        "configured_writer_with_optional_message_gid",
+    )
 
 
 def stamp_nanoseconds(stamp: Any) -> int:
@@ -150,24 +141,26 @@ class NativeObservations:
     def identity(
         self, source: Source, gid: bytes | PublisherOrigin, producer_epoch: str, now_ros: float
     ) -> tuple[str, int]:
-        if not gid:
-            raise ValueError("native source has no DDS identity")
         self._sequences[source] += 1
         return self.source_epoch(gid, producer_epoch), self._sequences[source]
 
     def source_epoch(self, gid: bytes | PublisherOrigin, producer_epoch: str) -> str:
         """Describe provenance without advancing source/sample state (diagnostics)."""
-        # Preserve producer epoch and DDS identity independently of ROS clock labels.
-        provenance = (
+        receiver_boot = gid.receiver_boot if isinstance(gid, PublisherOrigin) else ""
+        parts = producer_epoch.rsplit(":", 2)
+        try:
+            generation = int(parts[-2]) if len(parts) >= 2 else 1
+            source_boot = (
+                parts[0] if len(parts) == 3 else (producer_epoch if len(parts) == 1 else "")
+            )
+        except ValueError:
+            generation, source_boot = 1, producer_epoch
+        return json.dumps(
             {
-                "sample_gid": gid.sample_gid.hex() if gid.sample_gid is not None else None,
-                "topology_gid": gid.topology_gid.hex(),
-                "basis": gid.basis,
+                "boot_id": json.dumps([self.boot_id, receiver_boot, source_boot]),
+                "generation": generation,
             }
-            if isinstance(gid, PublisherOrigin)
-            else {"sample_gid": gid.hex(), "basis": "per_sample_dds_gid"}
         )
-        return json.dumps([self.boot_id, provenance, producer_epoch])
 
     def ingest(
         self, sample: MotionSample, now_ros: float, now_steady: float, *, origins=None
@@ -328,13 +321,9 @@ class NativeObservations:
         if (
             not first.valid
             or not second.valid
-            or not first.raw_gid
-            or first.raw_gid != second.raw_gid
-            or first.source_epoch != second.source_epoch
             or first.bridge_boot_id != second.bridge_boot_id
             or first.capture_generation != second.capture_generation
             or first.time.clock_generation != second.time.clock_generation
-            or first.sequence >= second.sequence
             or first.stamp_ns != stamp_nanoseconds(msg.interval_start)
             or second.stamp_ns != stamp_nanoseconds(msg.header.stamp)
         ):
@@ -342,8 +331,7 @@ class NativeObservations:
             raise ValueError("scan interval crossed original capture lineage")
         epoch = self.source_epoch(
             gid,
-            f"{msg.source_epoch}:{second.bridge_boot_id}:{second.source_epoch}:"
-            f"{second.capture_generation}:{second.time.clock_generation}",
+            f"{second.bridge_boot_id}:{second.capture_generation}:{second.time.clock_generation}",
         )
         sample = DeltaObservation(
             Source.LASER,
@@ -369,7 +357,7 @@ class NativeObservations:
         origins = tuple(
             Origin(
                 "laser",
-                f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
+                f"{h.bridge_boot_id}:{h.capture_generation}:{h.time.clock_generation}",
                 h.sequence,
                 h.time,
             )
@@ -524,7 +512,7 @@ class NativeObservationRosBridge:
                 roots = tuple(
                     Origin(
                         "laser",
-                        f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
+                        f"{h.bridge_boot_id}:{h.capture_generation}:{h.clock_generation}",
                         int(h.sequence),
                         capture_from_message(h).time,
                     )
@@ -597,8 +585,7 @@ class NativeObservationRosBridge:
                     self._warn_at = now
                     self.node.get_logger().warning(
                         f"native motion source rejected on {topic}: expected sole "
-                        f"publisher {expected[topic]} with per-sample DDS identity; "
-                        "per-sample identity is required"
+                        f"publisher {expected[topic]} in the configured namespace"
                     )
                 return
             try:

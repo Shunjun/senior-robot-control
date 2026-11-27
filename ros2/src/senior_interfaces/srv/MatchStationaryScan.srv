@@ -4,7 +4,7 @@
 string<=36 boot_id
 string<=64 attempt_id
 string<=64 pair_digest
-string<=128 map_frame
+string map_frame
 float64 seed_x
 float64 seed_y
 float64 seed_yaw
@@ -17,7 +17,7 @@ float64 second_seed_y
 float64 second_seed_yaw
 float64 first_angle
 float64 angle_step
-float64[<=2048] ranges
+float64[] ranges
 ---
 uint8 UNAVAILABLE=0
 uint8 INVALID=1

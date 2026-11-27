@@ -1,234 +1,93 @@
-#include <senior_sensor_ingress/sample_time.hpp>
 #include "bounded_scan_ingress.hpp"
-
 #include "scan_receipt_admission.hpp"
-#include "static_lidar_tf_ingress.hpp"
 
+#include <chrono>
 #include <utility>
 
-namespace senior_mapping
-{
-namespace
-{
-using namespace std::chrono_literals;
-using Receipt = BoundedScanIngress::Receipt;
-using Message = senior_interfaces::msg::BoundedRawLaserScan;
-constexpr std::size_t pending_limit = 8;
-using scan_receipt_admission::fresh;
-using scan_receipt_admission::gid_hex;
-using scan_receipt_admission::layout_ok;
-using scan_receipt_admission::same_source;
-using scan_receipt_admission::steady_seconds;
-using scan_receipt_admission::text_ok;
-using scan_receipt_admission::time_ns;
-using scan_receipt_admission::unique_scan_owner;
-
-bool same_geometry(const Message & lhs, const Message & rhs)
-{
-  return lhs.angle_min == rhs.angle_min && lhs.angle_max == rhs.angle_max &&
-         lhs.angle_increment == rhs.angle_increment && lhs.range_min == rhs.range_min &&
-         lhs.range_max == rhs.range_max && lhs.ranges.size() == rhs.ranges.size();
+namespace senior_mapping {
+namespace {
+constexpr std::size_t pending_limit = 8;  // Queue capacity policy is unchanged.
 }
-}  // namespace
 
-BoundedScanIngress::BoundedScanIngress(
-  rclcpp::Node & node, tf2_ros::Buffer & tf, std::string bounded_topic,
-  std::string raw_topic, std::string odom_frame, std::string base_frame, Submit submit,
-  StaticLidarTfIngress * static_lidar_tf, rclcpp::CallbackGroup::SharedPtr group)
+BoundedScanIngress::BoundedScanIngress(rclcpp::Node & node, tf2_ros::Buffer & tf,
+  std::string bounded_topic, std::string odom_frame, std::string base_frame, Submit submit,
+  rclcpp::CallbackGroup::SharedPtr group)
 : node_(node), tf_(tf), bounded_topic_(std::move(bounded_topic)),
-  raw_topic_(std::move(raw_topic)), odom_frame_(std::move(odom_frame)),
-  base_frame_(std::move(base_frame)), submit_(std::move(submit)),
-  static_lidar_tf_(static_lidar_tf)
+  odom_frame_(std::move(odom_frame)), base_frame_(std::move(base_frame)),
+  expected_name_(node.declare_parameter<std::string>("scan_bridge_node", "scan_receipt")),
+  expected_namespace_(node.declare_parameter<std::string>("scan_bridge_namespace", "/")),
+  submit_(std::move(submit))
 {
   rclcpp::SubscriptionOptions options;
   options.callback_group = group;
-  subscription_ = node_.create_subscription<Message>(
+  subscription_ = node_.create_subscription<BoundedScan>(
     bounded_topic_, rclcpp::SensorDataQoS().keep_last(pending_limit),
-    [this](Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info) {
-      offer(std::move(scan), info);
-    }, options);
-  timer_ = node_.create_wall_timer(20ms, [this] {poll();}, group);
+    [this](BoundedScan::ConstSharedPtr scan) {offer(std::move(scan));}, options);
+  timer_ = node_.create_wall_timer(std::chrono::milliseconds(20), [this] {poll();}, group);
 }
 
-bool BoundedScanIngress::observe_clock(std::int64_t now)
+void BoundedScanIngress::offer(BoundedScan::ConstSharedPtr scan)
 {
-  if (closed_) {
-    return false;
-  }
-  bool discontinuity = now < last_steady_ns_ || (now == 0 && source_);
-  try {
-    discontinuity = clock_.observe(node_.get_clock()->now().nanoseconds(), now).discontinuity ||
-      discontinuity;
-  } catch (const std::invalid_argument &) {
-    discontinuity = true;
-  }
-  if (discontinuity) {
-    if (source_) {
-      // An established map source remains terminal across a clock segment change.
-      retire_source();
-    } else {
-      pending_.clear();
-      last_sequence_ = 0;
-      last_measurement_ns_ = 0;
-      receipt_floor_ns_ = now > 0 ? static_cast<uint64_t>(now) : 0;
-      last_steady_ns_ = now;
-    }
-    return false;
-  }
-  last_steady_ns_ = now;
-  return now > 0;
-}
-
-void BoundedScanIngress::retire_source()
-{
-  closed_ = true;
-  active_.store(false);
-}
-
-bool BoundedScanIngress::current_owner(const Receipt & receipt)
-{
-  const auto owner = unique_scan_owner(node_, bounded_topic_, raw_topic_);
-  return owner && owner->matches(receipt);
-}
-
-bool BoundedScanIngress::source_active()
-{
-  if (!observe_clock(senior_sensor_ingress::time::monotonic_ns()) || !source_) {
-    return false;
-  }
-  if (!current_owner(source_->capture)) {
-    retire_source();
-    return false;
-  }
-  const bool active = !static_lidar_tf_ || static_lidar_tf_->source_active();
-  if (static_lidar_tf_ && static_lidar_tf_->retired()) {retire_source();}
-  active_.store(active && !closed_.load());
-  return active;
-}
-
-void BoundedScanIngress::offer(Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info)
-{
-  if (!observe_clock(senior_sensor_ingress::time::monotonic_ns())) {
+  if (closed_.load()) return;
+  const auto publishers = node_.get_publishers_info_by_topic(bounded_topic_);
+  if (publishers.size() != 1 || publishers.front().node_name() != expected_name_ ||
+      publishers.front().node_namespace() != expected_namespace_ ||
+      publishers.front().topic_type() != "senior_interfaces/msg/BoundedRawLaserScan") {
+    active_.store(false);
     return;
   }
-  if (source_ && !current_owner(source_->capture)) {
-    retire_source();
-    return;
+  const auto & capture = scan->capture;
+  const auto previous_boot = order_.boot_id();
+  const auto previous_generation = order_.generation();
+  if (!capture.valid) {
+    if (!order_.observe_generation(capture.bridge_boot_id, capture.capture_generation)) return;
+    if (order_.generation() != previous_generation) pending_.clear();
+    active_.store(false); return;
   }
-  const auto & receipt = scan->capture;
-  const auto actual = gid_hex(info.get_rmw_message_info().publisher_gid.data);
-  if (actual.empty() || actual != receipt.bridge_gid ||
-    receipt.received_steady_ns < receipt_floor_ns_) {
-    return;
-  }
-  if (source_) {
-    const auto & previous = source_->capture;
-    if (actual != previous.bridge_gid) {
-      // A new DDS writer can deliver a message before it appears in the graph.
-      return;
-    }
-    if (previous.bridge_boot_id == receipt.bridge_boot_id &&
-      (receipt.capture_generation < previous.capture_generation ||
-      (receipt.capture_generation == previous.capture_generation &&
-      receipt.source_epoch == previous.source_epoch && receipt.sequence <= last_sequence_)))
-    {
-      return;
-    }
-    if (!same_source(previous, receipt)) {
-      // An authoritative bridge transition cannot silently change an active map source.
-      retire_source();
-      return;
-    }
-  }
-  if (receipt.sequence <= last_sequence_ || receipt.capture_generation == 0) {
-    return;
-  }
-  if (!receipt.valid) {
-    if (source_) {
-      retire_source();
-    }
-    return;
-  }
-  if (!current_owner(receipt) || !text_ok(receipt.bridge_boot_id) ||
-    !text_ok(receipt.source_epoch) || !text_ok(receipt.frame_id) ||
-    !fresh(receipt, steady_seconds()) || !layout_ok(*scan) ||
-    (static_lidar_tf_ && !static_lidar_tf_->admits(receipt)))
-  {
-    return;
-  }
-  const auto measured = time_ns(receipt.stamp);
-  if (source_ && !same_geometry(*source_, *scan)) {
-    retire_source();
-    return;
-  }
-  // Order measurements on their original integer ROS axis, within the pinned generation.
-  last_sequence_ = receipt.sequence;
-  if (source_ && measured <= last_measurement_ns_) {
-    return;
-  }
-  last_measurement_ns_ = measured;
-  if (!source_) {
-    source_ = scan;
-  }
-  if (pending_.size() < pending_limit) {
-    pending_.push_back(std::move(scan));
-  }
+  if (capture.frame_id.empty() || !scan_receipt_admission::sample_valid(capture) ||
+      !scan_receipt_admission::layout_ok(*scan)) return;
+  if (!order_.accept_capture(capture.bridge_boot_id, capture.capture_generation,
+      scan_receipt_admission::time_ns(capture.stamp), capture.received_steady_ns)) return;
+  if (order_.boot_id() != previous_boot || order_.generation() != previous_generation)
+    pending_.clear();
+  if (pending_.size() < pending_limit) pending_.push_back(std::move(scan));
 }
 
 void BoundedScanIngress::poll()
 {
-  if (!source_active()) {
-    active_.store(false);
-    if (closed_.load()) {pending_.clear();}
-    return;
-  }
-  const auto now_steady = steady_seconds();
-  while (!pending_.empty() && !fresh(pending_.front()->capture, now_steady)) {
+  if (closed_.load()) {pending_.clear(); return;}
+  while (!pending_.empty()) {
+    const auto input = std::move(pending_.front());
     pending_.pop_front();
+    const auto & capture = input->capture;
+    const auto stamp = rclcpp::Time(capture.stamp, node_.get_clock()->get_clock_type());
+    LaserTransform mount;
+    try {
+      // A missing sample drops this scan only. The next scan can recover.
+      tf_.lookupTransform(odom_frame_, base_frame_, stamp);
+      const auto exact = tf_.lookupTransform(base_frame_, capture.frame_id, stamp).transform;
+      mount = {exact.translation.x, exact.translation.y, exact.translation.z,
+               exact.rotation.x, exact.rotation.y, exact.rotation.z, exact.rotation.w};
+    } catch (const tf2::TransformException & error) {
+      active_.store(false);
+      RCLCPP_WARN_THROTTLE(node_.get_logger(), *node_.get_clock(), 1000,
+        "Dropping scan without capture-time TF: %s", error.what());
+      continue;
+    }
+    auto scan = std::make_shared<Scan>();
+    scan->header.stamp = capture.stamp;
+    scan->header.frame_id = capture.frame_id;
+    scan->angle_min = input->angle_min;
+    scan->angle_max = input->angle_max;
+    scan->angle_increment = input->angle_increment;
+    scan->time_increment = input->time_increment;
+    scan->scan_time = input->scan_time;
+    scan->range_min = input->range_min;
+    scan->range_max = input->range_max;
+    scan->ranges.assign(input->ranges.begin(), input->ranges.end());
+    scan->intensities.assign(input->intensities.begin(), input->intensities.end());
+    active_.store(true);
+    submit_(std::move(scan), input, mount);
   }
-  if (pending_.empty()) {
-    return;
-  }
-  const auto input = pending_.front();
-  const auto & receipt = input->capture;
-  const auto stamp = rclcpp::Time(receipt.stamp, node_.get_clock()->get_clock_type());
-  if (!tf_.canTransform(odom_frame_, base_frame_, stamp) ||
-    !tf_.canTransform(base_frame_, receipt.frame_id, stamp))
-  {
-    return;
-  }
-  LaserTransform mount;
-  try {
-    const auto exact = tf_.lookupTransform(base_frame_, receipt.frame_id, stamp).transform;
-    mount = {
-      exact.translation.x, exact.translation.y, exact.translation.z,
-      exact.rotation.x, exact.rotation.y, exact.rotation.z, exact.rotation.w};
-  } catch (const tf2::TransformException &) {
-    return;
-  }
-  if (!source_active() ||
-    !fresh(receipt, steady_seconds()))
-  {
-    return;
-  }
-  auto static_receipt = static_lidar_tf_ ? static_lidar_tf_->verify_mount(receipt, mount) : nullptr;
-  if (static_lidar_tf_ && !static_receipt) {
-    retire_source();
-    return;
-  }
-  pending_.pop_front();
-  auto scan = std::make_shared<Scan>();
-  scan->header.stamp = receipt.stamp;
-  scan->header.frame_id = receipt.frame_id;
-  scan->angle_min = input->angle_min;
-  scan->angle_max = input->angle_max;
-  scan->angle_increment = input->angle_increment;
-  scan->time_increment = input->time_increment;
-  scan->scan_time = input->scan_time;
-  scan->range_min = input->range_min;
-  scan->range_max = input->range_max;
-  scan->ranges.assign(input->ranges.begin(), input->ranges.end());
-  scan->intensities.assign(input->intensities.begin(), input->intensities.end());
-  submit_(std::move(scan), input, mount, std::move(static_receipt));
 }
 }  // namespace senior_mapping

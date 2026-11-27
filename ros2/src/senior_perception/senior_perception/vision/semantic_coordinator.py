@@ -78,9 +78,7 @@ class SemanticCoordinator:
         now_steady: float,
     ) -> str:
         if (
-            not rgb.raw_source
-            or len(rgb.raw_source.encode("utf-8")) > 128
-            or rgb.image.stamp != rgb.stamp_ns / 1e9
+            rgb.image.stamp != rgb.stamp_ns / 1e9
             or (rgb.image.width, rgb.image.height) != (depth.width, depth.height)
             or not sensor_current(
                 measured_steady=rgb.measurement_steady,

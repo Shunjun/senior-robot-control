@@ -418,7 +418,7 @@ function parseScanLayer(value: unknown, pointCount: number): ScanLayer | null | 
       !isFiniteNumber(sample) || sample < 0 || !isFiniteNumber(expiry) ||
       expiry < sample || expiry - sample > .5 ||
       !isFiniteNumber(remaining) || remaining < 0 || remaining > .5 ||
-      !isCount(hits) || hits > 2048 || !isCount(preview) || preview > 96 ||
+      !isCount(hits) || !Number.isSafeInteger(hits) || !isCount(preview) || preview > 96 ||
       preview > hits || preview !== pointCount || value["display_mode"] !== "preview" ||
       typeof value["valid"] !== "boolean" || (!value["valid"] && preview !== 0)) return null;
   return value as unknown as ScanLayer;

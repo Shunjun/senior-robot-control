@@ -20,82 +20,32 @@ Message::ConstSharedPtr acquire(const rclcpp::Node::SharedPtr & node)
   const auto bounded = node->declare_parameter<std::string>("bounded_topic", "/safety/raw/scan");
   const auto frame = node->declare_parameter<std::string>("expected_frame", "laser_link");
   if (raw.empty() || raw.front() != '/' || bounded.empty() || bounded.front() != '/' ||
-    raw == bounded || frame.size() > 128 || !admission::text_ok(frame))
+    raw == bounded || !admission::text_ok(frame))
   {
     throw std::invalid_argument("expected distinct absolute topics and an exact scan frame");
   }
 
   const auto deadline = std::chrono::steady_clock::now() + 8s;
-  std::optional<admission::ScanOwner> owner;
-  double ready_steady = 0;
-  Message::ConstSharedPtr baseline, acquired;
-  bool retired = false;
-
-  const auto check_owner = [&]() {
-      const auto current = admission::unique_scan_owner(*node, bounded, raw);
-      return owner && current && *current == *owner;
-    };
+  Message::ConstSharedPtr acquired;
   const auto subscription = node->create_subscription<Message>(
     bounded, rclcpp::SensorDataQoS().keep_last(1),
-    [&](Message::ConstSharedPtr scan, const rclcpp::MessageInfo & info) {
-      if (!owner || retired || acquired) {
-        return;
-      }
-      if (!check_owner()) {
-        retired = true;
-        return;
-      }
-      const auto & receipt = scan->capture;
-      const auto actual = admission::gid_hex(info.get_rmw_message_info().publisher_gid.data);
-      if (actual != owner->bridge_gid || receipt.bridge_gid != owner->bridge_gid) {
-        return;
-      }
-      if (baseline && (!receipt.valid || !admission::same_source(baseline->capture, receipt))) {
-        retired = true;
-        return;
-      }
-      if (!receipt.valid || !owner->matches(receipt) || static_cast<double>(receipt.sample_steady_ns) / 1e9 <= ready_steady ||
-        !((static_cast<double>(receipt.received_steady_ns) / 1e9) > ready_steady) || receipt.sequence == 0 ||
-        receipt.capture_generation == 0 || receipt.frame_id != frame ||
-        !admission::text_ok(receipt.bridge_boot_id) || !admission::text_ok(receipt.source_epoch) ||
-        !admission::fresh(receipt, admission::steady_seconds()) ||
-        !admission::layout_ok(*scan))
-      {
-        return;
-      }
-      if (!baseline) {
-        // The relay announces a source transition before its first valid scan.
-        // Pin the resulting epoch and require a later scan in that exact epoch.
-        baseline = std::move(scan);
-      } else if (receipt.sequence > baseline->capture.sequence &&
-        admission::time_ns(receipt.stamp) > admission::time_ns(baseline->capture.stamp))
-      {
-        acquired = std::move(scan);
-      }
+    [&](Message::ConstSharedPtr scan) {
+      if (acquired) return;
+      const auto publishers = node->get_publishers_info_by_topic(bounded);
+      if (publishers.size() != 1 || publishers.front().node_name() != "scan_receipt" ||
+          publishers.front().node_namespace() != "/" ||
+          publishers.front().topic_type() != "senior_interfaces/msg/BoundedRawLaserScan") return;
+      const auto & capture = scan->capture;
+      if (!capture.valid || capture.frame_id != frame || capture.bridge_boot_id.empty() ||
+          capture.capture_generation == 0 || !admission::sample_valid(capture) ||
+          !admission::layout_ok(*scan)) return;
+      acquired = std::move(scan);
     });
   rclcpp::executors::SingleThreadedExecutor executor;
   executor.add_node(node);
-  while (rclcpp::ok() && std::chrono::steady_clock::now() < deadline && !retired) {
+  while (rclcpp::ok() && std::chrono::steady_clock::now() < deadline) {
     executor.spin_once(20ms);
-    if (owner && !check_owner()) {
-      break;
-    }
-    if (acquired) {
-      if (std::chrono::steady_clock::now() < deadline && rclcpp::ok() &&
-        admission::fresh(acquired->capture, admission::steady_seconds()))
-      {
-        return acquired;
-      }
-      break;
-    }
-    if (!owner) {
-      owner = admission::unique_scan_owner(*node, bounded, raw);
-      if (owner) {
-        ready_steady = admission::steady_seconds();
-        std::cerr << "Scan receipt armed at steady_ns " <<
-          static_cast<std::int64_t>(ready_steady * 1e9) << '\n';
-      }
-    }
+    if (acquired) return acquired;
   }
   return nullptr;
 }
@@ -112,7 +62,7 @@ int main(int argc, char ** argv)
     const auto scan = acquire(node);
     if (!scan) {
       rclcpp::shutdown();
-      std::cerr << "No fresh scan receipt from the pinned source\n";
+      std::cerr << "No structurally valid scan received before acquisition timeout\n";
       return 1;
     }
     // Stdout is exactly one ROS CDR message. The supervising reader owns the

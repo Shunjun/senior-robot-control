@@ -247,44 +247,6 @@ TEST(SemanticEgress, RealFourStreamDepthReceiptAndBodyMutation)
     }
     return false;
   }));
-  arm = true;
-  candidate.valid = false;
-  candidate.sequence = 6;
-  semantic_owner->publish(candidate);
-  ASSERT_TRUE(wait_until([&] {std::lock_guard<std::mutex> lock(pause_mutex); return entered;}));
-  const auto old_gid = senior_sensor_ingress::gid_hex(semantic_owner->get_gid());
-  semantic_owner.reset();
-  auto successor = fixture->create_publisher<Semantic>(
-    "/safety/semantic_candidate_unfenced", rclcpp::SensorDataQoS());
-  const auto new_gid = senior_sensor_ingress::gid_hex(successor->get_gid());
-  ASSERT_TRUE(wait_until([&] {
-    const auto graph = bridge->get_publishers_info_by_topic("/safety/semantic_candidate_unfenced");
-    return graph.size() == 1 && senior_sensor_ingress::gid_hex(graph[0].endpoint_gid()) == new_gid;
-  }));
-  candidate.valid = true;
-  candidate.source_epoch = "semantic-successor";
-  candidate.sequence = 1;
-  successor->publish(candidate);
-  ASSERT_TRUE(wait_until([&] {
-    std::lock_guard<std::mutex> lock(mutex);
-    for (const auto & value : semantics) {
-      if (value.owner.valid && value.owner.owner_gid == new_gid) return true;
-    }
-    return false;
-  }, 1s));
-  {
-    std::lock_guard<std::mutex> lock(pause_mutex);
-    resume = true;
-    pause_condition.notify_all();
-  }
-  std::this_thread::sleep_for(100ms);
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    ASSERT_FALSE(semantics.empty());
-    EXPECT_TRUE(semantics.back().owner.valid);
-    EXPECT_EQ(semantics.back().owner.owner_gid, new_gid);
-    EXPECT_NE(old_gid, new_gid);
-  }
   (void)rgb_sub; (void)depth_sub; (void)rgb_info_sub; (void)depth_info_sub;
   (void)depth_out; (void)semantic_out;
 }

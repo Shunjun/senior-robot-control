@@ -72,7 +72,7 @@ class RecordedFrame(FrozenFact):
     recorded_steady_ns: Nonnegative
     geometry: LearningGeometry
     transform_stamp: float = Field(allow_inf_nan=False)
-    ranges: tuple[float | Literal["inf", "-inf", "nan"], ...] = Field(min_length=1, max_length=2048)
+    ranges: tuple[float | Literal["inf", "-inf", "nan"], ...] = Field(min_length=1)
 
     @model_validator(mode="after")
     def original_shape(self):

@@ -73,6 +73,10 @@ class PreflightTests(unittest.TestCase):
             path = Path(directory) / "scan.json"
             path.write_text(json.dumps(scan))
             self.assertEqual(read_stationary_scan(path)["ranges"], [2.0] * 32 + [math.inf])
+            dense = {**scan, "angle_step": 0.001, "ranges": [2.0] * 5400}
+            path.write_text(json.dumps(dense))
+            self.assertEqual(read_stationary_scan(path)["ranges"], dense["ranges"])
+            path.write_text(json.dumps(scan))
             link = path.with_name("linked-scan.json")
             link.symlink_to(path)
             with self.assertRaisesRegex(PreflightError, "Invalid stationary scan file"):

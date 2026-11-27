@@ -806,11 +806,15 @@ def _key_payload(key: ScanKey | None) -> dict | None:
 def _key_v2(body: dict | None) -> ScanKey | None:
     if body is None:
         return None
+    # //Compatible: archived keys have no source stamp. Preserve None as
+    # unavailable; never invent a timestamp from their diagnostic sequence.
+    fields = dict(body)
+    fields.setdefault("stamp_ns", None)
     return ScanKey(
         **_fixed_object(
-            body,
+            fields,
             "backend_boot bridge_boot_id source_epoch capture_generation clock_generation "
-            "raw_gid bridge_gid sequence",
+            "raw_gid bridge_gid sequence stamp_ns",
         )
     )
 

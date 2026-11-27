@@ -6,7 +6,7 @@ from typing import Any
 from senior_perception.vision.raw_capture import RawCaptureHeader
 from senior_perception.vision.rgbd_frame_builder import CameraInfoSnapshot, ImageLayoutSnapshot
 from senior_perception.vision.rgbd_spawn_worker import CompactResult
-from senior_perception.vision.static_tf_binding import Receipt
+from senior_perception.vision.static_tf_binding import TransformSnapshot
 
 
 def _set_time(out: Any, value: int) -> None:
@@ -52,29 +52,17 @@ def _info(out: Any, value: CameraInfoSnapshot) -> None:
         setattr(out, name, list(getattr(value, name)))
 
 
-def _tf(
-    out: Any, value: Receipt, admitted: tuple[int, float], edge_factory: Callable[[], Any]
-) -> None:
-    out.bridge_boot_id, out.bridge_gid, out.raw_gid = value.boot, value.relay_gid, value.source_gid
-    out.generation, out.sequence, out.first_sequence = (
-        value.generation,
-        value.sequence,
-        value.sequence,
-    )
-    _set_time(out.received_ros, value.received_ros_ns)
-    _set_time(out.first_received_ros, value.received_ros_ns)
-    out.received_steady = out.first_received_steady = value.received_steady
-    out.valid, out.admitted, out.reason = True, True, ""
-    _set_time(out.admitted_from_ros, admitted[0])
-    out.admitted_from_steady = admitted[1]
-    edges = []
+def _tf(out: Any, value: TransformSnapshot, edge_factory: Callable[[], Any]) -> None:
+    transforms = []
     for edge in value.edges:
         item = edge_factory()
-        item.parent_frame, item.child_frame = edge.parent, edge.child
-        _set_time(item.stamp, edge.stamp_ns)
-        item.translation, item.rotation_xyzw = list(edge.translation), list(edge.quaternion)
-        edges.append(item)
-    out.edges = edges
+        item.header.frame_id, item.child_frame_id = edge.parent, edge.child
+        _set_time(item.header.stamp, edge.stamp_ns)
+        t, q = item.transform.translation, item.transform.rotation
+        t.x, t.y, t.z = edge.translation
+        q.x, q.y, q.z, q.w = edge.quaternion
+        transforms.append(item)
+    out.transforms = transforms
 
 
 def fill_candidate(
@@ -110,7 +98,6 @@ def fill_candidate(
         or len(result.camera_info) != 2
         or any(len(group) != 2 for group in result.camera_info)
         or len(result.tf_receipts) != 2
-        or len(result.tf_admitted_from) != 2
         or result.camera_transform is None
         or len(result.raw_rgb_encodings) != 2
         or len(result.preprocessing_versions) != 2
@@ -151,7 +138,6 @@ def fill_candidate(
         _tf(
             getattr(out, f"{prefix}_tf"),
             result.tf_receipts[index],
-            result.tf_admitted_from[index],
             edge_factory,
         )
     out.valid = True

@@ -173,10 +173,14 @@ class NativeFixture:
         if action == "capture":
             if getattr(self, "fail_capture", False):
                 return dict(ok=False, error="operation_unknown")
-            prefix = self.root / "capture"
+            slot = self.root / "capture"
+            slot.mkdir(mode=0o700)  # Native CaptureDirectory reserves one directory per pair.
+            prefix = slot / "graph"
             data = [json.dumps(self.anchors).encode(), b"synthetic Karto dataset"]
             for suffix, payload in zip((".posegraph", ".data"), data, strict=True):
                 Path(str(prefix) + suffix).write_bytes(payload)
+            if getattr(self, "extra_capture_file", False):
+                (slot / "unexpected").write_text("must not be removed")
             cut = self.cut()
             cut.update(
                 prefix=str(prefix),
@@ -315,6 +319,42 @@ class NativeFixture:
         )
 
 
+async def test_native_graph_consumes_single_slot_before_the_next_capture(tmp_path):
+    from senior_mapping.native_session import NativeGraph
+
+    from vehicle_core.values import MapRef
+
+    native = NativeFixture(tmp_path / "native")
+    native.boot = "boot"
+    graph = NativeGraph(native, MapRef("map", 1))
+    graph.boot = native.boot
+    snapshot = SimpleNamespace(anchors=(), fixed=None)
+    await graph.capture_consistent(tmp_path / "first", lambda: snapshot)
+    await graph.capture_consistent(tmp_path / "second", lambda: snapshot)
+    assert not (native.root / "capture").exists()
+    for name in ("graph.posegraph", "graph.data"):
+        assert (tmp_path / "first" / name).read_bytes() == (tmp_path / "second" / name).read_bytes()
+    assert (tmp_path / "first" / "native-proof.json").is_file()
+    assert (tmp_path / "second" / "native-proof.json").is_file()
+
+
+async def test_native_graph_does_not_remove_an_unknown_slot_file(tmp_path):
+    from senior_mapping.native_session import NativeGraph
+
+    from vehicle_core.values import MapRef
+
+    native = NativeFixture(tmp_path / "native")
+    native.boot = "boot"
+    native.extra_capture_file = True
+    graph = NativeGraph(native, MapRef("map", 1))
+    graph.boot = native.boot
+    with pytest.raises(OSError):
+        await graph.capture_consistent(
+            tmp_path / "copy", lambda: SimpleNamespace(anchors=(), fixed=None)
+        )
+    assert (native.root / "capture" / "unexpected").read_text() == "must not be removed"
+
+
 @pytest.fixture
 async def native_pair(tmp_path):
     native = NativeFixture(tmp_path / "native")
@@ -426,7 +466,11 @@ async def test_production_assembly_continuously_saves_and_reopens_canonical_home
             assert manifest.get("display_only", False) is False
             assert manifest["waypoint_writes"] is True
             state = await managed.state_requests(client).request("state.get")
-            assert state["navigation_ready"] is True
+            assert state["navigation_ready"] is True, {
+                "state": state,
+                "mapping_phase": managed._runtime.phase,
+                "mapping_error": repr(managed._runtime.last_error),
+            }
             assert state["localized"] is True
             assert state["map_generation"] == state["localization_generation"]
             assert state["map_grid_id"] == manifest["grid_id"]
@@ -909,6 +953,51 @@ async def test_shared_owner_pending_graph_consumes_independent_scan_and_motion(
         cut = await offer_owner_scan(owner, clock, seq, offset=0.8)
     assert len(cut.supports) == 2
     assert cut.watermark.evidence_revision > 1
+
+
+async def test_initial_unbound_slot_cannot_retire_the_new_fixed_reference(tmp_path, monkeypatch):
+    from senior_mapping.shared_scan import LatestScanSlot
+
+    owner, native, clock = shared_owner(tmp_path, monkeypatch)
+    native.pending_graph = True
+    monkeypatch.setattr(native, "emit_scan", lambda: None)
+    slot = LatestScanSlot(
+        owner._scan_path, nonce="nonce", backend_boot="backend", host_boot_id="host"
+    )
+    native.navigation.slot = slot
+    try:
+        slot.invalidate("qualified_receipt_unavailable")
+        slot.flush()
+        await owner.ingest(None)
+        assert not owner._fixed_retired
+        assert owner._last_scan_capture is None  # Startup status never authorizes a scan.
+        assert owner._installed_watermark == owner.active.fixed_snapshot(owner.source).watermark
+        slot.invalidate("current_reference_input_invalid")
+        slot.flush()
+        await owner.ingest(None)
+        assert owner._fixed_retired  # Current-reference failure remains authoritative.
+    finally:
+        slot.close()
+
+
+async def test_retired_unbound_slot_still_revokes_the_new_reference(tmp_path, monkeypatch):
+    from senior_mapping.shared_scan import LatestScanSlot
+
+    owner, native, clock = shared_owner(tmp_path, monkeypatch)
+    native.pending_graph = True
+    monkeypatch.setattr(native, "emit_scan", lambda: None)
+    slot = LatestScanSlot(
+        owner._scan_path, nonce="nonce", backend_boot="backend", host_boot_id="host"
+    )
+    native.navigation.slot = slot
+    try:
+        slot.retire()
+        slot.flush()
+        await owner.ingest(None)
+        assert owner._fixed_retired
+        assert owner._installed_watermark is None
+    finally:
+        slot.close()
 
 
 @pytest.mark.asyncio

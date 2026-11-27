@@ -6,9 +6,12 @@
 #include <tbb/global_control.h>
 #include "snapshot.hpp"
 #include "staged_graph.hpp"
-#include "static_lidar_tf_ingress.hpp"
 
 #include <algorithm>
+#include <array>
+#include <map>
+#include <sstream>
+#include <iomanip>
 #include <atomic>
 #include <deque>
 #include <cmath>
@@ -51,7 +54,7 @@ public:
   {
     accepting_.store(false);
     stopping_.store(true);
-    if (bounded_ingress_) {bounded_ingress_->retire_source();}
+    if (bounded_ingress_) {bounded_ingress_->close();}
     if (ingress_executor_) {ingress_executor_->cancel();}
     if (ingress_thread_.joinable()) {ingress_thread_.join();}
     // No ingress work can retain graph/cache or TF state after this barrier.
@@ -89,11 +92,8 @@ public:
     const bool stationary_diagnostic = declare_parameter<bool>("candidate_stationary_match", false);
     const auto capture_root = declare_parameter<std::string>("capture_directory", "");
     const auto bounded_topic = declare_parameter<std::string>("bounded_scan_topic", "");
-    const auto static_lidar_topic = declare_parameter<std::string>(
-      "verified_static_lidar_tf_topic", "");
-    if (!static_lidar_topic.empty() && bounded_topic.empty()) {
-      throw std::invalid_argument("Verified static lidar TF requires bounded scan ingress");
-    }
+    lidar_frame_ = declare_parameter<std::string>("lidar_frame", "laser_link");
+    if (lidar_frame_.empty()) {throw std::invalid_argument("lidar_frame must be nonempty");}
     if (!bounded_topic.empty() &&
       (!prefix.empty() || !digest.empty() || !attempt.empty()))
     {
@@ -156,9 +156,6 @@ public:
       }
       if (!bounded_topic.empty()) {
         ingress_group_ = create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive, false);
-        if (!static_lidar_topic.empty()) {
-          start_static_lidar_tf(static_lidar_topic);
-        }
         start_bounded_ingress(bounded_topic);
         start_graph_commit_service();
       }
@@ -192,8 +189,8 @@ public:
       ingress_thread_ = std::thread([this] {
           try {ingress_executor_->spin();}
           catch (const std::exception & error) {
-            bounded_ingress_->retire_source();
-            try {publish_invalid(true, "ingress_failed");}
+            bounded_ingress_->close();
+            try {publish_invalid("ingress_failed");}
             catch (const std::exception &) {}  // The ROS context may already be shutting down.
             RCLCPP_ERROR(get_logger(), "Qualified ingress stopped: %s", error.what());
           }
@@ -214,42 +211,23 @@ private:
     std::int32_t last_keyframe_id{0};
   };
 
-  using StaticReceipt = BoundedScanIngress::StaticReceipt;
-
   struct InFlightScan
   {
     BoundedScanIngress::BoundedScan::ConstSharedPtr scan;
     LaserTransform mount;
-    StaticReceipt::ConstSharedPtr static_receipt;
   };
 
   using Qualified = senior_interfaces::msg::QualifiedMappingScan;
-  struct GeometryWitness
-  {
-    NativeLaserOffset offset;
-    LaserRayLayout rays;
-    double angle_max, range_min, range_max, height;
-    std::int8_t sign;
-    bool matches(const sensor_msgs::msg::LaserScan & scan, LaserTransform mount) const
-    {
-      return scan.angle_min == rays.angle_min && scan.angle_increment == rays.angle_increment &&
-        scan.angle_max == angle_max && scan.range_min == range_min && scan.range_max == range_max &&
-        scan.ranges.size() == rays.ray_count && std::abs(mount.z-height) <= 1e-5 &&
-        matches_native_laser_geometry(mount, offset, rays);
-    }
-  };
   struct GraphCandidate
   {
     sensor_msgs::msg::LaserScan::ConstSharedPtr scan;
     BoundedScanIngress::BoundedScan::ConstSharedPtr original;
     LaserTransform mount;
-    StaticReceipt::ConstSharedPtr static_receipt;
   };
 
   struct CommittedIngressReceipt
   {
     BoundedScanIngress::Receipt scan;
-    StaticReceipt::ConstSharedPtr static_receipt;
   };
 
   struct CommittedScanCut
@@ -259,7 +237,6 @@ private:
     NativeLaserOffset corrected_sensor;
     std::int8_t raw_ray_angle_sign;
     BoundedScanIngress::BoundedScan::ConstSharedPtr scan;
-    StaticReceipt::ConstSharedPtr static_receipt;
     std::vector<Keyframe> keyframes;
     NativeLaserOffset original_odom;
   };
@@ -295,19 +272,6 @@ private:
     ssPauseMeasurements_.reset();
   }
 
-  void start_static_lidar_tf(const std::string & topic)
-  {
-    const auto frame = declare_parameter<std::string>("verified_static_lidar_frame", "laser_link");
-    const auto relay_node = declare_parameter<std::string>(
-      "verified_static_lidar_relay_node", "/slam_static_lidar_tf_receipt");
-    const auto raw_topic = declare_parameter<std::string>(
-      "verified_static_lidar_tf_source_topic", "/tf_static");
-    const auto raw_node = declare_parameter<std::string>(
-      "verified_static_lidar_tf_source_node", "/robot_state_publisher");
-    static_lidar_tf_ = std::make_unique<StaticLidarTfIngress>(
-      *this, topic, relay_node, raw_topic, raw_node, base_frame_, frame, ingress_group_);
-  }
-
   void start_bounded_ingress(const std::string & topic)
   {
     if (topic == scan_topic_) {
@@ -321,44 +285,22 @@ private:
       declare_parameter<std::string>("qualified_scan_topic", "/senior/slam/qualified_scan"),
       rclcpp::QoS(1).reliable().durability_volatile());
     bounded_ingress_ = std::make_unique<BoundedScanIngress>(
-      *this, *tf_, topic, scan_topic_, odom_frame_, base_frame_,
+      *this, *tf_, topic, odom_frame_, base_frame_,
       [this](sensor_msgs::msg::LaserScan::ConstSharedPtr scan,
-        BoundedScanIngress::BoundedScan::ConstSharedPtr original, LaserTransform mount,
-        StaticReceipt::ConstSharedPtr static_receipt)
+        BoundedScanIngress::BoundedScan::ConstSharedPtr original, LaserTransform mount)
       {
         if (stopping_.load()) {return;}
-        const auto witness = std::atomic_load(&geometry_witness_);
-        if (witness) {
-          if (!witness->matches(*scan, mount)) {
-            bounded_ingress_->retire_source();
-            publish_invalid(true, "geometry_changed");
-            return;
-          }
-          publish_qualified(*witness, original, mount, static_receipt);
-        }
+        publish_qualified(original, mount);
         // Bootstrap must still reach getLaser/addScan before a cached witness exists.
         const std::lock_guard<std::mutex> queue_lock(queue_mutex_);
         if (graph_queue_.size() == 8) {graph_queue_.pop_front();}
-        graph_queue_.push_back({std::move(scan), std::move(original), mount,
-          std::move(static_receipt)});
-      }, static_lidar_tf_.get(), ingress_group_);
-    graph_drain_ = create_wall_timer(std::chrono::milliseconds(5), [this] {drain_graph_scan();});
-    qualified_expiry_ = create_wall_timer(std::chrono::milliseconds(20), [this] {
-        if (bounded_ingress_->retired_snapshot()) {
-          if (!retirement_published_) {
-            publish_invalid(true, "source_retired"); retirement_published_ = true;
-          }
-        } else if (!bounded_ingress_->active_snapshot()) {
-          if (current_valid_) {publish_invalid(false, "source_unavailable");}
-        } else if (current_valid_ && senior_sensor_ingress::time::monotonic_ns() >= current_deadline_) {
-          publish_invalid(false, "expired");
-        }
+        graph_queue_.push_back({std::move(scan), std::move(original), mount});
       }, ingress_group_);
+    graph_drain_ = create_wall_timer(std::chrono::milliseconds(5), [this] {drain_graph_scan();});
   }
 
-  void publish_qualified(const GeometryWitness & witness,
-    BoundedScanIngress::BoundedScan::ConstSharedPtr original, LaserTransform mount,
-    StaticReceipt::ConstSharedPtr static_receipt)
+  void publish_qualified(
+    BoundedScanIngress::BoundedScan::ConstSharedPtr original, LaserTransform mount)
   {
     try {
       const auto exact = tf_->lookupTransform(odom_frame_, base_frame_,
@@ -366,10 +308,6 @@ private:
       Qualified result;
       result.backend_boot = boot_id_; result.status = Qualified::QUALIFIED;
       result.scan = *original;
-      if (static_receipt) {
-        result.static_lidar_tf_receipt = *static_receipt;
-        result.static_receipt_valid = true;
-      }
       result.odom_base.x = exact.translation.x;
       result.odom_base.y = exact.translation.y;
       const auto & q = exact.rotation;
@@ -379,27 +317,32 @@ private:
       result.base_lidar.translation.z = mount.z;
       result.base_lidar.rotation.x = mount.qx; result.base_lidar.rotation.y = mount.qy;
       result.base_lidar.rotation.z = mount.qz; result.base_lidar.rotation.w = mount.qw;
-      result.raw_ray_angle_sign = witness.sign;
-      result.geometry_id = boot_id_ + ":mount-1";
+      result.raw_ray_angle_sign = 1 - 2*(mount.qx*mount.qx+mount.qy*mount.qy) < 0 ? -1 : 1;
+      // The identifier describes actual geometry, not an authorization receipt.
+      std::ostringstream identity;
+      identity << std::hexfloat << original->capture.frame_id;
+      const auto key = model_key(original->capture.frame_id, original->angle_min,
+        original->angle_max, original->angle_increment, original->range_min,
+        original->range_max, original->ranges.size(), mount);
+      for (const auto value : key.second) {identity << ':' << value;}
+      result.geometry_id = identity.str();
       if (std::isfinite(result.odom_base.x) && std::isfinite(result.odom_base.y) &&
         std::isfinite(result.odom_base.theta) &&
-        scan_receipt_admission::fresh(original->capture, scan_receipt_admission::steady_seconds()) &&
         bounded_ingress_->active_snapshot())
       {
         qualified_publisher_->publish(result);
-        current_deadline_ = original->capture.sample_steady_ns + 500000000ULL;
         current_valid_ = true;
       }
     } catch (const tf2::TransformException &) {
-      publish_invalid(false, "exact_odom_missing");
+      publish_invalid("exact_odom_missing");
     }
   }
 
-  void publish_invalid(bool retired, const std::string & reason)
+  void publish_invalid(const std::string & reason)
   {
     Qualified result;
     result.backend_boot = boot_id_;
-    result.status = retired ? Qualified::RETIRED : Qualified::INVALID;
+    result.status = Qualified::INVALID;
     result.reason = reason;
     qualified_publisher_->publish(result);
     current_valid_ = false;
@@ -415,23 +358,16 @@ private:
     }
     const auto & scan = candidate->scan;
     if (stopping_.load() || !bounded_ingress_->active_snapshot() ||
-      !scan_receipt_admission::fresh(candidate->original->capture, scan_receipt_admission::steady_seconds()) ||
       (production_ && (!accepting_.load() ||
       rclcpp::Time(scan->header.stamp).nanoseconds() <= input_floor_ns_.load()))) {return;}
     const std::lock_guard<std::mutex> ingress(scan_ingress_mutex_);
-    const auto cached = lasers_.find(scan->header.frame_id);
-    if (cached != lasers_.end() &&
-      !match_native_mount(cached->second.getLaser(), *scan, candidate->mount))
-    {
-      retire_geometry(); return;
-    }
-    in_flight_ = InFlightScan{candidate->original, candidate->mount, candidate->static_receipt};
+    if (!install_scan_geometry(scan, candidate->mount)) {return;}
+    in_flight_ = InFlightScan{candidate->original, candidate->mount};
     try {
       AsynchronousSlamToolbox::laserCallback(scan);
       karto::Pose2 odometry;
       if (navigation_ && pose_helper_->getOdomPose(odometry, in_flight_->scan->capture.stamp)) {
-        navigation_->observe(in_flight_->scan->capture, odometry,
-          in_flight_->static_receipt != nullptr);
+        navigation_->observe(in_flight_->scan->capture, odometry);
       }
     } catch (...) {in_flight_.reset(); throw;}
     in_flight_.reset();
@@ -472,16 +408,90 @@ private:
     AsynchronousSlamToolbox::laserCallback(std::move(scan));
   }
 
+  using ModelKey = std::pair<std::string, std::array<double, 13>>;
+
+  static ModelKey model_key(const std::string & frame, double first, double last,
+    double increment, double minimum, double maximum, std::size_t count, LaserTransform mount)
+  {
+    return {frame, {mount.x, mount.y, mount.z, mount.qx, mount.qy,
+      mount.qz, mount.qw, first, last, increment, minimum, maximum, static_cast<double>(count)}};
+  }
+
+  bool install_scan_geometry(sensor_msgs::msg::LaserScan::ConstSharedPtr input, LaserTransform mount)
+  {
+    const auto & scan = *input;
+    const auto key = model_key(scan.header.frame_id, scan.angle_min, scan.angle_max,
+      scan.angle_increment, scan.range_min, scan.range_max, scan.ranges.size(), mount);
+    const auto found = laser_models_.find(key);
+    if (found != laser_models_.end()) {
+      lasers_[scan.header.frame_id] = found->second;
+      return true;
+    }
+    // Preserve the upstream model and loaded graph when it already represents
+    // this sample. Allocate a new immutable model only for actual geometry change.
+    auto * existing = getLaser(input);
+    if (!existing) return false;
+    if (match_native_mount(existing, scan, mount) &&
+        existing->GetMaximumRange() == scan.range_max) {
+      laser_models_.emplace(key, lasers_.at(scan.header.frame_id));
+      return true;
+    }
+    const double yaw = std::atan2(2*(mount.qw*mount.qz+mount.qx*mount.qy),
+                                 1-2*(mount.qy*mount.qy+mount.qz*mount.qz));
+    const bool inverted = 1-2*(mount.qx*mount.qx+mount.qy*mount.qy) < 0;
+    if (!matches_native_laser_geometry(mount, {mount.x, mount.y, yaw},
+        {scan.angle_min, scan.angle_increment, scan.ranges.size(), inverted})) {
+      report_geometry_error();
+      return false;
+    }
+    // Keep old models immutable: stored scans still refer to their original
+    // sensor model after a legitimate mounting/layout change.
+    const auto name = "laser_" + boot_id_ + "_" + std::to_string(++laser_model_sequence_);
+    auto model = std::unique_ptr<karto::LaserRangeFinder>(
+      karto::LaserRangeFinder::CreateLaserRangeFinder(karto::LaserRangeFinder_Custom, karto::Name(name)));
+    model->SetOffsetPose(karto::Pose2(mount.x, mount.y, yaw));
+    if (!has_parameter("min_laser_range")) declare_parameter<double>("min_laser_range", 0.0);
+    if (!has_parameter("max_laser_range")) declare_parameter<double>("max_laser_range", 25.0);
+    const auto configured_min = get_parameter("min_laser_range").as_double();
+    const auto configured_max = get_parameter("max_laser_range").as_double();
+    const double minimum = std::max<double>(scan.range_min, configured_min);
+    const double threshold = configured_max <= 0 ? scan.range_max :
+      std::min<double>(scan.range_max, configured_max);
+    model->SetMinimumRange(minimum);
+    model->SetMaximumRange(scan.range_max);
+    model->SetMinimumAngle(scan.angle_min);
+    //Compatible: Karto has an explicit exclusive-end convention only for 360
+    // lasers. Other layouts use the last measured direction in its model.
+    constexpr double full_turn = 6.28318530717958647692;
+    const bool circular = std::abs((scan.angle_max-scan.angle_min)-full_turn) <
+      scan.angle_increment * 0.01 &&
+      std::abs((scan.angle_max-scan.angle_min)/scan.angle_increment - scan.ranges.size()) < 0.01;
+    model->SetMaximumAngle(scan.angle_min + scan.angle_increment *
+      static_cast<double>(scan.ranges.size() - (circular ? 0 : 1)));
+    model->SetAngularResolution(scan.angle_increment);
+    model->SetIs360Laser(circular);
+    model->SetRangeThreshold(threshold);
+    auto * raw_model = model.get();
+    {
+      boost::mutex::scoped_lock lock(smapper_mutex_);
+      dataset_->Add(raw_model, true);
+      model.release();
+    }
+    laser_utils::LaserMetadata metadata(raw_model, inverted);
+    laser_models_.emplace(key, metadata);
+    lasers_[scan.header.frame_id] = metadata;
+    return true;
+  }
+
   std::optional<std::int8_t> match_native_mount(
     karto::LaserRangeFinder * laser, const sensor_msgs::msg::LaserScan & scan,
     LaserTransform mount)
   {
     const auto cached = lasers_.find(scan.header.frame_id);
     if (!laser || cached == lasers_.end() || cached->second.getLaser() != laser ||
-      laser->GetMinimumAngle() != scan.angle_min || laser->GetMaximumAngle() != scan.angle_max ||
+      laser->GetMinimumAngle() != scan.angle_min ||
       laser->GetAngularResolution() != scan.angle_increment ||
-      laser->GetNumberOfRangeReadings() != scan.ranges.size() ||
-      (mount_height_ && std::abs(mount.z - *mount_height_) > 1e-5))
+      laser->GetNumberOfRangeReadings() != scan.ranges.size())
     {
       return std::nullopt;
     }
@@ -496,10 +506,9 @@ private:
     return inverted ? -1 : 1;
   }
 
-  void retire_geometry()
+  void report_geometry_error()
   {
-    bounded_ingress_->retire_source();
-    RCLCPP_WARN(get_logger(), "Bounded scan mount disagrees with native laser geometry");
+    RCLCPP_WARN(get_logger(), "Scan geometry cannot be represented by the planar SLAM model");
   }
 
   karto::LocalizedRangeScan * addScan(
@@ -513,19 +522,10 @@ private:
     if (in_flight_) {
       const auto matched = match_native_mount(laser, *scan, in_flight_->mount);
       if (!matched) {
-        retire_geometry();
+        report_geometry_error();
         return nullptr;
       }
-      if (!mount_height_) {
-        mount_height_ = in_flight_->mount.z;
-      }
       ray_angle_sign = *matched;
-      const auto offset = laser->GetOffsetPose();
-      std::shared_ptr<const GeometryWitness> witness = std::make_shared<GeometryWitness>(GeometryWitness{
-        {offset.GetX(), offset.GetY(), offset.GetHeading()},
-        {scan->angle_min, scan->angle_increment, scan->ranges.size(), *matched == -1},
-        scan->angle_max, scan->range_min, scan->range_max, in_flight_->mount.z, *matched});
-      std::atomic_store(&geometry_witness_, std::move(witness));
     }
     auto * committed = AsynchronousSlamToolbox::addScan(laser, scan, odom_pose);
     if ((capture_directory_ || in_flight_) && committed) {
@@ -533,7 +533,7 @@ private:
       graph_commit_.last_keyframe_id = committed->GetUniqueId();
       if (in_flight_) {
         last_committed_ingress_ =
-          CommittedIngressReceipt{in_flight_->scan->capture, in_flight_->static_receipt};
+          CommittedIngressReceipt{in_flight_->scan->capture};
         record_graph_commit(*committed, laser, ray_angle_sign, odom_pose);
       }
     }
@@ -549,7 +549,7 @@ private:
     boost::mutex::scoped_lock lock(smapper_mutex_);
     if (committed.GetLaserRangeFinder() != laser) {
       graph_commit_history_.append(graph_commit_.sequence, std::nullopt);
-      retire_geometry();
+      report_geometry_error();
       return;
     }
     const auto sensor = committed.GetSensorPose();
@@ -570,7 +570,7 @@ private:
       CommittedScanCut{
         graph_commit_.last_keyframe_id, now(),
         {sensor.GetX(), sensor.GetY(), sensor.GetHeading()}, ray_angle_sign,
-        in_flight_->scan, in_flight_->static_receipt, std::move(*frames),
+        in_flight_->scan, std::move(*frames),
         {original_odom.GetX(), original_odom.GetY(), original_odom.GetHeading()}});
   }
 
@@ -582,16 +582,13 @@ private:
     if (graph_commit_unavailable_logged_) {return;}
     graph_commit_unavailable_logged_ = true;
     try {
-      // Retirement is a later atomic snapshot, not the active decision witness.
-      const bool retired_after_decision = bounded_ingress_->retired_snapshot();
       RCLCPP_WARN(get_logger(),
         "ReadGraphCommit UNAVAILABLE: reason=%s request_boot=%.36s current_boot=%.36s "
         "request_sequence=%llu graph_sequence=%llu initial_active=%s final_active=%s "
-        "retired_after_decision=%s raw_receipt_last_reason=N/A static_receipt_last_reason=N/A",
+        "raw_receipt_last_reason=N/A",
         reason, request.boot_id.c_str(), boot_id_.c_str(),
         static_cast<unsigned long long>(request.graph_commit_sequence),
-        static_cast<unsigned long long>(graph_commit_.sequence), initial_active, final_active,
-        retired_after_decision ? "true" : "false");
+        static_cast<unsigned long long>(graph_commit_.sequence), initial_active, final_active);
     } catch (...) {}  // Diagnostics must not change service delivery, even if logging fails.
   }
 
@@ -641,10 +638,6 @@ private:
         result.original_odom_y = cut->original_odom.y;
         result.original_odom_yaw = cut->original_odom.yaw;
         result.scan = *cut->scan;
-        if (cut->static_receipt) {
-          result.static_lidar_tf_receipt = *cut->static_receipt;
-          result.static_lidar_tf_receipt_valid = true;
-        }
         fill_keyframes(cut->keyframes, result.keyframes);
         const bool final_active = bounded_ingress_->active_snapshot();
         if (final_active) {
@@ -703,10 +696,6 @@ private:
     // Build the response before reserving the single output slot.
     decltype(response.keyframes) keyframes;
     fill_keyframes(frames, keyframes);
-    StaticReceipt static_receipt;
-    if (receipt && receipt->static_receipt) {
-      static_receipt = *receipt->static_receipt;
-    }
     const auto publication_allowed = [this]() {
         return !bounded_ingress_ || bounded_ingress_->active_snapshot();
       };
@@ -721,10 +710,6 @@ private:
     if (receipt) {
       response.last_committed_scan = std::move(receipt->scan);
       response.last_committed_scan_valid = true;
-      if (receipt->static_receipt) {
-        response.static_lidar_tf_receipt = std::move(static_receipt);
-        response.static_lidar_tf_receipt_valid = true;
-      }
     }
     response.status = CaptureGraph::Response::OK;
   }
@@ -896,6 +881,17 @@ private:
         response->map_frame = map_frame_;
         response->odom_frame = odom_frame_;
 
+        if (bounded_ingress_ && !startup_tf_ready_) {
+          startup_tf_ready_ = tf_->canTransform(base_frame_, lidar_frame_, tf2::TimePointZero) &&
+            tf_->canTransform(odom_frame_, base_frame_, tf2::TimePointZero);
+          if (!startup_tf_ready_) {
+            response->status = ReadGraph::Response::UNAVAILABLE;
+            RCLCPP_WARN_THROTTLE(get_logger(), *get_clock(), 1000,
+              "Mapping startup requires TF %s <- %s and %s <- %s",
+              base_frame_.c_str(), lidar_frame_.c_str(), odom_frame_.c_str(), base_frame_.c_str());
+            return;
+          }
+        }
         const auto limit = response->keyframes.max_size();
         rclcpp::Time sample_stamp;
         GraphCommitWatermark watermark;
@@ -985,31 +981,31 @@ private:
     return frames;
   }
 
+  std::string lidar_frame_;
+  bool startup_tf_ready_{false};
   std::string boot_id_{boost::uuids::to_string(boost::uuids::random_generator{}())};
   std::uint64_t snapshot_sequence_{0};
   std::mutex scan_ingress_mutex_;
+  std::map<ModelKey, laser_utils::LaserMetadata> laser_models_;
+  std::uint64_t laser_model_sequence_{0};
   std::unique_ptr<tbb::global_control> compute_budget_;
   std::unique_ptr<MappingNavigation> navigation_;
   bool production_{false};
   std::atomic<bool> accepting_{true}, stopping_{false};
   std::atomic<std::int64_t> input_floor_ns_{0};
-  std::shared_ptr<const GeometryWitness> geometry_witness_;
   std::mutex queue_mutex_;
   std::deque<GraphCandidate> graph_queue_;
   rclcpp::CallbackGroup::SharedPtr ingress_group_;
   std::unique_ptr<rclcpp::executors::SingleThreadedExecutor> ingress_executor_;
   std::thread ingress_thread_;
-  rclcpp::TimerBase::SharedPtr graph_drain_, qualified_expiry_;
+  rclcpp::TimerBase::SharedPtr graph_drain_;
   rclcpp::Publisher<Qualified>::SharedPtr qualified_publisher_;
-  bool current_valid_{false}, retirement_published_{false};
-  std::uint64_t current_deadline_{0};
+  bool current_valid_{false};
   rclcpp::Service<senior_interfaces::srv::MappingGate>::SharedPtr mapping_gate_;
   GraphCommitWatermark graph_commit_;
   std::optional<InFlightScan> in_flight_;
-  std::optional<double> mount_height_;
   std::optional<CommittedIngressReceipt> last_committed_ingress_;
   GraphCommitHistory<CommittedScanCut, 8> graph_commit_history_;
-  std::unique_ptr<StaticLidarTfIngress> static_lidar_tf_;
   std::unique_ptr<BoundedScanIngress> bounded_ingress_;
   std::unique_ptr<CaptureDirectory> capture_directory_;
   rclcpp::Service<CaptureGraph>::SharedPtr capture_graph_;

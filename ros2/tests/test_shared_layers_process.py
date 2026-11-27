@@ -9,8 +9,10 @@ import hashlib
 import json
 import math
 import os
+import sys
 import threading
 import time
+import traceback
 from pathlib import Path
 
 import pytest
@@ -523,6 +525,15 @@ async def test_owner_adapter_native_capture_restore_and_retirement(tmp_path, mon
                     assert harness.launch_task.result() == 0
                     harness.trace.emit("post_exit_manager_rpc", reason=str(exc))
                 managed = None
+        except BaseException:
+            # Preserve the first body failure before close/flush can raise another.
+            body_traceback = traceback.format_exc()
+            try:
+                harness.trace.emit("body_failure", traceback=body_traceback)
+            except Exception as recording_error:
+                print(body_traceback, file=sys.stderr)
+                print(f"body_failure recording failed: {recording_error!r}", file=sys.stderr)
+            raise
         finally:
             try:
                 release.set()
@@ -553,8 +564,10 @@ async def test_frozen_stationary_system_reference(tmp_path):
 
 @native_only
 @pytest.mark.skipif(
-    not (os.environ.get("SENIOR_SHARED_LAYERS_MOTION_RECORD")
-         or os.environ.get("SENIOR_SHARED_LAYERS_MOTION_REPLAY")),
+    not (
+        os.environ.get("SENIOR_SHARED_LAYERS_MOTION_RECORD")
+        or os.environ.get("SENIOR_SHARED_LAYERS_MOTION_REPLAY")
+    ),
     reason="unverified: separately dispatched VM motion recording/replay required",
 )
 async def test_motion_system_reference(tmp_path):
@@ -584,8 +597,11 @@ async def _run_system_reference(tmp_path, motion=None):
     from vehicle_manager.storage.bindings import Database
     from vehicle_manager.storage.domain_bindings import WaypointStore
 
-    path = (Path(motion[1]).resolve() if motion else
-            Path(os.environ["SENIOR_SHARED_LAYERS_REFERENCE_TRACE"]).resolve(strict=True))
+    path = (
+        Path(motion[1]).resolve()
+        if motion
+        else Path(os.environ["SENIOR_SHARED_LAYERS_REFERENCE_TRACE"]).resolve(strict=True)
+    )
     if motion and motion[0] == "record":
         assert not path.exists(), "recording must use a new path; keep stationary archive intact"
     else:
@@ -637,11 +653,16 @@ async def _run_system_reference(tmp_path, motion=None):
                 )
                 if motion:
                     if motion[0] == "record":
-                        harness.source.begin_recording(path, dict(
-                            harness.input_metadata, plan=plan,
-                            parameters_sha256=hashlib.sha256(
-                                harness.parameters.read_bytes()).hexdigest(),
-                        ))
+                        harness.source.begin_recording(
+                            path,
+                            dict(
+                                harness.input_metadata,
+                                plan=plan,
+                                parameters_sha256=hashlib.sha256(
+                                    harness.parameters.read_bytes()
+                                ).hexdigest(),
+                            ),
+                        )
                     else:
                         harness.source.begin_frozen(path)
                         assert harness.source.motion_ticks is not None, "motion schema2 required"
@@ -690,14 +711,16 @@ async def _run_system_reference(tmp_path, motion=None):
                     "reference_end",
                     frames=300,
                     degradations=sorted(degraded),
-                    workload="motion A short-route + sensor/SLAM" if motion else
-                             "stationary-only sensor/SLAM",
+                    workload="motion A short-route + sensor/SLAM"
+                    if motion
+                    else "stationary-only sensor/SLAM",
                     active_window="observed per-run only; intersect both versions externally",
                     save_active_overlap="unverified; actual overlap required, otherwise missing",
                     final_route=progress,
                     full_load_success=False,
-                    sustained_mppi="N/A; short route does not prove sustained 60s" if motion else
-                                   "N/A; original progress requires motion",
+                    sustained_mppi="N/A; short route does not prove sustained 60s"
+                    if motion
+                    else "N/A; original progress requires motion",
                 )
                 # Same explicit B postlude on both versions, outside measured raw window.
                 harness.source.frozen = None
@@ -851,7 +874,6 @@ async def test_mapping_transport_assembly_and_failure_cleanup(
         assert events[1]["timing_scope"] == ("RPC upper bound; native SaveToFile overlap unknown")
     else:
         assert not events
-
 
 
 def test_capture_index_pairs_original_sample_not_latest_sequence():
@@ -1418,12 +1440,17 @@ def _ordinary_source(monkeypatch, tmp_path):
 
     def message():
         return SimpleNamespace(
-            header=SimpleNamespace(stamp=None, frame_id=""), child_frame_id="",
+            header=SimpleNamespace(stamp=None, frame_id=""),
+            child_frame_id="",
             transform=SimpleNamespace(translation=vector(), rotation=quaternion()),
-            pose=SimpleNamespace(pose=SimpleNamespace(position=vector(), orientation=quaternion()),
-                                 covariance=[0.0] * 36),
+            pose=SimpleNamespace(
+                pose=SimpleNamespace(position=vector(), orientation=quaternion()),
+                covariance=[0.0] * 36,
+            ),
             twist=SimpleNamespace(twist=SimpleNamespace(linear=vector(), angular=vector())),
-            orientation=quaternion(), angular_velocity=vector(), linear_acceleration=vector(),
+            orientation=quaternion(),
+            angular_velocity=vector(),
+            linear_acceleration=vector(),
             angular_velocity_covariance=[0.0] * 9,
         )
 
@@ -1457,13 +1484,17 @@ def _ordinary_source(monkeypatch, tmp_path):
     steady = SimpleNamespace(ns=20_000_000_000)
     monkeypatch.setattr(time, "monotonic_ns", lambda: steady.ns)
     # Deterministic geometry oracle isolates tape I/O; original raycast has its own regression.
-    monkeypatch.setattr("shared_layers_sensor_source.raycast",
-                        lambda origin, direction, segments:
-                        math.nan if direction[0] < 0 else 2.0 + origin[0] * 0.01)
+    monkeypatch.setattr(
+        "shared_layers_sensor_source.raycast",
+        lambda origin, direction, segments: (
+            math.nan if direction[0] < 0 else 2.0 + origin[0] * 0.01
+        ),
+    )
     source = SensorSource.__new__(SensorSource)
     source.trace = Trace()
-    source.node = SimpleNamespace(get_clock=lambda: SimpleNamespace(
-        now=lambda: ClockStamp(clock.ns)))
+    source.node = SimpleNamespace(
+        get_clock=lambda: SimpleNamespace(now=lambda: ClockStamp(clock.ns))
+    )
     source.world = Path(__file__).parents[1] / "src/senior_sim/worlds/motion_qualification.sdf"
     source.urdf = Path(__file__).parents[1] / "src/senior_sim/urdf/senior.urdf.xacro"
     from shared_layers_sensor_source import mount_from_urdf, world_segments
@@ -1493,10 +1524,12 @@ def _record_ordinary_episode(source, clock, steady, path):
             from types import SimpleNamespace
 
             if i == 3:
-                source._command(SimpleNamespace(linear=SimpleNamespace(x=0.08),
-                                                angular=SimpleNamespace(z=0.01)))
-            source._command(SimpleNamespace(linear=SimpleNamespace(x=0.1),
-                                            angular=SimpleNamespace(z=0.02)))
+                source._command(
+                    SimpleNamespace(linear=SimpleNamespace(x=0.08), angular=SimpleNamespace(z=0.01))
+                )
+            source._command(
+                SimpleNamespace(linear=SimpleNamespace(x=0.1), angular=SimpleNamespace(z=0.02))
+            )
         source._step()
     source.finish_recording()
 
@@ -1512,8 +1545,10 @@ def test_motion_ordinary_record_replay_roundtrip(monkeypatch, tmp_path):
     metadata, ticks = read_motion([json.loads(line) for line in frozen_bytes.splitlines()])
     import shared_layers_sensor_source
 
-    assert metadata["source_sha256"] == hashlib.sha256(
-        Path(shared_layers_sensor_source.__file__).read_bytes()).hexdigest()
+    assert (
+        metadata["source_sha256"]
+        == hashlib.sha256(Path(shared_layers_sensor_source.__file__).read_bytes()).hexdigest()
+    )
     assert metadata["format_sha256"] == MOTION_FORMAT_SHA256
     assert ticks[0]["command"]["ros_offset_ns"] == ticks[0]["offset_ns"]
     assert ticks[0]["dt"] == 0.05
@@ -1535,8 +1570,11 @@ def test_motion_ordinary_record_replay_roundtrip(monkeypatch, tmp_path):
     assert replay.input_complete
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     assert replay.trace.rows[0]["sha256"] == digest
-    for before, after in zip(original, (replay.tf.rows, replay.wheel.rows,
-                                       replay.imu.rows, replay.scan.rows), strict=True):
+    for before, after in zip(
+        original,
+        (replay.tf.rows, replay.wheel.rows, replay.imu.rows, replay.scan.rows),
+        strict=True,
+    ):
         assert len(before) == len(after)
         for a, b in zip(before, after, strict=True):
             assert a.header.stamp - metadata["ros_stamp_origin_ns"] == b.header.stamp - origin
@@ -1544,14 +1582,17 @@ def test_motion_ordinary_record_replay_roundtrip(monkeypatch, tmp_path):
             # NaN raw values use JSON null in the frozen file, never become free.
             if hasattr(a, "ranges"):
                 assert [None if math.isnan(v) else v for v in a.ranges] == [
-                    None if math.isnan(v) else v for v in b.ranges]
+                    None if math.isnan(v) else v for v in b.ranges
+                ]
                 a.ranges = b.ranges = []
             assert a == b
     operations = [r for r in source.trace.rows if r["stage"] == "input_operation_due"]
     replay_operations = [r for r in replay.trace.rows if r["stage"] == "input_operation_due"]
     assert operations == replay_operations
-    assert [r["offset_ns"] for r in operations] == [ticks[600]["offset_ns"],
-                                                   ticks[1196]["offset_ns"]]
+    assert [r["offset_ns"] for r in operations] == [
+        ticks[600]["offset_ns"],
+        ticks[1196]["offset_ns"],
+    ]
     assert list(replay.operations) == ["save", "restore_export"]
 
 
@@ -1580,34 +1621,178 @@ async def test_motion_replay_outputs_cannot_change_frozen_inputs(monkeypatch, tm
         # Late delivery is visible and never restamped; outputs differ throughout replay.
         clock.ns = origin + tick["offset_ns"] + 7_000_000
         steady.ns += 50_000_000
-        replay._command(SimpleNamespace(linear=SimpleNamespace(x=-0.8),
-                                        angular=SimpleNamespace(z=1.7)))
+        replay._command(
+            SimpleNamespace(linear=SimpleNamespace(x=-0.8), angular=SimpleNamespace(z=1.7))
+        )
         replay._step()
         assert replay.wheel.rows[-1].pose.pose.position.x == tick["pose"][0]
         assert replay.wheel.rows[-1].twist.twist.linear.x == tick["twist"][0]
         assert replay.wheel.rows[-1].header.stamp == origin + tick["offset_ns"]
         saves += _reference_save_due(replay)
         if i in (20, 21):
+
             class ObservedClient:
                 def __init__(self, progress):
                     self.progress = progress
 
                 async def request(self, kind, **fields):
                     assert kind == "navigation.task_status" and fields == plan
-                    return dict(ok=True, execution_id="original",
-                                progress=self.progress)
+                    return dict(ok=True, execution_id="original", progress=self.progress)
 
             progress = dict(plan, status="failed") if i == 20 else None
             await observer.route_status(ObservedClient(progress), plan)
     replay._step()
     assert len(replay.wheel.rows) == 1200 and len(replay.scan.rows) == 300
     assert saves == 1 and list(replay.operations) == ["restore_export"]
-    assert all(r["publication_lateness_ns"] == 7_000_000 for r in replay.trace.rows
-               if r["stage"] == "raw_input")
+    assert all(
+        r["publication_lateness_ns"] == 7_000_000
+        for r in replay.trace.rows
+        if r["stage"] == "raw_input"
+    )
     assert [r["status"] for r in replay.trace.rows if r["stage"] == "route_state"] == [
-        "failed", "missing"]
+        "failed",
+        "missing",
+    ]
     assert hashlib.sha256(path.read_bytes()).hexdigest() == digest
     rows = [json.loads(line) for line in path.read_text().splitlines()]
     rows[-1]["complete"] = False
     with pytest.raises(ValueError, match="incomplete ordinary input"):
         read_motion(rows)
+
+
+@native_only
+async def test_fixture_pump_keeps_dds_running_during_observation_io(tmp_path):
+    """A held observation must not stop the executor's ordinary scan/TF timers."""
+    rclpy = pytest.importorskip("rclpy")
+    from geometry_msgs.msg import TransformStamped
+    from rclpy.context import Context
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
+    from sensor_msgs.msg import LaserScan
+    from shared_layers_native_fixture import NativeFixture
+    from tf2_msgs.msg import TFMessage
+
+    assert os.environ.get("ROS_LOCALHOST_ONLY") == "1"
+    context = Context()
+    rclpy.init(context=context)
+    executor = SingleThreadedExecutor(context=context)
+    node = Node("fixture_pump_regression", context=context)
+    executor.add_node(node)
+    fixture = NativeFixture(tmp_path)
+    fixture.node, fixture.executor = node, executor
+    fixture.observed_session = object()
+    entered, completed = asyncio.Event(), asyncio.Event()
+    release, second_release = asyncio.Event(), asyncio.Event()
+    scan_received, tf_received = asyncio.Event(), asyncio.Event()
+    counts = {"started": 0, "active": 0, "peak": 0, "published": 0}
+    samples = []
+
+    async def held_observation(session):
+        counts["started"] += 1
+        counts["active"] += 1
+        counts["peak"] = max(counts["peak"], counts["active"])
+        entered.set()
+        try:
+            await (release if counts["started"] == 1 else second_release).wait()
+        finally:
+            counts["active"] -= 1
+            completed.set()
+
+    fixture.observe = held_observation
+    scan_pub = node.create_publisher(
+        LaserScan, "/private_fixture_pump/scan", qos_profile_sensor_data
+    )
+    tf_pub = node.create_publisher(TFMessage, "/private_fixture_pump/tf", qos_profile_sensor_data)
+
+    def receive_scan(message):
+        if entered.is_set() and not release.is_set():
+            samples.append(("scan", time.monotonic_ns(), message.header.stamp.sec))
+            scan_received.set()
+
+    def receive_tf(message):
+        if entered.is_set() and not release.is_set():
+            samples.append(("tf", time.monotonic_ns(), message.transforms[0].header.stamp.sec))
+            tf_received.set()
+
+    subscriptions = [
+        node.create_subscription(
+            LaserScan, "/private_fixture_pump/scan", receive_scan, qos_profile_sensor_data
+        ),
+        node.create_subscription(
+            TFMessage, "/private_fixture_pump/tf", receive_tf, qos_profile_sensor_data
+        ),
+    ]
+
+    def publish():
+        # Publish only after the IO barrier is held; earlier queued DDS is insufficient.
+        if not entered.is_set() or release.is_set():
+            return
+        scan = LaserScan()
+        scan.header.stamp = node.get_clock().now().to_msg()
+        scan.header.frame_id = "laser"
+        scan.angle_min = scan.angle_max = 0.0
+        scan.angle_increment = 1.0
+        scan.range_min, scan.range_max, scan.ranges = 0.1, 20.0, [2.0]
+        transform = TransformStamped()
+        transform.header = scan.header
+        transform.header.frame_id, transform.child_frame_id = "odom", "base_link"
+        transform.transform.rotation.w = 1.0
+        scan_pub.publish(scan)
+        tf_pub.publish(TFMessage(transforms=[transform]))
+        counts["published"] += 1
+
+    timer = node.create_timer(0.02, publish)
+    pump = None
+    try:
+        deadline = time.monotonic() + 5
+        while not (scan_pub.get_subscription_count() and tf_pub.get_subscription_count()):
+            assert time.monotonic() < deadline, "private DDS endpoints did not match"
+            executor.spin_once(timeout_sec=0)
+            await asyncio.sleep(0.005)
+        pump = asyncio.create_task(fixture._pump())
+        await asyncio.wait_for(entered.wait(), 1)
+        try:
+            await asyncio.wait_for(asyncio.gather(scan_received.wait(), tf_received.wait()), 1)
+        except asyncio.TimeoutError:
+            pytest.fail("observation IO stopped the same pump's real scan/TF DDS callbacks")
+        await asyncio.sleep(0.22)
+        assert not release.is_set() and counts["published"] > 1
+        assert counts["started"] == counts["peak"] == counts["active"] == 1
+        # Cancelling the pump must join the in-flight observation before ROS teardown.
+        pump.cancel()
+        await asyncio.sleep(0.02)
+        assert not pump.done(), "in-flight observation was abandoned on exit"
+        release.set()
+        result = await asyncio.gather(pump, return_exceptions=True)
+        assert isinstance(result[0], asyncio.CancelledError)
+        assert completed.is_set() and counts["active"] == 0
+        assert counts["started"] == 1
+
+        failure = AssertionError("original observation failure")
+
+        async def failing_observation(session):
+            raise failure
+
+        fixture.observe = failing_observation
+        pump = fixture.pump_task = asyncio.create_task(fixture._pump())
+        with pytest.raises(AssertionError) as raised:
+            await fixture.wait(lambda: False, timeout=1)
+        assert raised.value is failure
+        assert pump.done() and pump.exception() is failure
+    finally:
+        release.set()
+        second_release.set()
+        if pump is not None:
+            pump.cancel()
+            await asyncio.gather(pump, return_exceptions=True)
+        node.destroy_timer(timer)
+        for subscription in subscriptions:
+            node.destroy_subscription(subscription)
+        executor.remove_node(node)
+        node.destroy_node()
+        executor.shutdown()
+        context.shutdown()
+        (tmp_path / "pump-dds-observation.json").write_text(
+            json.dumps({"counts": counts, "samples": samples})
+        )

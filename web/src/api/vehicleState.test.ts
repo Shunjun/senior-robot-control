@@ -144,7 +144,7 @@ it('decodes the approved scan identity and rejects unsafe or inconsistent displa
     map_ref: { map_id: 'map', reference_revision: 1 }, map_generation: 'R1',
     backend_boot: 'boot', source_id: 'a'.repeat(64), sequence: 1,
     sampled_at: 10, expires_at: 10.5, remaining_s: .2,
-    hit_count: 2048, preview_count: 1, display_mode: 'preview', valid: true,
+    hit_count: 5400, preview_count: 1, display_mode: 'preview', valid: true,
   };
   const parse = (scan_layer: unknown) => parseInbound(JSON.stringify({
     v: 1, robot_id: 'robot', session_id: 'cloud', connection_epoch: 1,
@@ -156,7 +156,7 @@ it('decodes the approved scan identity and rejects unsafe or inconsistent displa
   }));
   expect(parse(layer)).toMatchObject({ payload: { scan_layer: layer } });
   for (const patch of [
-    { sequence: 2 ** 53 }, { remaining_s: .51 }, { expires_at: 11 },
+    { sequence: 2 ** 53 }, { hit_count: 2 ** 53 }, { remaining_s: .51 }, { expires_at: 11 },
     { source_id: 'guess' }, { preview_count: 2 }, { valid: false }, { frame: 'map' },
   ]) expect(parse({ ...layer, ...patch })).toBeNull();
 });

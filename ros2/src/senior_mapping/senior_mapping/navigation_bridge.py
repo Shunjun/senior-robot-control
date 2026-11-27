@@ -27,6 +27,7 @@ from senior_mapping.shared_scan import (
 )
 from senior_mapping.workspace import WorkspaceGrid
 from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.source_order import SourceOrder
 from vehicle_core.values import MapRef, Pose2D
 
 
@@ -44,6 +45,7 @@ class NativeNavigationBridge:
         self.slot: Any = None
         self._scan: QualifiedScan | None = None
         self._last_key: Any = None
+        self._scan_order = SourceOrder()
         self._reference_floor: Any = None
         self._reference_floor_steady_ns = 0
         self._capture: Any = None
@@ -83,7 +85,7 @@ class NativeNavigationBridge:
             and scan.capture.time.sample_steady_ns > self._navigation_floor_ns
             and w is not None
             and w.source is not None
-            and tuple(asdict(w.source).values()) == scan.key.source
+            and w.source.coordinates == scan.key.source
         ):
             lease = scan.valid_until_steady_ns
         contract = self.contract or {}
@@ -189,6 +191,7 @@ class NativeNavigationBridge:
             self._offer_authorization()
 
     def begin(self, boot: str, odom_frame: str = "odom") -> None:
+        self._scan_order = SourceOrder()
         self._scan = self._last_key = self._reference_floor = self._capture = None
         self._retired = False
         self._reference_floor_steady_ns = time.monotonic_ns()
@@ -369,10 +372,18 @@ class NativeNavigationBridge:
             and previous.evidence_key is not None
             and w.evidence_key is not None
         ):
-            if w.evidence_key.sequence < previous.evidence_key.sequence:
+            if (
+                w.evidence_key.stamp_ns is None
+                or previous.evidence_key.stamp_ns is None
+                or w.evidence_key.stamp_ns < previous.evidence_key.stamp_ns
+            ):
                 raise DomainError(ErrorCode.CONFLICT, "late fixed evidence key")
         if self._last_key is not None and w.evidence_key is not None:
-            if w.evidence_key.sequence > self._last_key.sequence:
+            if (
+                w.evidence_key.stamp_ns is None
+                or self._last_key.stamp_ns is None
+                or w.evidence_key.stamp_ns > self._last_key.stamp_ns
+            ):
                 raise DomainError(ErrorCode.CONFLICT, "fixed evidence is ahead of qualified input")
         if self._last_key is not None and (
             w.source is None or w.source != SourceIdentity.from_key(self._last_key)
@@ -440,8 +451,8 @@ class NativeNavigationBridge:
             or scan.capture.time.sample_steady_ns <= self._reference_floor_steady_ns
         ):
             return
-        if self._last_key is not None and (
-            scan.key.source != self._last_key.source or scan.key.sequence <= self._last_key.sequence
+        if not self._scan_order.accept(
+            scan.key.bridge_boot_id, scan.key.capture_generation, scan.capture.stamp_ns
         ):
             return
         self._last_key, self._capture = scan.key, capture

@@ -1,15 +1,16 @@
-"""Retired wall-clock future queues have no runtime or compatibility branch."""
+"""Soft source invalidation does not blacklist future input."""
 
 from senior_motion_control.source_fences import SourceEpochFence
 
 
-def test_replaced_deferred_epoch_cannot_revive_or_exhaustion_be_forgotten():
+def test_source_invalidation_recovers_without_blacklist_or_exhaustion():
     fence = SourceEpochFence(max_retired=2)
     assert fence.accept("active")
     fence.retire_active()
     fence.retire_unadmitted("deferred")
     assert fence.active is None
-    assert fence.is_retired("active") and fence.is_retired("deferred")
-    assert not fence.accept("active") and not fence.accept("deferred")
+    assert not fence.is_retired("active")
+    assert fence.accept("active")
+    assert fence.accept("deferred")
     fence.retire_unadmitted("overflow")
-    assert not fence.accept("fresh")
+    assert fence.accept("fresh")

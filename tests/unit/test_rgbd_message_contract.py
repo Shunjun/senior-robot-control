@@ -3,21 +3,12 @@ from pathlib import Path
 MESSAGES = Path(__file__).resolve().parents[2] / "ros2/src/senior_interfaces/msg"
 
 
-def test_tf_edge_uses_bounded_frame_names_and_fixed_pose():
-    schema = (MESSAGES / "StaticTransformEdge.msg").read_text()
-    assert "string<=128 parent_frame" in schema
-    assert "string<=128 child_frame" in schema
-    assert "float64[3] translation" in schema
-    assert "float64[4] rotation_xyzw" in schema
-    assert "builtin_interfaces/Time stamp" in schema
-
-
 def test_candidate_retains_eight_headers_and_static_binding():
     schema = (MESSAGES / "RgbdMotionCandidate.msg").read_text()
     for prefix in ("first", "second"):
         for stream in ("rgb", "depth", "rgb_info", "depth_info"):
             assert f"RawCaptureHeader {prefix}_{stream}" in schema
-        assert f"BoundedStaticTf {prefix}_tf" in schema
+        assert f"tf2_msgs/TFMessage {prefix}_tf" in schema
     assert "bool hard_error_qualified" in schema
     assert "string<=64 preprocessing_version" in schema
 

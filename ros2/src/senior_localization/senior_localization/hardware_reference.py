@@ -15,6 +15,7 @@ from senior_sensor_ingress.native_receipt import with_dds_info
 from senior_localization.navigation_reference import load_navigation_reference
 from vehicle_core.sample_time import SampleTime
 from vehicle_core.sensor_policy import default_policy
+from vehicle_core.source_order import SourceOrder
 from vehicle_core.values import Pose2D
 
 
@@ -34,7 +35,7 @@ class HardwareReference:
         self._pose_identity = None
         self._pose_stamp_ns = -1
         self._pose_sequence = 0
-        self._retired_pose_sources = set()
+        self._pose_order = SourceOrder()
         self._pose_topic = self.config.pose_topic
         self._map_serial = 0
         self._pose_map_serial = -1
@@ -183,7 +184,7 @@ class HardwareReference:
             ):
                 return None
             gid = bytes(endpoints[0].endpoint_gid)
-            return gid if gid and any(gid) else None
+            return gid
         from senior_motion_estimation.motion_observation_adapter import observation_origin
 
         origin = observation_origin(
@@ -246,50 +247,23 @@ class HardwareReference:
             self._grid
             if (
                 self._map_gid is not None
-                and self._map_gid == self._source("/map", self.config.map_publisher)
+                and self._source("/map", self.config.map_publisher) is not None
             )
             else None
         )
 
     def _accept_pose_time(self, gid: bytes, sample: SampleTime, info: dict) -> bool:
-        generation, sequence = info["receipt_generation"], info["receipt_sequence"]
-        if (
-            type(generation) is not int
-            or generation < 1
-            or type(sequence) is not int
-            or sequence < 1
-        ):
-            raise ValueError("invalid native pose receipt identity")
-        identity = (gid, generation, sample.clock_generation)
-        # A late retired writer/clock segment cannot revoke its replacement.
-        if identity in self._retired_pose_sources:
-            return False
-        current = self._pose_identity
-        if current is not None and (
-            generation < current[1]
-            or (generation == current[1] and sample.clock_generation < current[2])
-        ):
-            return False
-        if current != identity:
-            if current is not None:
-                if len(self._retired_pose_sources) >= 256:
-                    self._pose = None
-                    return False
-                self._retired_pose_sources.add(current)
-            self._pose_identity = identity
-            self._pose_stamp_ns, self._pose_sequence = -1, 0
+        if not hasattr(self, "_pose_order"):
+            self._pose_order = SourceOrder()  # //Compatible: isolated facade fixtures.
+        boot = str(info.get("receipt_boot_id", "legacy-receiver"))
+        # Only the managed NativeReceipt channel supplies/changes this identity.
+        self._pose_order.confirm_boot(boot)
+        accepted = self._pose_order.accept(boot, info["receipt_generation"], sample.stamp_ns)
+        if accepted:
+            self._pose_stamp_ns = sample.stamp_ns
+            self._pose_sequence = info.get("receipt_sequence", 0)
             self._pose = None
-        if sequence <= self._pose_sequence:
-            return False
-        self._pose_sequence = sequence
-        if sample.stamp_ns <= self._pose_stamp_ns:
-            # Re-delivery never changes the original receipt or deadline.
-            if sample.stamp_ns < self._pose_stamp_ns:
-                self._pose = None
-            return False
-        self._pose_stamp_ns = sample.stamp_ns
-        self._pose = None
-        return True
+        return accepted
 
     @with_dds_info
     def _on_pose(self, msg, info):
@@ -370,7 +344,7 @@ class HardwareReference:
             < round(min(self.config.max_age_s, default_policy().hard_age_s) * 1e9)
         ):
             reason = "age"
-        elif self._pose_gid != self._source(self._pose_topic, self.config.pose_publisher):
+        elif self._source(self._pose_topic, self.config.pose_publisher) is None:
             reason = "source"
         if reason is not None:
             self._diagnose(

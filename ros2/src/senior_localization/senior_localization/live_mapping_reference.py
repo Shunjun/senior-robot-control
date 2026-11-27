@@ -18,6 +18,7 @@ from senior_mapping.workspace import WorkspaceGrid
 
 from vehicle_core.sample_time import SampleTime
 from vehicle_core.sensor_policy import default_policy
+from vehicle_core.source_order import SourceOrder
 from vehicle_core.values import MapRef, Pose2D
 
 
@@ -57,6 +58,7 @@ class LiveMappingReference:
         self._odom_basis: Pose2D | None = None
         self._source: tuple[Any, ...] | None = None
         self._latest: tuple[SampleTime, Pose2D, int] | None = None
+        self._pose_order = SourceOrder()
         self._available = False
         self._authorization: ReferenceAuthorization | None = None
         self._last_authorization: ReferenceAuthorization | None = None
@@ -70,6 +72,7 @@ class LiveMappingReference:
         self._map_owner: Callable[[], bool] | None = None
 
     def begin(self, boot: str) -> None:
+        self._pose_order = SourceOrder()
         self.enabled, self.boot = True, boot
         self.withdraw()
         self._source = self._latest = None
@@ -106,7 +109,7 @@ class LiveMappingReference:
             self._display = None
             self.display_reason = "display_integer_out_of_range"
             return
-        source = dict(zip(tuple(ScanKey.__dataclass_fields__)[:-1], key.source, strict=True))
+        source = key.source_payload
         source_id = hashlib.sha256(
             json.dumps(source, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
                 "utf-8"
@@ -213,8 +216,8 @@ class LiveMappingReference:
             or auth is None
             or auth.status != "selected"
             or key is None
-            or auth.source
-            != dict(zip(tuple(ScanKey.__dataclass_fields__)[:-1], key.source, strict=True))
+            or auth.source is None
+            or ScanKey(**auth.source, sequence=0).source != key.source
             or not now < auth.lease_until_steady_ns
             or self._grid is None
             or auth.map_id != self._grid.map_ref.map_id
@@ -242,7 +245,9 @@ class LiveMappingReference:
                     )
                 )
                 or tuple(row.key.source) != tuple(key.source)
-                or row.key.sequence > key.sequence
+                or row.key.stamp_ns is None
+                or key.stamp_ns is None
+                or row.key.stamp_ns > key.stamp_ns
             ):
                 return False
             if (
@@ -288,11 +293,8 @@ class LiveMappingReference:
             return
         source = (
             header.bridge_boot_id,
-            header.source_epoch,
             header.capture_generation,
             header.clock_generation,
-            header.raw_gid,
-            header.bridge_gid,
         )
         if self._source is not None and source != self._source:
             self.invalidate_pose()
@@ -304,15 +306,11 @@ class LiveMappingReference:
             header.sample_steady_ns,
             header.clock_generation,
         )
-        if self._latest is not None and header.sequence <= self._latest[2]:
-            # A delayed receipt has no authority over a newer accepted sample.
-            if (
-                header.sequence == self._latest[2]
-                and (sample, odometry, header.sequence) != self._latest
-            ):
-                self.invalidate_pose()
+        # This is the pose consumer's frontier; sequence/GID are not ordering facts.
+        if not self._pose_order.accept(
+            header.bridge_boot_id, header.capture_generation, sample.stamp_ns
+        ):
             return
-        self._source = source
         self._latest = (sample, odometry, header.sequence)
         self._available = True
 

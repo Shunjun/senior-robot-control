@@ -8,5 +8,5 @@ senior_interfaces/RawCaptureHeader capture
 bool valid
 string<=64 reason
 uint64 valid_until_steady_ns
-string<=128 frame_id
-geometry_msgs/Point32[<=2048] points
+string frame_id
+geometry_msgs/Point32[] points

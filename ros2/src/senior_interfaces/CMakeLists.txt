@@ -7,6 +7,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(tf2_msgs REQUIRED)
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BoundedDepthEvidence.msg"
   "msg/BoundedFilteredScan.msg"
@@ -16,7 +17,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/BoundedRawLaserScan.msg"
   "msg/BoundedSafetyScan.msg"
   "msg/BoundedSemanticEvidence.msg"
-  "msg/BoundedStaticTf.msg"
   "msg/DepthSample.msg"
   "msg/DriveExecutionFeedback.msg"
   "msg/EgressHeader.msg"
@@ -35,7 +35,6 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ScanMotion.msg"
   "msg/SemanticAssociation.msg"
   "msg/SemanticObject.msg"
-  "msg/StaticTransformEdge.msg"
   "srv/CaptureGraph.srv"
   "srv/MatchStationaryScan.srv"
   "srv/ReadGraph.srv"
@@ -44,7 +43,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ReadMappingGrid.srv"
   "srv/ReadMappingPose.srv"
   "srv/ReadLoadedGraph.srv"
-  DEPENDENCIES builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs
+  DEPENDENCIES builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs tf2_msgs
 )
-ament_export_dependencies(rosidl_default_runtime builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs)
+ament_export_dependencies(rosidl_default_runtime builtin_interfaces geometry_msgs std_msgs nav_msgs sensor_msgs tf2_msgs)
 ament_package()

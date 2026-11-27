@@ -28,11 +28,11 @@ TEST(CaptureLedger, MatchesExactIssuedHeaderAndNeverExtendsFirstReceipt)
   changed.received_steady_ns = 10100000000ULL;
   EXPECT_EQ(ledger.match(0, changed, 10.5), CaptureLedger::Match::missing);
   // A queued/retransmitted header keeps the original .2 s sensor age.
-  EXPECT_EQ(ledger.match(0, first, 10.85), CaptureLedger::Match::retired);
-  EXPECT_EQ(ledger.match(0, first, 11.001), CaptureLedger::Match::retired);
+  EXPECT_EQ(ledger.match(0, first, 10.85), CaptureLedger::Match::missing);
+  EXPECT_EQ(ledger.match(0, first, 11.001), CaptureLedger::Match::missing);
 }
 
-TEST(CaptureLedger, OldGenerationIsRetiredAndCapacityIsBounded)
+TEST(CaptureLedger, OldGenerationIsRejectedAndCapacityIsBounded)
 {
   CaptureLedger ledger(2, 1000.0);
   RawCaptureHeader value;
@@ -50,14 +50,22 @@ TEST(CaptureLedger, OldGenerationIsRetiredAndCapacityIsBounded)
   ASSERT_TRUE(ledger.observe(0, value, 10.0));
   auto old = value;
   value.sequence = 2;
+  value.stamp.nanosec = 2;
+  value.received_ros.nanosec = 2;
+  value.received_steady_ns = 10000000000ULL;
+  value.sample_steady_ns = value.received_steady_ns;
   ASSERT_TRUE(ledger.observe(0, value, 10.0));
   value.sequence = 3;
+  value.stamp.nanosec = 3;
+  value.received_ros.nanosec = 3;
+  value.received_steady_ns = 10000000000ULL;
+  value.sample_steady_ns = value.received_steady_ns;
   ASSERT_TRUE(ledger.observe(0, value, 10.0));
-  EXPECT_EQ(ledger.match(0, old, 10.1), CaptureLedger::Match::retired);
+  EXPECT_EQ(ledger.match(0, old, 10.1), CaptureLedger::Match::missing);
   auto retired = value;
   value.capture_generation = 2;
   value.sequence = 4;
   ASSERT_TRUE(ledger.observe(0, value, 10.1));
-  EXPECT_EQ(ledger.match(0, retired, 10.1), CaptureLedger::Match::retired);
+  EXPECT_EQ(ledger.match(0, retired, 10.1), CaptureLedger::Match::old_generation);
   EXPECT_EQ(ledger.match(0, value, 10.1), CaptureLedger::Match::exact);
 }

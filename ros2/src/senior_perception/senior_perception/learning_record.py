@@ -24,8 +24,8 @@ class FrozenFact(BaseModel):
 
 
 class LearningGeometry(FrozenFact):
-    body_frame: str = Field(min_length=1, max_length=256)
-    sensor_frame: str = Field(min_length=1, max_length=256)
+    body_frame: str = Field(min_length=1)
+    sensor_frame: str = Field(min_length=1)
     source_kind: Literal["scan"] = "scan"
     physical_polygon: tuple[Point, ...] = Field(min_length=3)
     sensor_to_body: tuple[Coordinate, Coordinate, Coordinate]

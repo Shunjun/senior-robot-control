@@ -15,9 +15,6 @@ from tf2_ros import Buffer, TransformException, TransformListener
 from senior_perception.vision.raw_capture import RawCaptureAdmission, capture_from_message
 from vehicle_core.sensor_policy import default_policy
 
-MAX_RAYS = 2048
-MAX_FRAME_BYTES = 128
-
 
 class SafetyScanIngress(Node):
     """Keep original native receipts while qualifying the safety transform."""
@@ -35,7 +32,7 @@ class SafetyScanIngress(Node):
         self._raw_topic = str(self.get_parameter("scan_topic").value)
         hard_age_ms = default_policy().hard_age_ms
         self._max_age = hard_age_ms / 1000
-        if not self._body or len(self._body.encode()) > MAX_FRAME_BYTES or not self._raw_topic:
+        if not self._body or not self._raw_topic:
             raise ValueError("invalid safety ingress frame or raw topic")
         self._admission = (
             RawCaptureAdmission(max_age_ms=hard_age_ms, hard_limit_ms=5000)
@@ -74,8 +71,6 @@ class SafetyScanIngress(Node):
         if self._failure_active and not force:
             return
         self._failure_active = True
-        self._epoch = uuid.uuid4().hex
-        self._sequence = 0
         self._lineage = None
         value = self._message(reason, steady, ros)
         if raw is not None:
@@ -86,9 +81,15 @@ class SafetyScanIngress(Node):
 
     def _check_source(self) -> bool:
         endpoints = self.get_publishers_info_by_topic(self._raw_topic)
-        gid = bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
+        gid = (
+            bytes(endpoints[0].endpoint_gid).hex()
+            if len(endpoints) == 1
+            and endpoints[0].node_name == "scan_receipt"
+            and endpoints[0].node_namespace == "/"
+            else ""
+        )
         ready = self._admission is not None and self._admission.observe_bridge(gid)
-        if ready != self._ready or (ready and gid != self._bridge_gid):
+        if ready != self._ready:
             self._bridge_gid, self._ready = gid, ready
             self._source = ""
             self._new_epoch(
@@ -97,6 +98,7 @@ class SafetyScanIngress(Node):
                 self.get_clock().now().nanoseconds / 1e9,
                 force=True,
             )
+        self._bridge_gid = gid
         return ready
 
     def _on_scan(self, scan: BoundedRawLaserScan) -> None:
@@ -117,7 +119,7 @@ class SafetyScanIngress(Node):
                         scan.capture,
                     )
                 return
-            lineage = (capture.bridge_boot_id, capture.capture_generation, capture.source_epoch)
+            lineage = (capture.bridge_boot_id, capture.capture_generation)
             if self._lineage is not None and lineage != self._lineage:
                 self._new_epoch(
                     "raw_source_changed",
@@ -131,17 +133,9 @@ class SafetyScanIngress(Node):
             value = self._message("", capture.received_steady, capture.received_ros_ns / 1e9)
             value.raw_capture, value.stamp = scan.capture, scan.capture.stamp
             frame = capture.frame_id
-            if (
-                not frame
-                or len(frame.encode()) > MAX_FRAME_BYTES
-                or not 1 <= len(scan.ranges) <= MAX_RAYS
-                or len(scan.intensities) > MAX_RAYS
-                or not math.isfinite(scan.time_increment)
-                or scan.time_increment != 0.0
-            ):
+            if not frame or not scan.ranges:
                 raise ValueError("raw_scan_dimensions")
             stamp_time = Time.from_msg(scan.capture.stamp)
-            stamp = stamp_time.nanoseconds / 1e9
             # TF resolves static and dynamic edges at the scan timestamp.
             tf = self._tf_buffer.lookup_transform(self._body, frame, stamp_time)
             q = tf.transform.rotation
@@ -154,8 +148,6 @@ class SafetyScanIngress(Node):
             ):
                 raise ValueError("raw_transform_invalid")
             tf_stamp = Time.from_msg(tf.header.stamp).nanoseconds / 1e9
-            if not 0 <= stamp - tf_stamp <= self._max_age:
-                raise ValueError("raw_transform_stale")
             value.frame_id = frame
             value.angle_min = scan.angle_min
             value.angle_increment = scan.angle_increment

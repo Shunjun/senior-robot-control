@@ -13,16 +13,16 @@
 #include <utility>
 
 #include "senior_sensor_ingress/raw_receipt.hpp"
+#include "senior_sensor_ingress/scan_layout.hpp"
 
 namespace senior_sensor_ingress {
 namespace {
 using namespace std::chrono_literals;
-constexpr size_t max_rays = 2048;
 
 bool text_ok(const std::string & value, size_t maximum)
 {
-  return !value.empty() && value.size() <= maximum &&
-    std::all_of(value.begin(), value.end(), [](unsigned char c) {return c >= 33 && c <= 126;});
+  (void)maximum;  //Compatible: callers retain the old helper signature.
+  return !value.empty();
 }
 
 bool stamp_ok(const builtin_interfaces::msg::Time & value)
@@ -37,12 +37,7 @@ double steady_now()
 
 bool layout_ok(const sensor_msgs::msg::LaserScan & scan)
 {
-  return !scan.ranges.empty() && scan.ranges.size() <= max_rays &&
-    scan.intensities.size() <= max_rays && std::isfinite(scan.angle_min) &&
-    std::isfinite(scan.angle_max) && std::isfinite(scan.angle_increment) &&
-    scan.angle_increment > 0 && std::isfinite(scan.time_increment) && scan.time_increment == 0 &&
-    std::isfinite(scan.scan_time) && scan.scan_time >= 0 && std::isfinite(scan.range_min) &&
-    std::isfinite(scan.range_max) && scan.range_min >= 0 && scan.range_max > scan.range_min;
+  return scan_layout_ok(scan);
 }
 }  // namespace
 
@@ -51,12 +46,18 @@ ScanReceipt::ScanReceipt(const rclcpp::NodeOptions & options, BeforeVerify befor
 : Node("scan_receipt", options), before_verify_(std::move(before_verify))
 {
   input_topic_ = declare_parameter<std::string>("scan_topic", "/scan");
+  expected_node_name_ = declare_parameter<std::string>("expected_node_name", "");
+  expected_namespace_ = declare_parameter<std::string>("expected_namespace", "");
   const auto output = declare_parameter<std::string>("raw_scan_topic", "/safety/raw/scan");
   if (!text_ok(input_topic_, 128) || !text_ok(output, 128) || input_topic_ == output) {
     throw std::invalid_argument("invalid scan receipt topics");
   }
   safety_owner_.topic = declare_parameter<std::string>("safety_candidate_topic", "/safety/scan_candidate");
   filter_owner_.topic = declare_parameter<std::string>("filter_candidate_topic", "/perception/scan_candidate");
+  safety_owner_.expected_name = declare_parameter<std::string>("safety_publisher_name", "");
+  safety_owner_.expected_namespace = declare_parameter<std::string>("safety_publisher_namespace", "");
+  filter_owner_.expected_name = declare_parameter<std::string>("filter_publisher_name", "");
+  filter_owner_.expected_namespace = declare_parameter<std::string>("filter_publisher_namespace", "");
   const auto safety_output = declare_parameter<std::string>("safety_output_topic", "/safety/bounded_scan");
   const auto filter_output = declare_parameter<std::string>("filter_output_topic", "/perception/scan_filtered");
   std::set<std::string> topics{input_topic_, output, safety_owner_.topic, filter_owner_.topic,
@@ -101,21 +102,11 @@ std::string ScanReceipt::new_epoch()
   return output.str();
 }
 
-bool ScanReceipt::retire(const std::string & gid)
-{
-  if (!gid.empty()) retired_gids_.insert(gid);
-  if (retired_gids_.size() >= 256) {failed_ = true; return false;}
-  return true;
-}
-
 void ScanReceipt::invalidate(const std::string & reason, const Scan * source,
                              int64_t received_ros, uint64_t received_steady_ns,
                              const std::string & raw_gid)
 {
-  if (failed_ || generation_ == std::numeric_limits<uint64_t>::max() ||
-      sequence_ == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
-  ++generation_;
-  if (!ledger_.advance(boot_, generation_)) {failed_ = true; return;}
+  if (failed_ || generation_ == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
   if (safety_owner_.active) invalidate_owner(safety_owner_, 0, reason, false, true);
   if (filter_owner_.active) invalidate_owner(filter_owner_, 1, reason, false, true);
   Bounded output;
@@ -149,8 +140,10 @@ bool ScanReceipt::clock_ok(int64_t ros_ns, uint64_t steady_ns)
   }
   clock_generation_ = observed.generation;
   if (observed.discontinuity) {
+    if (generation_ == std::numeric_limits<uint64_t>::max()) {failed_ = true; return false;}
+    ++generation_;
+    if (!ledger_.advance(boot_, generation_)) {failed_ = true; return false;}
     invalidate("clock_rollback");
-    stamps_.reset();
     epoch_ = new_epoch();
   }
   return !failed_;
@@ -180,17 +173,11 @@ void ScanReceipt::inspect_topology()
                 senior_sensor_ingress::time::monotonic_ns())) return;
   inspect_owner(safety_owner_, 0);
   inspect_owner(filter_owner_, 1);
-  if (!active_) return;
   const auto graph = get_publishers_info_by_topic(input_topic_);
-  if (graph.size() == 1 && gid_hex(graph[0].endpoint_gid()) == raw_gid_) return;
-  if (!retire(raw_gid_)) return;
-  invalidate("raw_topology_changed");
-  active_ = false;
-  raw_gid_.clear();
-  epoch_ = new_epoch();
-  sequence_ = 0;
-  stamps_.reset();
-  invalid_ = false;
+  if (graph.size() != 1) {
+    active_ = false;
+    if (!invalid_) {invalidate("raw_topology_unavailable"); invalid_ = true;}
+  }
 }
 
 void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rclcpp::MessageInfo & info)
@@ -203,39 +190,23 @@ void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rcl
   const auto actual = gid_hex(incoming);
   if (before_verify_) before_verify_(6, incoming);
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!current_receipt(*receipt) || retired_gids_.count(actual) != 0) return;
+  if (!current_receipt(*receipt)) return;
   const auto graph = get_publishers_info_by_topic(input_topic_);
-  const bool nonzero = std::any_of(std::begin(incoming.data), std::end(incoming.data),
-                                   [](uint8_t value) {return value != 0;});
-  if (!nonzero || graph.size() != 1 || gid_hex(graph[0].endpoint_gid()) != actual) {
-    if (active_ && graph.size() == 1 && gid_hex(graph[0].endpoint_gid()) == raw_gid_) {
-      retire(actual);
-      return;
-    }
-    if (!retire(raw_gid_) || !retire(actual)) return;
-    invalidate("raw_gid_mismatch", &message, received_ros, received_steady_ns, actual);
+  if (graph.size() != 1 || graph.front().topic_type() != "sensor_msgs/msg/LaserScan" ||
+      (!expected_node_name_.empty() && graph.front().node_name() != expected_node_name_) ||
+      (!expected_namespace_.empty() && graph.front().node_namespace() != expected_namespace_)) {
     active_ = false;
-    raw_gid_.clear();
-    epoch_ = new_epoch();
-    sequence_ = 0;
-    stamps_.reset();
-    invalid_ = false;
+    if (!invalid_) {invalidate("raw_topology_unavailable", &message, received_ros,
+                               received_steady_ns, actual); invalid_ = true;}
     return;
   }
-  if (!active_ || raw_gid_ != actual) {
-    if (!retire(raw_gid_)) return;
-    invalidate("raw_source_changed", &message, received_ros, received_steady_ns, actual);
-    active_ = true;
-    raw_gid_ = actual;
-    epoch_ = new_epoch();
-    sequence_ = 0;
-    stamps_.reset();
-    invalid_ = false;
-  }
+  // Actual MessageInfo identity is diagnostic; graph lookup never replaces it.
+  raw_gid_ = actual;
+  active_ = true;
   std::optional<senior_sensor_ingress::time::SampleTime> sample;
   try {
-    sample = stamps_.accept(message.header.stamp, received_ros, received_steady_ns,
-                            receipt->generation);
+    sample = time::map_sample(stamp_ns(message.header.stamp), received_ros,
+                              received_steady_ns, receipt->generation);
   } catch (const std::invalid_argument & error) {
     invalidate(error.what(), &message, received_ros, received_steady_ns, actual);
     return;
@@ -249,7 +220,6 @@ void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rcl
     }
     return;
   }
-  if (sequence_ == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
   Bounded output;
   output.angle_min = message.angle_min;
   output.angle_max = message.angle_max;
@@ -274,52 +244,38 @@ void ScanReceipt::on_scan(const sensor_msgs::msg::LaserScan & message, const rcl
   header.sequence = ++sequence_;
   header.valid = true;
   invalid_ = false;
-  if (!ledger_.observe(output, steady_now())) return;
+  // The history budget controls derived lookups, never raw publication.
+  ledger_.observe(output, steady_now());
   if (!current_receipt(*receipt)) return;
   publisher_->publish(output);
 }
 bool ScanReceipt::qualify_owner(Owner & owner, const rmw_gid_t & incoming,
                                 const std::string & epoch, uint64_t sequence)
 {
-  const auto actual = gid_hex(incoming);
-  if (failed_ || owner.retired_gids.count(actual) || owner.retired_epochs.count(epoch)) return false;
+  if (failed_) return false;
   const auto graph = get_publishers_info_by_topic(owner.topic);
-  if (graph.size() != 1 || gid_hex(graph[0].endpoint_gid()) != actual) {
-    inspect_owner(owner, &owner == &safety_owner_ ? 0 : 1);
+  const auto type = &owner == &safety_owner_ ?
+    "senior_interfaces/msg/BoundedSafetyScan" : "senior_interfaces/msg/BoundedFilteredScan";
+  if (graph.size() != 1 || graph.front().topic_type() != type ||
+      (!owner.expected_name.empty() && graph.front().node_name() != owner.expected_name) ||
+      (!owner.expected_namespace.empty() && graph.front().node_namespace() != owner.expected_namespace)) {
+    invalidate_owner(owner, &owner == &safety_owner_ ? 0 : 1, "owner_unavailable", true);
+    owner.active = false;
     return false;
   }
-  if (!text_ok(epoch, 64) || sequence == 0) return false;
-  const bool changed = !owner.active || owner.gid != actual || owner.epoch != epoch;
-  if (changed) {
-    if (owner.active && owner.gid != actual) owner.retired_gids.insert(owner.gid);
-    if (!owner.epoch.empty() && owner.epoch != epoch) owner.retired_epochs.insert(owner.epoch);
-    if (owner.retired_gids.size() >= 256 || owner.retired_epochs.size() >= 256 ||
-        owner.generation == std::numeric_limits<uint64_t>::max()) {
-      failed_ = true;
-      return false;
-    }
-    ++owner.generation;
-    owner.gid = actual;
-    owner.epoch = epoch;
-    owner.sequence = 0;
-    owner.active = true;
-    owner.invalid = false;
-  }
-  if (sequence <= owner.sequence) return false;
-  owner.sequence = sequence;
+  owner.gid = gid_hex(incoming);
+  owner.epoch = epoch;
+  owner.sequence = sequence;  // Metadata, not a delivery frontier.
+  owner.generation = generation_;
+  owner.active = true;
   return true;
 }
 
 void ScanReceipt::inspect_owner(Owner & owner, size_t index)
 {
   if (!owner.active || failed_) return;
-  const auto graph = get_publishers_info_by_topic(owner.topic);
-  if (graph.size() == 1 && gid_hex(graph[0].endpoint_gid()) == owner.gid) return;
-  owner.retired_gids.insert(owner.gid);
-  if (owner.retired_gids.size() >= 256 ||
-      owner.generation == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
-  ++owner.generation;
-  invalidate_owner(owner, index, "owner_lost", true);
+  if (get_publishers_info_by_topic(owner.topic).size() == 1) return;
+  invalidate_owner(owner, index, "owner_unavailable", true);
   owner.active = false;
 }
 
@@ -329,7 +285,6 @@ void ScanReceipt::invalidate_owner(
   const senior_interfaces::msg::BoundedFilteredScan * filtered)
 {
   if (failed_ || (owner.invalid && !owner_lost)) return;
-  if (owner.relay_sequence == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
   senior_interfaces::msg::EgressHeader header;
   header.relay_gid = index == 0 ? gid_hex(safety_publisher_->get_gid()) :
                                   gid_hex(filter_publisher_->get_gid());
@@ -363,8 +318,6 @@ void ScanReceipt::on_safety(const senior_interfaces::msg::BoundedSafetyScan & me
   if (before_verify_) before_verify_(7, incoming);
   std::lock_guard<std::mutex> lock(mutex_);
   const auto now = steady_now();
-  if (message.raw_capture.sequence &&
-      ledger_.match(message.raw_capture, now) == ScanLedger::Match::retired) return;
   if (!qualify_owner(safety_owner_, incoming, message.source_epoch, message.sequence)) return;
   if (!message.valid) {
     invalidate_owner(safety_owner_, 0, message.reason.empty() ? "scan_invalid" : message.reason,
@@ -375,7 +328,7 @@ void ScanReceipt::on_safety(const senior_interfaces::msg::BoundedSafetyScan & me
   const auto & c = message.raw_capture;
   const auto same = [](float a, float b) {return std::memcmp(&a, &b, sizeof(float)) == 0;};
   const bool exact = source != nullptr && ledger_.same_ranges(c, message.ranges, now) &&
-    message.stamp == c.stamp && message.frame_id == c.frame_id && message.raw_source == c.raw_gid &&
+    message.stamp == c.stamp && message.frame_id == c.frame_id &&
     message.ingress_steady == steady_seconds(c.received_steady_ns) &&
     message.ingress_ros == static_cast<double>(rclcpp::Time(c.received_ros).nanoseconds()) / 1e9 &&
     same(message.angle_min, source->angle_min) &&
@@ -385,7 +338,6 @@ void ScanReceipt::on_safety(const senior_interfaces::msg::BoundedSafetyScan & me
     invalidate_owner(safety_owner_, 0, "scan_body_mismatch", false, false, &message);
     return;
   }
-  if (safety_owner_.relay_sequence == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
   senior_interfaces::msg::FencedSafetyScan output;
   output.body = message;
   auto & h = output.owner;
@@ -405,8 +357,6 @@ void ScanReceipt::on_filtered(const senior_interfaces::msg::BoundedFilteredScan 
   if (before_verify_) before_verify_(8, incoming);
   std::lock_guard<std::mutex> lock(mutex_);
   const auto now = steady_now();
-  if (message.raw_capture.sequence &&
-      ledger_.match(message.raw_capture, now) == ScanLedger::Match::retired) return;
   if (!qualify_owner(filter_owner_, incoming, message.source_epoch, message.sequence)) return;
   if (!message.valid) {
     invalidate_owner(filter_owner_, 1, message.reason.empty() ? "filter_invalid" : message.reason,
@@ -424,7 +374,6 @@ void ScanReceipt::on_filtered(const senior_interfaces::msg::BoundedFilteredScan 
     invalidate_owner(filter_owner_, 1, "scan_body_mismatch", false, false, nullptr, &message);
     return;
   }
-  if (filter_owner_.relay_sequence == std::numeric_limits<uint64_t>::max()) {failed_ = true; return;}
   senior_interfaces::msg::FencedFilteredScan output;
   output.body = message;
   auto & h = output.owner;

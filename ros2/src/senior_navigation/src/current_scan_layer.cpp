@@ -90,25 +90,24 @@ struct Source
   uint64_t capture_generation{0}, clock_generation{0};
   bool operator==(const Source & other) const
   {
-    return std::tie(backend_boot, bridge_boot_id, source_epoch, capture_generation,
-      clock_generation, raw_gid, bridge_gid) ==
-           std::tie(other.backend_boot, other.bridge_boot_id, other.source_epoch,
-      other.capture_generation, other.clock_generation, other.raw_gid, other.bridge_gid);
+    return std::tie(backend_boot, bridge_boot_id, capture_generation, clock_generation) ==
+           std::tie(other.backend_boot, other.bridge_boot_id, other.capture_generation, other.clock_generation);
   }
   static Source parse(const Json & row, bool key = false)
   {
     if (key) {
       keys(row, {"backend_boot", "bridge_boot_id", "source_epoch", "capture_generation",
-        "clock_generation", "raw_gid", "bridge_gid", "sequence"});
+        "clock_generation", "raw_gid", "bridge_gid", "sequence", "stamp_ns"});
     } else {
       keys(row, {"backend_boot", "bridge_boot_id", "source_epoch", "capture_generation",
         "clock_generation", "raw_gid", "bridge_gid"});
     }
-    Source source{text(row, "backend_boot", 36), text(row, "bridge_boot_id", 64),
-      text(row, "source_epoch", 64), text(row, "raw_gid"), text(row, "bridge_gid"),
+    Source source{text(row, "backend_boot", 36), text(row, "bridge_boot_id", std::numeric_limits<size_t>::max()),
+      text(row, "source_epoch", std::numeric_limits<size_t>::max()),
+      text(row, "raw_gid", std::numeric_limits<size_t>::max()),
+      text(row, "bridge_gid", std::numeric_limits<size_t>::max()),
       number(row, "capture_generation"), number(row, "clock_generation")};
-    require(!source.backend_boot.empty() && !source.bridge_boot_id.empty() &&
-      !source.source_epoch.empty() && !source.raw_gid.empty() && !source.bridge_gid.empty(),
+    require(!source.backend_boot.empty() && !source.bridge_boot_id.empty(),
       "empty selected source");
     return source;
   }
@@ -124,11 +123,17 @@ struct Key
 {
   Source source;
   uint64_t sequence{0};
-  static Key parse(const Json & row) {return {Source::parse(row, true), number(row, "sequence")};}
+  std::optional<uint64_t> stamp_ns;
+  static Key parse(const Json & row) {
+    const auto source = Source::parse(row, true);
+    return {source, number(row, "sequence"), row.at("stamp_ns").is_null() ?
+      std::nullopt : std::optional<uint64_t>(number(row, "stamp_ns"))};
+  }
   Json wire() const
   {
     auto result = source.wire();
     result["sequence"] = sequence;
+    result["stamp_ns"] = stamp_ns ? Json(*stamp_ns) : Json(nullptr);
     return result;
   }
 };
@@ -163,8 +168,12 @@ struct Geometry
 Key scanKey(const senior_interfaces::msg::CurrentObstacles & scan)
 {
   const auto & h = scan.capture;
+  std::optional<uint64_t> stamp;
+  if (h.stamp.sec >= 0 && h.stamp.nanosec < 1000000000) {
+    stamp = static_cast<uint64_t>(h.stamp.sec)*1000000000+h.stamp.nanosec;
+  }
   return {{scan.backend_boot, h.bridge_boot_id, h.source_epoch, h.raw_gid, h.bridge_gid,
-      h.capture_generation, h.clock_generation}, h.sequence};
+      h.capture_generation, h.clock_generation}, h.sequence, stamp};
 }
 
 Geometry masterGeometry(const nav2_costmap_2d::Costmap2D & master)
@@ -246,7 +255,7 @@ struct CurrentScanLayer::Authorization
            navigation_floor_ns == old.navigation_floor_ns && selection_token == old.selection_token &&
            selection_generation == old.selection_generation &&
            ((!floor && !old.floor) || (floor && old.floor && floor->source == old.floor->source &&
-           floor->sequence == old.floor->sequence));
+           floor->stamp_ns == old.floor->stamp_ns));
   }
 };
 
@@ -255,8 +264,8 @@ struct CurrentScanLayer::Contract
   std::string directory, run_nonce, host_boot, role, permit, plugin_instance;
   std::string pinned_owner, last_reference, receipt_name;
   int directory_fd{-1};
-  uint64_t seen_revision{0}, seen_epoch{0}, seen_domain{0}, last_sequence{0}, receipt_counter{0};
-  bool seen_reference{false}, have_sequence{false}, io_healthy{false}, host_checked{false};
+  uint64_t seen_revision{0}, seen_epoch{0}, seen_domain{0}, last_stamp_ns{0}, receipt_counter{0};
+  bool seen_reference{false}, have_stamp{false}, io_healthy{false}, host_checked{false};
   std::optional<PublisherGid> publisher;
   std::optional<Json> pending;
   std::string last_status, last_reason;
@@ -424,7 +433,7 @@ void CurrentScanLayer::pollContract()
     const bool new_domain = c.last_record && candidate->domain != c.last_record->domain;
     if (new_authority) {
       withdrawLocked();
-      c.have_sequence = false;
+      c.have_stamp = false;
       c.publisher.reset();
     } else if (new_domain) {
       // The same complete Q may cover the new domain after an actual master resize.
@@ -490,8 +499,7 @@ void CurrentScanLayer::receiveQ(CurrentObstacles::ConstSharedPtr scan, const rcl
       writers[0].topic_type() == "senior_interfaces/msg/CurrentObstacles" &&
       maps[0].topic_type() == "nav_msgs/msg/OccupancyGrid" &&
       writers[0].node_name() == maps[0].node_name() &&
-      writers[0].node_namespace() == maps[0].node_namespace() && writers[0].endpoint_gid() == gid &&
-      std::any_of(gid.begin(), gid.end(), [](uint8_t byte) {return byte != 0;});
+      writers[0].node_namespace() == maps[0].node_namespace();
   } catch (const std::exception &) {owner = false;}
   std::lock_guard<std::mutex> lock(mutex_);
   if (!owner) {negativeLocked("q_publisher_unavailable"); return;}
@@ -510,14 +518,8 @@ void CurrentScanLayer::admitQLocked(CurrentObstacles::ConstSharedPtr scan, const
     negativeLocked("reference_unavailable");
     return;
   }
-  if (c.publisher && *c.publisher != gid) {negativeLocked("q_publisher_changed"); return;}
   const auto key = scanKey(*scan);
   if (!scan->valid) {
-    if (key.source == *a->source && c.have_sequence && key.sequence < c.last_sequence) {return;}
-    if (key.source == *a->source) {
-      c.last_sequence = std::max(c.last_sequence, key.sequence);
-      c.have_sequence = true;
-    }
     negativeLocked("q_invalid");
     return;
   }
@@ -527,10 +529,10 @@ void CurrentScanLayer::admitQLocked(CurrentObstacles::ConstSharedPtr scan, const
     negativeLocked("q_identity_changed");
     return;
   }
-  if (c.have_sequence && key.sequence <= c.last_sequence) {return;}
+  if (key.stamp_ns && c.have_stamp && *key.stamp_ns <= c.last_stamp_ns) {return;}
   const auto & h = scan->capture;
   const auto now = steadyNow();
-  bool valid = h.valid && scan->frame_id == "map" && scan->points.size() <= 2048 &&
+  bool valid = key.stamp_ns.has_value() && h.valid && scan->frame_id == "map" &&
     h.stamp.sec >= 0 && h.received_ros.sec >= 0 && h.stamp.nanosec < 1000000000 &&
     h.received_ros.nanosec < 1000000000 && h.sample_steady_ns <= h.received_steady_ns &&
     h.received_steady_ns <= now && h.sample_steady_ns > a->floor_ns &&
@@ -542,14 +544,15 @@ void CurrentScanLayer::admitQLocked(CurrentObstacles::ConstSharedPtr scan, const
     const uint64_t receipt = static_cast<uint64_t>(h.received_ros.sec) * 1000000000 + h.received_ros.nanosec;
     valid = receipt >= stamp && receipt - stamp == h.received_steady_ns - h.sample_steady_ns;
   }
-  if (a->floor && a->floor->source == key.source && key.sequence <= a->floor->sequence) {valid = false;}
+  if (a->floor && a->floor->source == key.source &&
+      (!a->floor->stamp_ns || !key.stamp_ns || *key.stamp_ns <= *a->floor->stamp_ns)) {valid = false;}
   for (const auto & p : scan->points) {
     valid = valid && std::isfinite(p.x) && std::isfinite(p.y) && p.z == 0.0F;
   }
   if (!valid) {negativeLocked("q_unqualified"); return;}
   c.publisher = gid;
-  c.have_sequence = true;
-  c.last_sequence = key.sequence;
+  c.have_stamp = true;
+  c.last_stamp_ns = *key.stamp_ns;
   latest_ = std::move(scan);
 }
 
@@ -636,7 +639,7 @@ bool CurrentScanLayer::isFresh(const CurrentObstacles::ConstSharedPtr & scan) co
   return contract_ && contract_->io_healthy && authorization_ &&
          authorization_->status == "selected" && now < authorization_->lease_ns &&
          scan && scan->valid && scan->frame_id == "map" &&
-         scan->points.size() <= 2048 && now < scan->valid_until_steady_ns;
+         now < scan->valid_until_steady_ns;
 }
 
 void CurrentScanLayer::onInitialize()

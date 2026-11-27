@@ -26,12 +26,6 @@ def generate_launch_description():
             DeclareLaunchArgument("static_background_declared", default_value="false"),
             Node(
                 package="senior_sensor_ingress",
-                executable="static_tf_receipt_node",
-                prefix=restart_prefix(),
-                parameters=[common, {"output_topic": "/rgbd_diagnostic/tf"}],
-            ),
-            Node(
-                package="senior_sensor_ingress",
                 executable="rgbd_candidate_receipt_node",
                 prefix=restart_prefix(),
                 parameters=[common, ros_sensor_parameters()],

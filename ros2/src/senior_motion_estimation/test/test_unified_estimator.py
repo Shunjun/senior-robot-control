@@ -201,7 +201,17 @@ def test_invalid_status_veto_is_immediate_but_cached_recovery_is_not_new_data():
     original = observation("wheel", (0.4, None, 0.1))
     e.ingest(original)
     e.estimate(10, 20)
-    invalid = replace(original, quality=0.0, roots=(replace(original.roots[0], sequence=2),))
+    newer_time = replace(
+        original.roots[0].time,
+        stamp_ns=original.roots[0].time.stamp_ns + 1,
+        sample_steady_ns=original.roots[0].time.sample_steady_ns + 1,
+    )
+    invalid = replace(
+        original,
+        quality=0.0,
+        stamp_ns=original.stamp_ns + 1,
+        roots=(replace(original.roots[0], sequence=2, time=newer_time),),
+    )
     assert e.ingest(invalid)
     assert not e.estimate(10, 20.1).healthy
     cached = replace(original, roots=(replace(original.roots[0], sequence=3),))

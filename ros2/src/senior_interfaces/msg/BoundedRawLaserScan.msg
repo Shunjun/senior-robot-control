@@ -7,5 +7,5 @@ float32 time_increment
 float32 scan_time
 float32 range_min
 float32 range_max
-float32[<=2048] ranges
-float32[<=2048] intensities
+float32[] ranges
+float32[] intensities

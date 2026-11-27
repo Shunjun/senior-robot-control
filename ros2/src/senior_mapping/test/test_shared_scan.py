@@ -134,7 +134,6 @@ def message(sequence=1, ranges=(2.0, 3.0, 4.0), sign=1):
     return NS(
         backend_boot="backend",
         status=1,
-        static_receipt_valid=True,
         reason="",
         scan=NS(
             capture=header(sequence),
@@ -171,7 +170,11 @@ def test_full_scan_projection_keeps_indices_and_original_deadline():
     assert scan.beams[0].endpoint_odom[1] > 0  # inverted, raw index retained
     points = project_hits(scan, Pose2D(10.0, 0.0, 0.0))
     assert len(points) == 2 and points[0][0] > 10
-    assert len(project_hits(decode(message(ranges=(2.0,) * 2048)), Pose2D(0.0, 0.0, 0.0))) == 2048
+    dense = message(ranges=(2.0,) * 5400)
+    dense.scan.angle_increment = 0.001
+    complete = decode(dense)
+    assert [beam.index for beam in complete.beams] == list(range(5400))
+    assert len(project_hits(complete, Pose2D(0.0, 0.0, 0.0))) == 5400
 
 
 def test_slot_retirement_reference_floor_and_late_writes(tmp_path):
@@ -386,7 +389,7 @@ def test_bridge_install_rejects_scan_sampled_before_new_reference():
     assert not ref.qualified(MapRef("map", 1), "R2")
 
 
-def test_adapter_requires_original_authenticated_native_receipt_metadata():
+def test_adapter_uses_native_channel_without_rechecking_diagnostic_gid():
     from senior_mapping.navigation_bridge import NativeNavigationBridge
     from senior_mapping.ros_runtime import RosMappingBackend
 
@@ -398,7 +401,11 @@ def test_adapter_requires_original_authenticated_native_receipt_metadata():
         topic_type="senior_interfaces/msg/QualifiedMappingScan",
         endpoint_gid=b"\x01" * 24,
     )
-    node = NS(get_publishers_info_by_topic=lambda _: [owner])
+
+    def unexpected_graph_query(_topic):
+        raise AssertionError("managed receipt must not repeat publisher qualification")
+
+    node = NS(get_publishers_info_by_topic=unexpected_graph_query)
     backend = RosMappingBackend.__new__(RosMappingBackend)
     backend.node, backend._scan_accepting, backend._boot = node, True, "backend"
     backend._qualified_gid, backend._learning_client = None, None
@@ -415,11 +422,13 @@ def test_adapter_requires_original_authenticated_native_receipt_metadata():
     backend._on_qualified_scan(
         current, {"publisher_gid": b"\x02" * 24, "native_receipt_authenticated": True}
     )
-    assert not outputs
+    assert outputs[-1][0]  # GID is diagnostic after the receiving entry checks topology.
     backend._on_qualified_scan(
         current, {"publisher_gid": owner.endpoint_gid, "native_receipt_authenticated": True}
     )
     assert outputs[-1][0] and len(outputs[-1][2]) == 3
+    backend._scan_slot = None
+    backend._poll_scan_channel()  # Housekeeping must reuse receiving-entry availability too.
 
 
 def test_real_graph_install_uses_c3_digest_independent_of_keyframe_order():
@@ -487,7 +496,6 @@ def test_bootstrap_selection_two_roles_and_original_expiry(monkeypatch, tmp_path
         CostmapGeometry,
         CurrentLayerCoverage,
         ReferenceAuthorization,
-        ScanKey,
         read_contract_record,
     )
 
@@ -510,7 +518,7 @@ def test_bootstrap_selection_two_roles_and_original_expiry(monkeypatch, tmp_path
         reference_revision=1,
         reference_generation="R1",
         backend_boot="backend",
-        source=dict(zip(tuple(ScanKey.__dataclass_fields__)[:-1], scan.key.source, strict=True)),
+        source=scan.key.source_payload,
         selection_token="selection",
         selection_generation=1,
         navigation_floor_steady_ns=now - 1,
@@ -906,3 +914,121 @@ def test_real_bridge_authority_epochs_have_immutable_visible_identity(tmp_path, 
             assert old == identity, f"identity changed inside epoch {row.authority_epoch}"
     finally:
         slot.close()
+
+
+def test_initial_gate_waits_for_original_first_commit():
+    """An owned empty watermark must not release the first commit query."""
+    import asyncio
+
+    from senior_mapping.ros_runtime import RosMappingBackend
+
+    async def scenario():
+        backend = RosMappingBackend.__new__(RosMappingBackend)
+        backend._lock = asyncio.Lock()
+        backend._boot = "owned-boot"
+        backend._input_deadline = asyncio.get_running_loop().time() + 10
+        backend._prepare_services = lambda: None
+        snapshots = iter(
+            (
+                NS(
+                    boot_id="owned-boot",
+                    status=2,
+                    OK=1,
+                    graph_commit_watermark_valid=True,
+                    graph_commit_sequence=0,
+                    last_committed_scan_valid=False,
+                ),
+                NS(
+                    boot_id="owned-boot",
+                    status=1,
+                    OK=1,
+                    graph_commit_watermark_valid=True,
+                    graph_commit_sequence=1,
+                    last_committed_scan_valid=False,
+                ),
+                NS(
+                    boot_id="owned-boot",
+                    status=1,
+                    OK=1,
+                    graph_commit_watermark_valid=True,
+                    graph_commit_sequence=1,
+                    last_committed_scan_valid=True,
+                ),
+            )
+        )
+        calls = []
+
+        async def call(method, **fields):
+            calls.append((method, fields))
+            if method == "gate":
+                return NS(ok=True, graph_commit_sequence=0)
+            assert method == "graph"
+            return next(snapshots)
+
+        backend._call = call
+        reply = await backend.request("map.backend.gate", boot_id="owned-boot", accepting=True)
+        assert reply == {"ok": True, "sequence": 0}
+        assert [method for method, _ in calls] == ["gate", "graph", "graph", "graph"]
+        assert calls[0][1] == {"boot_id": "owned-boot", "accepting": True}
+
+    asyncio.run(scenario())
+
+
+def test_initial_gate_does_not_reset_expired_start_budget():
+    import asyncio
+
+    from senior_mapping.ros_runtime import RosMappingBackend
+
+    async def scenario():
+        backend = RosMappingBackend.__new__(RosMappingBackend)
+        backend._lock = asyncio.Lock()
+        backend._boot = "owned-boot"
+        backend._input_deadline = asyncio.get_running_loop().time() - 1
+        deadline = backend._input_deadline
+        backend._prepare_services = lambda: None
+        calls = []
+
+        async def call(method, **fields):
+            calls.append(method)
+            assert method == "gate"
+            return NS(ok=True, graph_commit_sequence=0)
+
+        backend._call = call
+        reply = await backend.request("map.backend.gate", boot_id="owned-boot", accepting=True)
+        assert reply == {"ok": False, "error": "unavailable"}
+        assert backend._input_deadline == deadline
+        assert calls == ["gate"]
+
+    asyncio.run(scenario())
+
+
+def test_initial_gate_rejects_a_different_native_boot():
+    import asyncio
+
+    from senior_mapping.ros_runtime import RosMappingBackend
+
+    async def scenario():
+        backend = RosMappingBackend.__new__(RosMappingBackend)
+        backend._lock = asyncio.Lock()
+        backend._boot = "owned-boot"
+        backend._input_deadline = asyncio.get_running_loop().time() + 10
+        backend._prepare_services = lambda: None
+
+        async def call(method, **fields):
+            if method == "gate":
+                return NS(ok=True, graph_commit_sequence=0)
+            assert method == "graph"
+            return NS(
+                boot_id="another-boot",
+                status=1,
+                OK=1,
+                graph_commit_watermark_valid=True,
+                graph_commit_sequence=1,
+                last_committed_scan_valid=True,
+            )
+
+        backend._call = call
+        reply = await backend.request("map.backend.gate", boot_id="owned-boot", accepting=True)
+        assert reply == {"ok": False, "error": "conflict"}
+
+    asyncio.run(scenario())

@@ -32,7 +32,7 @@ bool wait_until(const std::function<bool()> & predicate, std::chrono::seconds ti
   return predicate();
 }
 
-TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
+TEST(RawReceipt, QueuedCallbackPreservesActualPublisherMetadataWithoutGidRejection)
 {
   rclcpp::init(0, nullptr);
   std::mutex mutex;
@@ -153,18 +153,18 @@ TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
   EXPECT_EQ(incoming_gid, old_gid);
   ASSERT_TRUE(wait_until([&] {
     std::lock_guard<std::mutex> lock(mutex);
-    for (const auto & item : received) {
-      if (!item.capture.valid && item.capture.reason == "raw_gid_mismatch" &&
-          item.capture.raw_gid == old_gid && item.capture.stamp == image.header.stamp &&
-          (static_cast<double>(item.capture.received_steady_ns) / 1e9) > 0) return true;
-    }
-    return false;
+    const auto forwarded = std::count_if(received.begin(), received.end(),
+      [](const auto & item) {return item.capture.valid;});
+    return forwarded > static_cast<decltype(forwarded)>(valid_before) &&
+      received.back().capture.valid && received.back().capture.raw_gid == old_gid &&
+      received.back().capture.stamp == image.header.stamp &&
+      received.back().capture.received_steady_ns > 0;
   }));
   {
     std::lock_guard<std::mutex> lock(mutex);
     size_t count = 0;
     for (const auto & item : received) if (item.capture.valid) ++count;
-    EXPECT_EQ(count, valid_before);  // old callback was not relabeled as new publisher
+    EXPECT_GT(count, valid_before);  // The actual old GID is recorded, never relabeled.
   }
   ASSERT_TRUE(wait_until([&] {return new_publisher->get_subscription_count() > 0;}));
   image.header.stamp = fixture->now();
@@ -284,99 +284,6 @@ TEST(RawReceipt, RealCallbackRejectsQueuedOldPublisherAfterGraphReplacement)
   (void)rgb_info_output;
   (void)depth_info_output;
 }
-TEST(RawReceipt, RetiredRealRawCallbackCannotRevokeSuccessor)
-{
-  rclcpp::init(0, nullptr);
-  std::mutex mutex;
-  std::condition_variable condition;
-  bool entered = false, resume = false;
-  std::atomic<bool> arm{false};
-  auto bridge = std::make_shared<senior_sensor_ingress::RawReceipt>(
-    rclcpp::NodeOptions(), [&](size_t stream, const rmw_gid_t &) {
-      if (stream != 0 || !arm.exchange(false)) return;
-      std::unique_lock<std::mutex> lock(mutex);
-      entered = true;
-      condition.notify_all();
-      condition.wait_for(lock, 5s, [&] {return resume;});
-    }, true);
-  auto fixture = std::make_shared<rclcpp::Node>("raw_retired_fixture");
-  using Image = sensor_msgs::msg::Image;
-  using Bounded = senior_interfaces::msg::BoundedRawImage;
-  std::vector<Bounded> received;
-  auto output = fixture->create_subscription<Bounded>(
-    "/safety/raw/rgb", rclcpp::SensorDataQoS(), [&](Bounded::ConstSharedPtr value) {
-      std::lock_guard<std::mutex> lock(mutex);
-      received.push_back(*value);
-    });
-  auto old = fixture->create_publisher<Image>("/camera/color/image_raw", rclcpp::SensorDataQoS());
-  rclcpp::executors::MultiThreadedExecutor executor;
-  executor.add_node(bridge);
-  executor.add_node(fixture);
-  std::thread thread([&] {executor.spin();});
-  auto cleanup = [&](int *) {
-    {
-      std::lock_guard<std::mutex> lock(mutex);
-      resume = true;
-      condition.notify_all();
-    }
-    executor.cancel();
-    if (thread.joinable()) thread.join();
-    rclcpp::shutdown();
-  };
-  int sentinel = 0;
-  std::unique_ptr<int, decltype(cleanup)> guard(&sentinel, cleanup);
-  ASSERT_TRUE(wait_until([&] {return old->get_subscription_count() > 0;}));
-  Image image;
-  image.header.stamp = fixture->now();
-  image.header.frame_id = "optical";
-  image.width = image.height = 2;
-  image.encoding = "rgb8";
-  image.step = 6;
-  image.data.assign(12, 1);
-  const auto old_gid = senior_sensor_ingress::gid_hex(old->get_gid());
-  old->publish(image);
-  ASSERT_TRUE(wait_until([&] {
-    std::lock_guard<std::mutex> lock(mutex);
-    for (const auto & value : received) {
-      if (value.capture.valid && value.capture.raw_gid == old_gid) return true;
-    }
-    return false;
-  }));
-  arm = true;
-  old->publish(image);
-  ASSERT_TRUE(wait_until([&] {std::lock_guard<std::mutex> lock(mutex); return entered;}));
-  old.reset();
-  auto current = fixture->create_publisher<Image>(
-    "/camera/color/image_raw", rclcpp::SensorDataQoS());
-  const auto new_gid = senior_sensor_ingress::gid_hex(current->get_gid());
-  ASSERT_TRUE(wait_until([&] {
-    const auto graph = bridge->get_publishers_info_by_topic("/camera/color/image_raw");
-    return graph.size() == 1 && senior_sensor_ingress::gid_hex(graph[0].endpoint_gid()) == new_gid;
-  }));
-  image.header.stamp = fixture->now();
-  current->publish(image);
-  ASSERT_TRUE(wait_until([&] {
-    std::lock_guard<std::mutex> lock(mutex);
-    for (const auto & value : received) {
-      if (value.capture.valid && value.capture.raw_gid == new_gid) return true;
-    }
-    return false;
-  }, 1s));
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    resume = true;
-    condition.notify_all();
-  }
-  std::this_thread::sleep_for(100ms);
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    ASSERT_FALSE(received.empty());
-    EXPECT_TRUE(received.back().capture.valid);
-    EXPECT_EQ(received.back().capture.raw_gid, new_gid);
-  }
-  (void)output;
-}
-
 TEST(RawReceipt, ImageAndCameraInfoRollbackDuringQualificationKeepOriginalSegments)
 {
   rclcpp::init(0, nullptr);

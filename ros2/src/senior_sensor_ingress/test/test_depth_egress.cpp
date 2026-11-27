@@ -163,61 +163,16 @@ TEST(DepthEgress, RealSourcesPreserveHeadersAndRejectCurrentHeaderMutation)
     }
     return false;
   }));
-  // The actual old DDS callback is paused before its MessageInfo graph check.
-  // A new publisher is qualified before that old callback is released.
+  // Invalid output is recoverable without rotating publisher identity.
   input.depth_capture = original_capture;
-  input.sequence = 3;
+  input.sequence = 0;
   owner->publish(input);
   ASSERT_TRUE(wait_until([&] {
     std::lock_guard<std::mutex> lock(mutex);
-    for (const auto & value : results) {
-      if (value.owner.valid && value.owner.owner_sequence == 3) return true;
-    }
-    return false;
+    return !results.empty() && results.back().owner.valid;
   }));
-  arm = true;
-  input.valid = false;
-  input.sequence = 4;
-  owner->publish(input);
-  ASSERT_TRUE(wait_until([&] {
-    std::lock_guard<std::mutex> lock(pause_mutex);
-    return entered;
-  }));
-  const auto old_gid = senior_sensor_ingress::gid_hex(owner->get_gid());
-  owner.reset();
-  auto successor = fixture->create_publisher<Depth>(
-    "/safety/depth_candidate", rclcpp::SensorDataQoS());
-  const auto new_gid = senior_sensor_ingress::gid_hex(successor->get_gid());
-  ASSERT_TRUE(wait_until([&] {
-    const auto graph = bridge->get_publishers_info_by_topic("/safety/depth_candidate");
-    return graph.size() == 1 && senior_sensor_ingress::gid_hex(graph[0].endpoint_gid()) == new_gid;
-  }));
-  input.valid = true;
-  input.source_epoch = "successor-owner";
-  input.sequence = 1;
-  successor->publish(input);
-  ASSERT_TRUE(wait_until([&] {
-    std::lock_guard<std::mutex> lock(mutex);
-    for (const auto & value : results) {
-      if (value.owner.valid && value.owner.owner_gid == new_gid) return true;
-    }
-    return false;
-  }, 1s));
-  {
-    std::lock_guard<std::mutex> lock(pause_mutex);
-    resume = true;
-    pause_condition.notify_all();
-  }
-  std::this_thread::sleep_for(100ms);
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    ASSERT_FALSE(results.empty());
-    EXPECT_TRUE(results.back().owner.valid);
-    EXPECT_EQ(results.back().owner.owner_gid, new_gid);
-    EXPECT_NE(old_gid, new_gid);
-  }
-  // A delayed invalid body carrying an already-retired raw generation must not
-  // revoke a newer valid body from the same current owner.
+  // A malformed raw frame does not create a new source generation; the next
+  // normal image/info pair can flow through the same receiver.
   const auto prior_input = input;
   image.header.stamp = fixture->now();
   image.encoding = "unsupported";
@@ -226,7 +181,7 @@ TEST(DepthEgress, RealSourcesPreserveHeadersAndRejectCurrentHeaderMutation)
     std::lock_guard<std::mutex> lock(mutex);
     for (const auto & value : images) {
       if (!value.capture.valid && value.capture.reason == "raw_image_invalid" &&
-          value.capture.capture_generation > prior_input.depth_capture.capture_generation) return true;
+          value.capture.capture_generation == prior_input.depth_capture.capture_generation) return true;
     }
     return false;
   }));
@@ -242,7 +197,7 @@ TEST(DepthEgress, RealSourcesPreserveHeadersAndRejectCurrentHeaderMutation)
         if (a.capture.valid && b.capture.valid && a.capture.stamp == image.header.stamp &&
             b.capture.stamp == image.header.stamp &&
             a.capture.capture_generation == b.capture.capture_generation &&
-            a.capture.capture_generation > prior_input.depth_capture.capture_generation) {
+            a.capture.capture_generation == prior_input.depth_capture.capture_generation) {
           input.depth_capture = a.capture;
           input.camera_info_capture = b.capture;
           return true;
@@ -259,27 +214,15 @@ TEST(DepthEgress, RealSourcesPreserveHeadersAndRejectCurrentHeaderMutation)
   input.received_steady = (static_cast<double>(input.depth_capture.received_steady_ns) / 1e9);
   input.camera_info_received_steady = (static_cast<double>(input.camera_info_capture.received_steady_ns) / 1e9);
   input.sequence = 2;
-  successor->publish(input);
+  owner->publish(input);
   ASSERT_TRUE(wait_until([&] {
     std::lock_guard<std::mutex> lock(mutex);
     for (const auto & value : results) {
-      if (value.owner.valid && value.owner.owner_gid == new_gid &&
+      if (value.owner.valid && value.owner.owner_gid == senior_sensor_ingress::gid_hex(owner->get_gid()) &&
           value.body.depth_capture == input.depth_capture) return true;
     }
     return false;
   }));
-  auto stale_invalid = prior_input;
-  stale_invalid.valid = false;
-  stale_invalid.sequence = 3;
-  stale_invalid.reason = "stale_failure";
-  successor->publish(stale_invalid);
-  std::this_thread::sleep_for(100ms);
-  {
-    std::lock_guard<std::mutex> lock(mutex);
-    ASSERT_FALSE(results.empty());
-    EXPECT_TRUE(results.back().owner.valid);
-    EXPECT_EQ(results.back().body.depth_capture, input.depth_capture);
-  }
   (void)images_sub;
   (void)infos_sub;
   (void)fenced_sub;

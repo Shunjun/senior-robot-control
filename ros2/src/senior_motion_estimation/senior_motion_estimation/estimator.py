@@ -13,6 +13,7 @@ from uuid import uuid4
 from senior_motion_estimation.consensus import Vote, combine
 from vehicle_core.sample_time import ClockTracker, SampleTime, StampInterval
 from vehicle_core.sensor_policy import Age, SensorTiming, default_policy
+from vehicle_core.source_order import SourceOrder, source_context
 from vehicle_core.values import Pose2D
 
 
@@ -46,7 +47,7 @@ class Origin:
 
 def origin_key(roots: tuple[Origin, ...]) -> tuple[tuple[str, str, int, int], ...]:
     """Acquisition identity, independent of processing/delivery sequence."""
-    return tuple((r.family, r.epoch, r.sequence, r.time.stamp_ns) for r in roots)
+    return tuple((r.family, r.epoch, r.time.clock_generation, r.time.stamp_ns) for r in roots)
 
 
 def validate_origins(roots: tuple[Origin, ...]) -> None:
@@ -57,12 +58,10 @@ def validate_origins(roots: tuple[Origin, ...]) -> None:
             not isinstance(r, Origin)
             or not isinstance(r.family, str)
             or not r.family
-            or len(r.family) > 128
             or not isinstance(r.epoch, str)
             or not r.epoch
-            or len(r.epoch) > 4096
             or type(r.sequence) is not int
-            or r.sequence < 1
+            or r.sequence < 0
             or not isinstance(r.time, SampleTime)
         ):
             raise ValueError("invalid original motion metadata")
@@ -89,7 +88,6 @@ class MotionObservation:
     def __post_init__(self) -> None:
         if (
             not self.source
-            or len(self.source) > 128
             or not self.roots
             or len(self.roots) > 32
             or len(self.values) != 3
@@ -125,7 +123,7 @@ class MotionObservation:
                 not self.epoch
                 or len(self.epoch) > 4096
                 or type(self.sequence) is not int
-                or self.sequence < 1
+                or self.sequence < 0
             )
         ):
             raise ValueError("invalid motion observation identity")
@@ -289,7 +287,7 @@ class MotionEstimation:
         self._samples: dict[str, tuple[deque[MotionObservation], ...]] = {}
         self._frontiers: dict[str, MotionObservation] = {}
         self._positive_frontiers: dict[str, MotionObservation] = {}
-        self._retired: dict[str, set[str]] = {}
+        self._source_orders: dict[str, SourceOrder] = {}
         self._last_axes: list[AxisEstimate | None] = [None, None, None]
         self._clock_tracker = ClockTracker()
         self.generation = 1
@@ -320,6 +318,15 @@ class MotionEstimation:
     def invalidate(self, source: str) -> None:
         self._samples.pop(source, None)
 
+    def confirm_source_boot(self, source: str, boot_id: str) -> None:
+        """The receiving-session owner explicitly confirms process replacement."""
+        order = self._source_orders.setdefault(source, SourceOrder())
+        if order.boot_id != boot_id:
+            order.confirm_boot(boot_id)
+            self.invalidate(source)
+            self._frontiers.pop(source, None)
+            self._positive_frontiers.pop(source, None)
+
     def ingest(
         self,
         observation: MotionObservation,
@@ -335,26 +342,7 @@ class MotionEstimation:
                 return False
         old = self._frontiers.get(observation.source)
         root = max(observation.roots, key=lambda r: (r.measurement_steady, r.family))
-        retired = self._retired.setdefault(observation.source, set())
-        if observation.identity_epoch in retired:
-            return False
-        if old is not None:
-            prior = max(old.roots, key=lambda r: (r.measurement_steady, r.family))
-            if observation.identity_epoch == old.identity_epoch:
-                if observation.identity_sequence <= old.identity_sequence:
-                    return False
-                if observation.coordinate < old.coordinate:
-                    return False
-            else:
-                if root.received_steady < prior.received_steady or len(retired) >= 32:
-                    return False
-                retired.add(old.identity_epoch)
-                self.invalidate(observation.source)
-                self._path_point = None
-                self._path_segments.clear()
-                self._path_id = uuid4().hex
-                self._last_estimate = None
-        elif len(self._frontiers) >= 32:
+        if old is None and len(self._frontiers) >= 32:
             raise ValueError("motion source capacity")
         positive = self._positive_frontiers.get(observation.source)
         if observation.quality != 0 and positive is not None:
@@ -366,6 +354,24 @@ class MotionEstimation:
                 # A new delivery/processing sequence cannot renew an unchanged
                 # acquisition, including while the ROS clock is paused.
                 return False
+        boot, generation = source_context(observation.identity_epoch)
+        order = self._source_orders.setdefault(observation.source, SourceOrder())
+        previous_boot, previous_generation = order.boot_id, order.generation
+        accepted = (
+            order.accept_capture(
+                boot, generation, observation.coordinate, root.time.received_steady_ns
+            )
+            if observation.identity_epoch != boot
+            else order.accept(boot, generation, observation.coordinate)
+        )
+        if not accepted:
+            return False
+        if old is not None and (boot != previous_boot or generation != previous_generation):
+            self.invalidate(observation.source)
+            self._path_point = None
+            self._path_segments.clear()
+            self._path_id = uuid4().hex
+            self._last_estimate = None
         self._frontiers[observation.source] = observation
         if observation.quality == 0:
             self.invalidate(observation.source)
@@ -766,8 +772,6 @@ class MotionEstimation:
         clock = self._clock_tracker.observe(ros_ns=query_ns, steady_ns=round(now_steady * 1e9))
         if clock.discontinuity:
             # This local owner cannot reuse queued positive evidence across its rollback.
-            for source, observation in self._frontiers.items():
-                self._retired.setdefault(source, set()).add(observation.identity_epoch)
             self._samples.clear()
             self._frontiers.clear()
             self._positive_frontiers.clear()

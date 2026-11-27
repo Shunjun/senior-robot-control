@@ -37,16 +37,13 @@ def header(t, sequence, family):
 
 def candidate():
     tf = N(
-        valid=True,
-        admitted=True,
-        edges=[
+        transforms=[
             N(
-                parent_frame="base_link",
-                child_frame="camera",
-                rotation_xyzw=(0, 0, 0, 1),
-                translation=(0, 0, 0),
+                header=N(frame_id="base_link", stamp=stamp(0)),
+                child_frame_id="camera",
+                transform=N(rotation=N(x=0, y=0, z=0, w=1), translation=N(x=0, y=0, z=0)),
             )
-        ],
+        ]
     )
     matrix = np.eye(4)
     matrix[0, 3] = -0.04
@@ -91,7 +88,7 @@ def test_bad_optional_calibration_never_changes_other_source():
     s = MotionSensorRuntime(generic_motion_profile(), RuntimeDiagnostics(lambda *_: None))
     s.ingest_observation(observation("wheel", (0.2, None, 0.1)), 10, 20)
     bad = candidate()
-    bad.body.first_tf.edges = []
+    bad.body.first_tf.transforms = []
     with pytest.raises(ValueError, match="calibration"):
         rgbd_observation(bad)
     assert s.estimate(10, 20)[1].velocity.vx == 0.2
@@ -99,9 +96,9 @@ def test_bad_optional_calibration_never_changes_other_source():
 
 def test_static_chain_composes_and_rejects_cycle_instead_of_assumed_identity():
     tf = candidate().body.first_tf
-    tf.edges[0].translation = (0.1, 0.2, 0)
+    tf.transforms[0].transform.translation = N(x=0.1, y=0.2, z=0)
     assert static_matrix(tf, "base_link", "camera")[:3, 3] == pytest.approx((0.1, 0.2, 0))
-    tf.edges[0].parent_frame = "camera"
+    tf.transforms[0].header.frame_id = "camera"
     with pytest.raises(ValueError, match="cyclic"):
         static_matrix(tf, "base_link", "camera")
 
