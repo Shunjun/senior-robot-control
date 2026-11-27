@@ -105,6 +105,7 @@ class CutIdentity:
     map_basis: Pose2D
     odom_basis: Pose2D
 
+
 @dataclass(frozen=True)
 class NavigationSnapshot:
     identity: CutIdentity
@@ -133,6 +134,7 @@ class FrontierCandidate:
     observation_cells: tuple[int, ...]  # 本批有界，使用输入grid索引
     corridor_key: RegionKey
 
+
 @dataclass(frozen=True)
 class FrontierPage:
     identity: CutIdentity
@@ -142,14 +144,24 @@ class FrontierPage:
     closure_proven: bool
     diagnostic: str
 
-async def frontier_page(snapshot: NavigationSnapshot, target: Pose2D,
-                        footprint: Footprint, *, cursor: int,
-                        checkpoint: Callable[[], Awaitable[None]]) -> FrontierPage: ...
+
+async def frontier_page(
+    snapshot: NavigationSnapshot,
+    target: Pose2D,
+    footprint: Footprint,
+    *,
+    cursor: int,
+    checkpoint: Callable[[], Awaitable[None]],
+) -> FrontierPage: ...
 def world_to_cell(grid: WorkspaceGrid, pose: Pose2D) -> tuple[int, int]: ...
 def cell_center(grid: WorkspaceGrid, column: int, row: int) -> Pose2D: ...
-async def path_is_known_free(grid: WorkspaceGrid, path: tuple[Pose2D, ...],
-                             footprint: Footprint, *,
-                             checkpoint: Callable[[], Awaitable[None]]) -> bool: ...
+async def path_is_known_free(
+    grid: WorkspaceGrid,
+    path: tuple[Pose2D, ...],
+    footprint: Footprint,
+    *,
+    checkpoint: Callable[[], Awaitable[None]],
+) -> bool: ...
 ```
 
 拓扑、block-cut分析均按设计分块；禁止在checkpoint之间做完整洪泛。cursor是确定性全候选域次序，16个一页；账本由GoalNavigator拥有，frontier模块不留跨任务全局缓存。目标outside仅用于分析外域，不意味着管理入口已批准接纳。
@@ -165,8 +177,10 @@ class NavigationParameters:
     xy_goal_tolerance: float
     yaw_goal_tolerance: float
 
-def derive_navigation_parameters(profile: HardwareMotionProfile,
-                                 base_params: Path, destination: Path) -> NavigationParameters: ...
+
+def derive_navigation_parameters(
+    profile: HardwareMotionProfile, base_params: Path, destination: Path
+) -> NavigationParameters: ...
 ```
 
 content hash含所选profile内容及相关派生参数，不仅profile_id。矩形顶点±L/2、±W/2；global/local footprint一致；MPPI vx_max=cap、vx_min=-cap、wz_max=yaw_cap。端点容差读实际参数（当前均0.25），不另硬编码。产物在既有runtime资源目录写一次，进程退出按既有资源清理；对同产物启动两端，不能只launch RewrittenYaml而controller读原yaml。BT/lattice路径解析仍走既有装配。
@@ -183,12 +197,14 @@ class QueryContext:
     snapshot: NavigationSnapshot
     geometry_id: str
 
+
 @dataclass(frozen=True)
 class PlanCheck:
     context: QueryContext
-    status: Literal['reachable', 'no_path', 'unavailable', 'timeout', 'stale', 'canceled']
+    status: Literal["reachable", "no_path", "unavailable", "timeout", "stale", "canceled"]
     path: tuple[Pose2D, ...]
     diagnostic: str
+
 
 class PlannerQuery:
     async def check(self, context: QueryContext, target: Pose2D) -> PlanCheck: ...
@@ -201,14 +217,20 @@ class PlannerQuery:
 
 ```python
 class GoalNavigator:
-    def __init__(self, snapshot: Callable[[], NavigationSnapshot | None],
-                 planner: PlannerQuery, footprint: Footprint, geometry_id: str,
-                 run_child: Callable[[Pose2D], Awaitable[bool]],
-                 cancel_child: Callable[[], Awaitable[OperationResult]],
-                 pause_source: Callable[[], bool], resume_source: Callable[[], bool],
-                 qualified: Callable[[], bool],
-                 monotonic: Callable[[], float],
-                 sleep: Callable[[float], Awaitable[None]]) -> None: ...
+    def __init__(
+        self,
+        snapshot: Callable[[], NavigationSnapshot | None],
+        planner: PlannerQuery,
+        footprint: Footprint,
+        geometry_id: str,
+        run_child: Callable[[Pose2D], Awaitable[bool]],
+        cancel_child: Callable[[], Awaitable[OperationResult]],
+        pause_source: Callable[[], bool],
+        resume_source: Callable[[], bool],
+        qualified: Callable[[], bool],
+        monotonic: Callable[[], float],
+        sleep: Callable[[float], Awaitable[None]],
+    ) -> None: ...
     async def run(self, context: QueryContext, target: Pose2D) -> bool: ...
 ```
 
@@ -218,10 +240,15 @@ run_child只在真实accept后恢复转发/通知RouteService真实goal_changed�
 
 ```python
 class GoalNavigatorFactory(Protocol):
-    def __call__(self, *, run_child: Callable[[Pose2D], Awaitable[bool]],
-                 cancel_child: Callable[[], Awaitable[OperationResult]],
-                 pause_source: Callable[[], bool], resume_source: Callable[[], bool],
-                 qualified: Callable[[], bool]) -> GoalNavigator: ...
+    def __call__(
+        self,
+        *,
+        run_child: Callable[[Pose2D], Awaitable[bool]],
+        cancel_child: Callable[[], Awaitable[OperationResult]],
+        pause_source: Callable[[], bool],
+        resume_source: Callable[[], bool],
+        qualified: Callable[[], bool],
+    ) -> GoalNavigator: ...
 ```
 
 工厂闭包仅注入已冻结的snapshot/planner/footprint/clock等既有装配值，不建注册表。RouteService的route/action身份由上述闭包固定；每个原action创建一实例，`run(context,target)`输入明确。

@@ -36,7 +36,15 @@ def synthetic_profile():
 
 
 def episode_frame(
-    sequence, *, offset=0.0, visible=65, source="source", geometry="mount", wall=False, count=None
+    sequence,
+    *,
+    offset=0.0,
+    visible=65,
+    source="source",
+    geometry="mount",
+    wall=False,
+    count=None,
+    bridge_boot="bridge",
 ):
     """Independent ego/object poses, polar beam projection through exact raw odom.
 
@@ -75,7 +83,7 @@ def episode_frame(
         "raw",
         "relay",
         source,
-        "bridge",
+        bridge_boot,
         1,
         sequence,
         True,
@@ -148,19 +156,34 @@ def test_motion_revokes_bound_support_and_requires_new_stability_window():
     assert any(c.odom_surface[0][1] < 1 for c in replay.step(16, offset=0.8, wall=True).stable)
     duplicate = replay.step(16, offset=0.8, wall=True)
     assert not duplicate.stable and not duplicate.moved_support_ids
-    # Source gap restarts candidate; owner calls reset for R (R is absent from C1 scan).
-    assert not replay.step(18, offset=0.8, wall=True).stable
-    assert not replay.step(19, offset=0.8, wall=True).stable
+    # A skipped raw sequence does not discard a still-valid geometry window.
+    assert replay.step(18, offset=0.8, wall=True).stable
+    assert replay.step(19, offset=0.8, wall=True).stable
     assert replay.step(20, offset=0.8, wall=True).stable
+    # The owner still resets for a reference change (R is absent from C1 scan).
     replay.tracker.reset()
     assert not replay.step(21, offset=0.8, wall=True).stable
     assert not replay.step(22, offset=0.8, wall=True).stable
     assert replay.step(23, offset=0.8, wall=True).stable
-    assert not replay.step(24, offset=0.8, wall=True, source="new-source").stable
     assert not replay.step(
-        25, offset=0.8, wall=True, source="new-source", geometry="new-mount"
+        24, offset=0.8, wall=True, source="new-source", bridge_boot="new-bridge"
     ).stable
-    scan = episode_frame(26, offset=0.8, wall=True, source="new-source", geometry="new-mount")
+    assert not replay.step(
+        25,
+        offset=0.8,
+        wall=True,
+        source="new-source",
+        bridge_boot="new-bridge",
+        geometry="new-mount",
+    ).stable
+    scan = episode_frame(
+        26,
+        offset=0.8,
+        wall=True,
+        source="new-source",
+        bridge_boot="new-bridge",
+        geometry="new-mount",
+    )
     replay.now = scan.valid_until_steady_ns
     expired = replay.tracker.update(scan, profile=replay.profile)
     assert expired.unresolved_reason == "expired" and not expired.stable

@@ -211,6 +211,9 @@ def _residual(a: _Surface, b: _Surface, tolerance: float) -> _Residual:
     return _Residual(common, max(distances) + error, max(0.0, lower))
 
 
+_DEFAULT_LIMITS = GeometryLimits()
+
+
 class GeometryTracker:
     """One bounded current generation; lost/ambiguous tracks are simply forgotten.
 
@@ -221,7 +224,7 @@ class GeometryTracker:
     def __init__(
         self,
         *,
-        limits: GeometryLimits = GeometryLimits(),
+        limits: GeometryLimits = _DEFAULT_LIMITS,
         clock_ns: Callable[[], int] = time.monotonic_ns,
     ) -> None:
         self.limits = limits

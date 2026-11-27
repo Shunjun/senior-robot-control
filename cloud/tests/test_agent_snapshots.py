@@ -37,8 +37,12 @@ class Rig:
         self.agent: Connection = self.hub.attach_agent(ROBOT)
 
     def frame(
-        self, snapshot: RobotSnapshot = SNAPSHOT, *, epoch: int | None = None,
-        robot_id: str = ROBOT, sequence: int | None = None
+        self,
+        snapshot: RobotSnapshot = SNAPSHOT,
+        *,
+        epoch: int | None = None,
+        robot_id: str = ROBOT,
+        sequence: int | None = None,
     ) -> bytes:
         self.sequence += 1
         envelope = snapshot_envelope(
@@ -411,14 +415,22 @@ async def test_ordered_agent_long_session_keeps_one_scan_slot_and_rejects_origin
                 source="a",
                 remaining=0.5,
             )
-            layer = value.scan_layer.model_copy(update=dict(
-                backend_boot=f"boot{self.index}",
-                source_id=hashlib.sha256(str(self.index).encode()).hexdigest(),
-                sampled_at=100.0, expires_at=100.5,
-            ))
-            return replace(await super().collect(), localized=True, map_ref=MAP,
-                           map_generation=value.map_generation, scan_layer=layer,
-                           scan_points=value.scan_points)
+            layer = value.scan_layer.model_copy(
+                update=dict(
+                    backend_boot=f"boot{self.index}",
+                    source_id=hashlib.sha256(str(self.index).encode()).hexdigest(),
+                    sampled_at=100.0,
+                    expires_at=100.5,
+                )
+            )
+            return replace(
+                await super().collect(),
+                localized=True,
+                map_ref=MAP,
+                map_generation=value.map_generation,
+                scan_layer=layer,
+                scan_points=value.scan_points,
+            )
 
     class Socket:
         async def send(self, data):
@@ -443,12 +455,18 @@ async def test_ordered_agent_long_session_keeps_one_scan_slot_and_rejects_origin
             assert cached.snapshot.scan_layer.valid and len(cached.snapshot.scan_points) == 1
             assert cached.sequence == index + 1
             # Every robot-keyed table holds one current slot; no retired identity container.
-            sizes = {name: len(value) for name, value in vars(rig.hub.snapshots).items()
-                     if isinstance(value, dict)}
+            sizes = {
+                name: len(value)
+                for name, value in vars(rig.hub.snapshots).items()
+                if isinstance(value, dict)
+            }
             assert all(size == 1 for size in sizes.values())
             retired_entries = sum(
-                len(value) for table in vars(rig.hub.snapshots).values()
-                if isinstance(table, dict) for value in table.values() if isinstance(value, set)
+                len(value)
+                for table in vars(rig.hub.snapshots).values()
+                if isinstance(table, dict)
+                for value in table.values()
+                if isinstance(value, set)
             )
             assert retired_entries == 0
             if index in (1022, 1023, 1024, 1025):
@@ -464,10 +482,17 @@ async def test_ordered_agent_long_session_keeps_one_scan_slot_and_rejects_origin
         # Optional cross-language evidence consumed by the external real-client/hook probe.
         artifact = os.environ.get("T6_ORDER_ARTIFACT")
         if artifact:
-            Path(artifact).write_text(json.dumps(dict(
-                robot_id=ROBOT, epoch=link.epoch, frames=downstream,
-                checkpoints=checkpoints, uplink_ordinals=[json.loads(raw)["seq"] for raw in uplink],
-            )))
+            Path(artifact).write_text(
+                json.dumps(
+                    dict(
+                        robot_id=ROBOT,
+                        epoch=link.epoch,
+                        frames=downstream,
+                        checkpoints=checkpoints,
+                        uplink_ordinals=[json.loads(raw)["seq"] for raw in uplink],
+                    )
+                )
+            )
     finally:
         agent._link = None
         await link.close()

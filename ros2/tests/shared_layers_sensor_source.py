@@ -141,8 +141,19 @@ def freeze(path: Path, world: Path, urdf: Path) -> str:
 # Ordinary values only; receipt identities/qualification are never tape fields.
 MOTION_FORMAT = {
     "schema": 2,
-    "tick": ["index", "offset_ns", "steady_offset_ns", "dt", "command", "commands", "pose", "twist",
-             "object_offset_m", "invalid", "scan"],
+    "tick": [
+        "index",
+        "offset_ns",
+        "steady_offset_ns",
+        "dt",
+        "command",
+        "commands",
+        "pose",
+        "twist",
+        "object_offset_m",
+        "invalid",
+        "scan",
+    ],
     "command": ["ros_offset_ns", "steady_offset_ns", "vx", "wz"],
     "sensors": "original wheel/TF pose+twist; IMU same orientation,wz,gravity=9.80665",
     "scan": "original frozen_episode recipe + ranges; null means unknown",
@@ -161,17 +172,21 @@ def _validate_command(command):
         raise ValueError("invalid command fields")
     if any(type(command[n]) is not int for n in ("ros_offset_ns", "steady_offset_ns")):
         raise ValueError("invalid command time")
-    if not all(type(command[n]) in (int, float) and math.isfinite(command[n])
-               for n in ("vx", "wz")):
+    if not all(
+        type(command[n]) in (int, float) and math.isfinite(command[n]) for n in ("vx", "wz")
+    ):
         raise ValueError("invalid command value")
 
 
 def read_motion(rows):
     """Validate bounded per-tick ordinary tape before any replay publication."""
     metadata, *ticks, end = rows
-    if (metadata.get("format_sha256") != MOTION_FORMAT_SHA256
-            or metadata.get("schema") != 2 or metadata.get("ticks") != 1200
-            or metadata.get("beams") != BEAMS):
+    if (
+        metadata.get("format_sha256") != MOTION_FORMAT_SHA256
+        or metadata.get("schema") != 2
+        or metadata.get("ticks") != 1200
+        or metadata.get("beams") != BEAMS
+    ):
         raise ValueError("unsupported motion format")
     if end != dict(stage="input_end", ticks=1200, scans=300, complete=True):
         raise ValueError("incomplete ordinary input recording")
@@ -284,30 +299,46 @@ class SensorSource:
         self.record_episode = frozen_episode()
         self.input_complete = False
         self.following = True
-        _write_row(self.recording, dict(
-            schema=2, stage="input_metadata", format_sha256=MOTION_FORMAT_SHA256,
-            ticks=1200, beams=BEAMS, wheel_tf_hz=20, rate_hz=5,
-            world_sha256=hashlib.sha256(self.world.read_bytes()).hexdigest(),
-            urdf_sha256=hashlib.sha256(self.urdf.read_bytes()).hexdigest(),
-            source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            ros_stamp_origin_ns=self.record_origin_ns,
-            host_monotonic_origin_ns=self.record_steady_ns,
-            provenance=provenance, closed_loop=True, no_return="unknown",
-        ))
-        self.trace.emit("motion_record_begin", path=str(path),
-                        ros_stamp_origin_ns=self.record_origin_ns)
+        _write_row(
+            self.recording,
+            dict(
+                schema=2,
+                stage="input_metadata",
+                format_sha256=MOTION_FORMAT_SHA256,
+                ticks=1200,
+                beams=BEAMS,
+                wheel_tf_hz=20,
+                rate_hz=5,
+                world_sha256=hashlib.sha256(self.world.read_bytes()).hexdigest(),
+                urdf_sha256=hashlib.sha256(self.urdf.read_bytes()).hexdigest(),
+                source_sha256=hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+                ros_stamp_origin_ns=self.record_origin_ns,
+                host_monotonic_origin_ns=self.record_steady_ns,
+                provenance=provenance,
+                closed_loop=True,
+                no_return="unknown",
+            ),
+        )
+        self.trace.emit(
+            "motion_record_begin", path=str(path), ros_stamp_origin_ns=self.record_origin_ns
+        )
 
     def finish_recording(self):
         if self.recording is None:
             return
         complete = self.input_complete and self.recorded_scans == 300
-        _write_row(self.recording, dict(stage="input_end", ticks=self.tick,
-                   scans=self.recorded_scans, complete=complete))
+        _write_row(
+            self.recording,
+            dict(stage="input_end", ticks=self.tick, scans=self.recorded_scans, complete=complete),
+        )
         self.recording.close()
         self.recording_path.chmod(0o400)
         self.recording = None
-        self.trace.emit("motion_record_end", complete=complete,
-                        sha256=hashlib.sha256(self.recording_path.read_bytes()).hexdigest())
+        self.trace.emit(
+            "motion_record_end",
+            complete=complete,
+            sha256=hashlib.sha256(self.recording_path.read_bytes()).hexdigest(),
+        )
 
     def begin_frozen(self, path: Path):
         if path.stat().st_size > 32 * 1024 * 1024:
@@ -376,8 +407,11 @@ class SensorSource:
         if self.frozen is not None:
             from rclpy.time import Time
 
-            offset = (self.motion_ticks[self.tick]["offset_ns"]
-                      if self.motion_ticks is not None else self.tick * 50_000_000)
+            offset = (
+                self.motion_ticks[self.tick]["offset_ns"]
+                if self.motion_ticks is not None
+                else self.tick * 50_000_000
+            )
             # Wait for the recorded offset; late input keeps its old stamp.
             if self.motion_ticks is not None and actual_stamp_ns < self.frozen_origin_ns + offset:
                 return
@@ -459,8 +493,10 @@ class SensorSource:
                 if frame["operation"]:
                     self.operations.append(frame["operation"])
                     self.trace.emit(
-                        "input_operation_due", operation=frame["operation"], index=index,
-                        offset_ns=stamp.nanoseconds - self.frozen_origin_ns
+                        "input_operation_due",
+                        operation=frame["operation"],
+                        index=index,
+                        offset_ns=stamp.nanoseconds - self.frozen_origin_ns,
                     )
             else:
                 scan.ranges = ranges_for(
@@ -471,14 +507,18 @@ class SensorSource:
                     invalid=self.invalid,
                 )
             if self.recording is not None:
-                recorded_scan = dict(self.record_episode[index], ranges=[
-                    r if math.isfinite(r) else None for r in scan.ranges
-                ])
+                recorded_scan = dict(
+                    self.record_episode[index],
+                    ranges=[r if math.isfinite(r) else None for r in scan.ranges],
+                )
                 if recorded_scan["operation"]:
                     self.operations.append(recorded_scan["operation"])
-                    self.trace.emit("input_operation_due", operation=recorded_scan["operation"],
-                                    index=index,
-                                    offset_ns=stamp.nanoseconds - self.record_origin_ns)
+                    self.trace.emit(
+                        "input_operation_due",
+                        operation=recorded_scan["operation"],
+                        index=index,
+                        offset_ns=stamp.nanoseconds - self.record_origin_ns,
+                    )
             self.scan.publish(scan)
             self.trace.emit(
                 "raw_input",
@@ -499,7 +539,8 @@ class SensorSource:
         return dict(
             ros_offset_ns=self.command_stamp_ns - self.record_origin_ns,
             steady_offset_ns=self.command_at - self.record_steady_ns,
-            vx=self.command[0], wz=self.command[1],
+            vx=self.command[0],
+            wz=self.command[1],
         )
 
     def _record_tick(self, stamp, dt, vx, wz, recorded_scan):
@@ -507,13 +548,22 @@ class SensorSource:
             pose = self.pose
             self.recorded_scans += recorded_scan is not None
             command = self._recorded_command()
-            _write_row(self.recording, dict(
-                index=self.tick, offset_ns=stamp.nanoseconds - self.record_origin_ns,
-                steady_offset_ns=time.monotonic_ns() - self.record_steady_ns,
-                dt=dt, command=command, commands=self.pending_commands,
-                pose=[pose.x, pose.y, pose.yaw], twist=[vx, wz],
-                object_offset_m=self.offset, invalid=self.invalid, scan=recorded_scan,
-            ))
+            _write_row(
+                self.recording,
+                dict(
+                    index=self.tick,
+                    offset_ns=stamp.nanoseconds - self.record_origin_ns,
+                    steady_offset_ns=time.monotonic_ns() - self.record_steady_ns,
+                    dt=dt,
+                    command=command,
+                    commands=self.pending_commands,
+                    pose=[pose.x, pose.y, pose.yaw],
+                    twist=[vx, wz],
+                    object_offset_m=self.offset,
+                    invalid=self.invalid,
+                    scan=recorded_scan,
+                ),
+            )
             self.pending_commands = []
 
     def close(self):
