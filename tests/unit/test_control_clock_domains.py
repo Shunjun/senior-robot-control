@@ -125,6 +125,8 @@ def test_queue_age_replay_and_retired_source_cannot_replace_current_path():
     assert motion._path_point.path_id == before.path.path_id
     assert motion._path_point.stamp_ns == before.path.stamp_ns
     replacement = observation(10.3, 0.3, 1, producer="driver-new")
+    # The receiving lifecycle confirms replacement; a frame cannot self-authorize a boot.
+    motion.confirm_source_boot("laser", "driver-new")
     assert motion.ingest(replacement, now_ros=0.3, now_steady=10.3)
     assert not motion.ingest(observation(10.4, 0.4, 4), now_ros=0.4, now_steady=10.4)
 

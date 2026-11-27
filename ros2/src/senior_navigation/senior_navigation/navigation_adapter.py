@@ -14,10 +14,11 @@ from dataclasses import dataclass, field
 from typing import Protocol
 
 from senior_navigation.route import QualifiedRoute, RouteProgress, RouteStatus
+from vehicle_core.ros_wiring import TOPICS
 from vehicle_core.route_plan import RoutePlan
 from vehicle_core.values import MapRef, OperationResult, OperationStatus, Pose2D
 
-SAFETY_COMMAND_TOPIC = "/control/recovery_cmd"
+SAFETY_COMMAND_TOPIC = TOPICS.control_recovery_cmd
 ERROR_NONE = 0
 ERROR_GOAL_TERMINATED = 3
 

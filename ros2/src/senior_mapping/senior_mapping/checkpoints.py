@@ -18,9 +18,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, TypeVar
 
-from senior_mapping.archive import MapArchive
+from senior_mapping.archive import MapArchive, _file_bytes
 from senior_mapping.catalog import CatalogEntry, MapCatalog
-from senior_mapping.references import SlamSnapshot, durable_move_tree
+from senior_mapping.references import SlamSnapshot, durable_move_tree, load_snapshot
 from senior_mapping.store import MapReferenceStore
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.values import MapRef
@@ -31,6 +31,7 @@ class LoadedCheckpoint:
     snapshot: SlamSnapshot
     graph_directory: Path
     home_id: str
+    original_digest: str
 
 
 class MapCheckpoints:
@@ -56,6 +57,7 @@ class MapCheckpoints:
         self._leases_finished.set()
         self._recovery_required = False
         self._pinned: dict[str, int] = {}
+        self.saved_change_sequence = 0
 
     def _prepare(self) -> None:
         for path in (self.root, *self.root.parents):
@@ -136,6 +138,11 @@ class MapCheckpoints:
                 # create staging trees while a remote capture outcome is unknown.
                 self._recovery_required = True
                 raise
+            self.saved_change_sequence = (
+                captured.fixed.watermark.change_sequence
+                if captured.fixed is not None
+                else store.change_sequence
+            )
             entries = await self._catalog.list()
             entry = next(row for row in entries if row.map_ref == captured.map_ref)
             self._io = asyncio.create_task(
@@ -229,15 +236,24 @@ def _publish_files(
     snapshot.write(stage)
     if (stage / "occupancy.json").stat().st_size > byte_limit:
         raise DomainError(ErrorCode.VALIDATION, "checkpoint exceeds stable-layer byte limit")
-    (stage / "checkpoint.json").write_text(
-        json.dumps(
-            {
-                "version": 1,
-                "checkpoint_id": identity,
-                "home_id": home_id,
-            }
+    metadata = dict(version=1, checkpoint_id=identity, home_id=home_id)
+    if snapshot.fixed is not None:
+        graph = _file_bytes(stage / "pose_graph", byte_limit)
+        members = json.dumps(
+            {name: hashlib.sha256(data).hexdigest() for name, data in sorted(graph.items())},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        (stage / "members.json").write_bytes(members)
+        metadata.update(
+            version=2,
+            occupancy_sha256=hashlib.sha256((stage / "occupancy.json").read_bytes()).hexdigest(),
+            members_sha256=hashlib.sha256(members).hexdigest(),
         )
-    )
+    payload = json.dumps(metadata, sort_keys=True, separators=(",", ":")).encode()
+    if len(payload) > 4096:
+        raise DomainError(ErrorCode.VALIDATION, "checkpoint metadata exceeds 4096 bytes")
+    (stage / "checkpoint.json").write_bytes(payload)
     durable_move_tree(stage, destination)
 
 
@@ -263,15 +279,46 @@ def _read_file(path: Path, limit: int) -> bytes:
 
 def _read_cut(entry: CatalogEntry, directory: Path, limit: int) -> LoadedCheckpoint:
     try:
-        snapshot = SlamSnapshot.from_json(_read_file(directory / "occupancy.json", limit))
+        layer = _read_file(directory / "occupancy.json", limit)
         metadata = json.loads(_read_file(directory / "checkpoint.json", 4096))
+        snapshot = load_snapshot(layer)
+        graph = _file_bytes(directory / "pose_graph", limit)
+        original_members = {
+            "occupancy.json": hashlib.sha256(layer).hexdigest(),
+            "checkpoint.json": hashlib.sha256(
+                _read_file(directory / "checkpoint.json", 4096)
+            ).hexdigest(),
+            **{
+                "pose_graph/" + name: hashlib.sha256(data).hexdigest()
+                for name, data in graph.items()
+            },
+        }
+        original_digest = hashlib.sha256(
+            json.dumps(original_members, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+        if snapshot.fixed is not None:
+            members = _read_file(directory / "members.json", 262144)
+            graph = _file_bytes(directory / "pose_graph", limit)
+            if (
+                metadata.get("version") != 2
+                or metadata.get("occupancy_sha256") != hashlib.sha256(layer).hexdigest()
+                or metadata.get("members_sha256") != hashlib.sha256(members).hexdigest()
+                or json.loads(members)
+                != {name: hashlib.sha256(data).hexdigest() for name, data in graph.items()}
+            ):
+                raise ValueError("checkpoint immutable members changed")
+            metadata = {
+                k: v for k, v in metadata.items() if k not in ("occupancy_sha256", "members_sha256")
+            }
+        elif metadata.get("version") != 1:
+            raise ValueError("checkpoint mixes layer versions")
     except (OSError, ValueError) as exc:
         raise DomainError(ErrorCode.UNAVAILABLE, "complete checkpoint is unreadable") from exc
     if (
         snapshot.map_ref != entry.map_ref
         or metadata
         != {
-            "version": 1,
+            "version": 2 if snapshot.fixed is not None else 1,
             "checkpoint_id": entry.checkpoint_id,
             "home_id": entry.home_id,
         }
@@ -282,4 +329,4 @@ def _read_cut(entry: CatalogEntry, directory: Path, limit: int) -> LoadedCheckpo
     ):
         raise DomainError(ErrorCode.CONFLICT, "checkpoint metadata belongs to another cut")
     assert entry.home_id is not None
-    return LoadedCheckpoint(snapshot, directory / "pose_graph", entry.home_id)
+    return LoadedCheckpoint(snapshot, directory / "pose_graph", entry.home_id, original_digest)

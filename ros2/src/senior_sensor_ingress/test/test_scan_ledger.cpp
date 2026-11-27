@@ -32,10 +32,11 @@ TEST(ScanLedger, RawSafetyAndFilteredBeamsRemainBoundToIssuedFrame)
   auto forged = original.capture;
   forged.received_steady_ns += 10000000ULL;
   EXPECT_FALSE(ledger.same_ranges(forged, original.ranges, 10.1));
-  EXPECT_EQ(ledger.match(original.capture, 11.01), ScanLedger::Match::retired);
+  EXPECT_EQ(ledger.match(original.capture, 14.0), ScanLedger::Match::exact);
+  ASSERT_TRUE(ledger.observe(original, 14.0));  // Retention is not safety qualification.
 }
 
-TEST(ScanLedger, RetiredGenerationAndCapacityDoNotRevokeSuccessor)
+TEST(ScanLedger, OldGenerationAndCapacityDoNotRevokeSuccessor)
 {
   ScanLedger ledger(2, 1.0);
   BoundedRawLaserScan scan;
@@ -51,14 +52,22 @@ TEST(ScanLedger, RetiredGenerationAndCapacityDoNotRevokeSuccessor)
   ASSERT_TRUE(ledger.observe(scan, 10.0));
   const auto first = scan.capture;
   scan.capture.sequence = 2;
+  scan.capture.stamp.nanosec = 2;
+  scan.capture.received_ros.nanosec = 2;
+  scan.capture.received_steady_ns = 10000000000ULL;
+  scan.capture.sample_steady_ns = scan.capture.received_steady_ns;
   ASSERT_TRUE(ledger.observe(scan, 10.0));
   scan.capture.sequence = 3;
+  scan.capture.stamp.nanosec = 3;
+  scan.capture.received_ros.nanosec = 3;
+  scan.capture.received_steady_ns = 10000000000ULL;
+  scan.capture.sample_steady_ns = scan.capture.received_steady_ns;
   ASSERT_TRUE(ledger.observe(scan, 10.0));
-  EXPECT_EQ(ledger.match(first, 10.1), ScanLedger::Match::retired);
+  EXPECT_EQ(ledger.match(first, 10.1), ScanLedger::Match::missing);
   const auto retired = scan.capture;
   scan.capture.capture_generation = 2;
   scan.capture.sequence = 1;
   ASSERT_TRUE(ledger.observe(scan, 10.1));
-  EXPECT_EQ(ledger.match(retired, 10.1), ScanLedger::Match::retired);
+  EXPECT_EQ(ledger.match(retired, 10.1), ScanLedger::Match::old_generation);
   EXPECT_EQ(ledger.match(scan.capture, 10.1), ScanLedger::Match::exact);
 }

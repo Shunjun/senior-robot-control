@@ -1,3 +1,4 @@
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #ifndef SENIOR_MAPPING__MAPPING_NAVIGATION_HPP_
 #define SENIOR_MAPPING__MAPPING_NAVIGATION_HPP_
 
@@ -18,6 +19,8 @@
 
 namespace senior_mapping
 {
+// Localization-only diagnostic / one-time V1 migration raster.
+// The management owner installs authoritative fixed cuts; this service never publishes /map.
 // Preserve native free/occupied/unknown semantics. Never infer free from absence.
 inline std::optional<nav_msgs::msg::OccupancyGrid> bounded_native_raster(
   karto::Mapper & mapper, double resolution, std::size_t maximum_cells)
@@ -68,7 +71,7 @@ public:
   MappingNavigation(rclcpp::Node & node, std::string boot, std::function<bool()> active, Raster raster)
   : boot_(std::move(boot)), active_(std::move(active))
   {
-    grid_service_ = node.create_service<Grid>("/senior/slam/read_mapping_grid",
+    grid_service_ = node.create_service<Grid>(senior_sensor_ingress::wiring::senior_slam_read_mapping_grid,
       [this, raster](Grid::Request::SharedPtr request, Grid::Response::SharedPtr response) {
         if (request->boot_id != boot_ || !active_()) {return;}
         auto result = raster(request->graph_commit_sequence);
@@ -77,17 +80,17 @@ public:
         response->boot_id = boot_; response->graph_commit_sequence = request->graph_commit_sequence;
         response->ok = true;
       });
-    pose_service_ = node.create_service<Pose>("/senior/slam/read_mapping_pose",
+    pose_service_ = node.create_service<Pose>(senior_sensor_ingress::wiring::senior_slam_read_mapping_pose,
       [this](Pose::Request::SharedPtr request, Pose::Response::SharedPtr response) {
         if (request->boot_id != boot_ || !active_() || !pose_ ||
-          !scan_receipt_admission::fresh(pose_->capture, scan_receipt_admission::steady_seconds()))
+          !scan_receipt_admission::sample_valid(pose_->capture))
         {return;}
         *response = *pose_;
       });
   }
 
   void observe(const senior_interfaces::msg::RawCaptureHeader & capture,
-    const karto::Pose2 & odometry, bool verified_static)
+    const karto::Pose2 & odometry)
   {
     if (!std::isfinite(odometry.GetX()) || !std::isfinite(odometry.GetY()) ||
       !std::isfinite(odometry.GetHeading())) {pose_.reset(); return;}
@@ -95,7 +98,6 @@ public:
     result.boot_id = boot_; result.capture = capture; result.ok = true;
     result.odom_x = odometry.GetX(); result.odom_y = odometry.GetY();
     result.odom_yaw = odometry.GetHeading();
-    result.static_lidar_tf_receipt_valid = verified_static;
     pose_ = std::move(result);
   }
 

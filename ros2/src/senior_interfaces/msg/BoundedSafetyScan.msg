@@ -1,9 +1,9 @@
 senior_interfaces/RawCaptureHeader raw_capture
 # Bounded, process-isolated safety ingress. Monotonic time is from this host.
 builtin_interfaces/Time stamp
-string<=128 frame_id
-string<=64 source_epoch
-string<=128 raw_source
+string frame_id
+string source_epoch
+string raw_source
 uint64 sequence
 float64 ingress_steady
 float64 ingress_ros
@@ -17,4 +17,4 @@ float64 transform_stamp
 float64 sensor_x
 float64 sensor_y
 float64 sensor_yaw
-float32[<=2048] ranges
+float32[] ranges

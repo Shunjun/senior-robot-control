@@ -265,7 +265,7 @@ def test_restart_capture_floor_rejects_old_original_receipts():
     )
 
 
-def test_retired_raw_gid_cannot_reappear_under_new_generation():
+def test_gid_can_reappear_in_new_source_generation_without_blacklist():
     ledger = CaptureLedger(capacity=4, fresh_after_steady=0.1)
     assert ledger.offer(
         bundle(1),
@@ -283,14 +283,16 @@ def test_retired_raw_gid_cannot_reappear_under_new_generation():
     forged_old = tuple(
         replace(h, raw_gid="01", source_epoch="other", capture_generation=3) for h in bundle(3)
     )
-    assert not ledger.offer(
+    assert ledger.offer(
         forged_old,
         bridges=("02",) * 4,
         binding_generation=4,
         now_ros_ns=1_300_000_000,
         now_steady=1.3,
     )
-    assert ledger.current(successor, binding_generation=4, now_ros_ns=1_300_000_000, now_steady=1.3)
+    assert not ledger.current(
+        successor, binding_generation=4, now_ros_ns=1_300_000_000, now_steady=1.3
+    )
 
 
 def test_bridge_restart_can_keep_same_raw_source_with_new_boot_and_capture():

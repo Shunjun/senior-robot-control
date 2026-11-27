@@ -28,6 +28,8 @@ void require(bool condition, const char * reason)
 void checks_cached_mount_against_the_exact_tf_sample()
 {
   require(matches_native_laser_geometry(upright, offset, symmetric), "nonzero planar mount");
+  const LaserRayLayout dense{-pi / 2, pi / 5399, 5400, false};
+  require(matches_native_laser_geometry(upright, offset, dense), "dense scan keeps its complete layout");
 
   auto shifted = upright;
   shifted.x += 0.01;
@@ -80,8 +82,8 @@ void rejects_invalid_numeric_geometry()
   rays.angle_increment = std::numeric_limits<double>::infinity();
   require(!matches_native_laser_geometry(upright, offset, rays), "invalid angle increment");
   rays = symmetric;
-  rays.ray_count = 2049;
-  require(!matches_native_laser_geometry(upright, offset, rays), "unbounded layout");
+  rays.ray_count = 1;
+  require(!matches_native_laser_geometry(upright, offset, rays), "insufficient layout");
 }
 }  // namespace
 

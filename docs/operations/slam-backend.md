@@ -155,3 +155,341 @@ Home仍只有WaypointStore一份实时真值。Home编辑与checkpoint共享Home
 macOS完整回归2479 passed / 116原有skip，网页182项测试及构建通过；本机六个改动核心模块定向类型检查、五个重建wheel及已有core的隔离安装/源哈希检查另行记录。Parallels原生三包构建与针对性生产会话/静态安装来源测试已通过。尚未部署到树莓派，四核地图增长、视频并行、控制时延和实车路线执行未验收。
 
 最终收尾复验：本机2480 passed / 116既有skip，ROS实际栅格/静态来源/新鲜odom→Python导航参考桥通过，正常刷新保留位姿、来源撤销后停止资格。21项原生建图CTest已通过，proof断言修正后的静态来源与drift两项另行通过；160个冻结源码hash一致，测试进程清理通过。proof按所有typed字段比较，避免将不稳定CDR填充字节当作来源变化；相机退出回归的等待预算覆盖现有10秒关闭策略，未修改相机启停行为。
+
+## T3/T4 runtime 与归档接线（2026-11-26）
+
+管理侧沿原 0.05s 循环读取 start 握手给出的独立 latest-scan 槽。graph PENDING
+不阻止同 anchor 的新 scan；完整 source/boot、原 capture/deadline/floor、同一 canonical
+anchor digest 和 TF basis 合格后，才在原 ActiveMap 内 accept → GeometryTracker →
+C3 提交 → bind_support。tracker/free confidence 的有界 transient stage 也在提交成功后
+替换；容量拒绝保留旧引用和完整墙，Q 的 adapter 回调独立运行。未知 raw hit 不再走
+原 unknown_static 的固定升级旁路。旧 free 代次遇到合格 hit 会失效，不把该 hit 直接认成
+fixed occupied；有限 hit 之前的射线才可积 free，缺束/遮挡/无协议证明的无回波不清图。
+
+source/next/capture 失效、停止和已观察的参考变化使用本地 fence。旧 valid 文件不能重开
+已退休资格；新 graph basis 到达前的旧 R 批次不绑定到新图，尚未观察到的窗口仍受原
+500ms deadline 约束。恢复/跳帧后的稳定窗口只消费新的独立帧。恢复关联只查询当前局部
+持久摘要及已有空间索引；歧义、候选/查询容量饱和时不撤旧贡献、不靠分配新 ID 绕过。
+
+导航改走 `map.backend.reference` 的 owner 选择与 `map.backend.install_fixed` 私有文件
+安装。文件不超过 8MiB、同 uid、私有 regular inode、no-follow、SHA-256 验证，桥再核对
+当前 boot/MapRef/R、完整 graph/digest、floor 和 fixed/evidence 水位。owner 串行发送，
+没有无界安装队列；存盘期间 graph/fixed 冻结，入口 latest 槽只保留最新候选。桥发布唯一
+`/map` 并安装 reference 后回传原 watermark 和内容 G；owner 比较实际 ACK 后才把导航
+view 标为已安装。没有 free 格也可安装，不伪造 free。ACK 不证明 Nav2 StaticLayer 已消费
+或完成 resize；原 sole-map-owner 检查和 stock map remap 继续生效。
+
+`grid` RPC 必须显式指定 diagnostic 或 migrate_legacy；后者每个 backend boot 只允许
+一次，V2 恢复永不调用。原 1/5s native raster 刷新不再作为导航 fallback。
+`mapping_navigation.hpp` 的原三态服务仅作诊断/一次 V1 迁移。独立 scan 回调持续使用原始
+stamp 发布 TF，包括 graph gate/capture 期间，不依赖 graph 后的 pose 回调。
+
+保存先 gate/drain，捕获固定的 graph/fixed immutable cut，磁盘 I/O 不持管理 intake 锁或
+Q 锁；原 Home/save 事务统一锁顺序，也保护导出 checkpoint 租约。旧保存只确认其捕获的
+change_sequence。V2 的成员/hash、durable 发布和读取规则见 map-bundle 文档。失败 capture
+退休 fixed 资格并保留最后 catalog 指向，不把远端取消当作已停止的证明。
+
+当前生产 `NativeMappingBackend.geometry_profile` 为 None，原因是没有本 profile 的实测
+误差和协议证据；可靠 occupied 升级保持 `profile_missing`，没有部署示例物理阈值。
+测试显式注入 synthetic-admitted 的 T2 profile/轨迹，只验证接线。仍需原装配责任人提供
+原 scan/exact odom/TF 与误差来源，才能激活物理升级。无 ROS/colcon 本机不声称 native、
+Nav2 安装或实机通过；可运行 `SENIOR_SHARED_LAYERS_PROCESS=1` 的
+`ros2/tests/test_shared_layers_process.py`，另需隔离测试 adapter socket 和真实有资格入口。
+默认 skip 明确代表未验证，不算三进程通过。VM 模拟树莓派的资源实验也尚未执行。
+
+资源限制保留：dense bytes、G、三态验证和部分 staging 仍 O(N)，support/free 和 tracker
+stage 会同时持有旧/新有界结构，部分 legacy mask 仍整份复制。当前局部查询、dirty tiles
+及有界记录不等于端到端 O(dirty)，也不构成 CPU/RSS/Hz 已达标的承诺。
+
+## Task7 真实链 harness 与记录入口（2026-11-26，实施交付，未运行 ROS）
+
+`ros2/tests/test_shared_layers_process.py` 现在可自行组合真实 LaunchService、原
+`_NavigationStartup`、planner/localization ExecuteProcess、agent_adapter 与
+DedicatedController。它使用私有 catalog/socket、真实 robot_state_publisher/原 URDF、
+普通 `/scan`、`/wheel/odom`、`/imu/data` 和同 stamp odom→base_link；没有第二个
+Q、authorization、coverage 或 motion-runtime writer。静态资产由原 world_reference
+从同一 motion_qualification.sdf 生成，扫描直接 raycast 原 collision box 和原 S02 曲面。
+原 launch 仅抽取 `motion_stack_actions(context, *, before_navigation, after_navigation) -> MotionStackActions`，原入口仍依原顺序
+插入 environment/physics/camera，默认参数、startup 状态机未改；两个必需的输入动作工厂在原列表位置调用，保留构造及
+Launch 执行顺序。原入口固定传原 physics/environment 和 camera 工厂，没有默认新开关。
+
+功能 episode 检查 static→live 两旧 group exit0、同 overlay 路径、新原 planner 启动；
+manager/catalog 真实选 R/install 后，由原 global/local 插件写 coverage，最后 state.get
+ready。两 coverage 可用同源不同有效 sequence，各自回找原 Q/TF，不要求同帧。S05
+用原 PublishFiles 屏障与原 capture RPC，一次 A→B，核 native/manager graph 水位不变、
+同 anchor evidence/fixed 推进；S07 包含原支持撤销、墙保留、真实保存/close/restore、
+ProductionMappingRequests.map.export（map-transfer 边界）及逐格 O/F/U/原重grid核验。
+S09 保留真实旧 Q/slot 与 late fixed IPC 输入，停 scan 后不能续期，新 backend/R/source
+只能靠新完整 capture 与原授权恢复。R4 从原 route 的 running 状态正常 Launch shutdown，
+以 PID+starttime（含 zombie）核实际退出，未确认时保留证据，不以目录清理冒充退出。
+
+本机仅 helper/语法/相关 portable 检查；完整十包、ROS/Launch、实际双 costmap、上述真实
+episode 及四核性能均未验。磁盘屏障只证明 Python checkpoint 段；capture RPC 起止是
+可得上界，没有 native SaveToFile 子阶段时刻，不能声称该慢调用与 Q 已重叠。global 内部
+重建插件需要新的 startup run 的原限制保留，harness 不代签 permit。synthetic-admitted
+只改原 synthetic_profile 的 profile_id，其数值与 evidence_digest 不改，不是部署几何证据。
+
+首次整合启动 RED 的新增只读观测复用原 ROS logger 和 `system-trace.jsonl`：
+`reference_diagnostic` 记录原 HardwareReference map/pose 接受或首个拒绝原因、
+唯一 writer 拓扑（最多列四个）、GID、native receipt generation/sequence、原 stamp、
+receipt/sample steady 时刻、年龄、frame、三个协方差值和 map_serial；map `cells_match`
+仅在实际逐格检查后给 true/false，提前拒绝为 null。每个固定事件/原因最多每秒一条，
+下一条附 suppressed 数；pose stamp_interval_ns 是相邻回调的原 stamp 差，限流日志
+不能当完整发布序列或用来证明未发布。`pose_query` 可来自 state/qualification/warmer，
+同原因共享限流，不能将单条日志唯一绑定某轮 warmer。`warmer_diagnostic` 每轮记录模式、
+preparing_live、`pose_available_at_entry`（本轮原查询结果），以及 controller available/owned/
+closing；pose_check/warm_begin/warm_return 各自重新读取无副作用的 controller 字段，
+warm_return 的 controller 字段是返回后的快照，pose 字段仍仅为进入时的查询结果。
+原 warning 保留 warm 异常；begin 无 return 不能认定具体 lifecycle 阶段，日志也可能丢失。
+新增诊断的字段构造/JSON/ROS sink 异常被局部隔离，不改变原接收、资格或 warm 调用；
+原拓扑/receipt/接收异常仍按原路径处理，不以诊断失败重入日志。
+
+这些产品日志默认 always-on，无新增开关；INFO 被过滤也仍有字段构造和 JSON 成本。
+reference 仅限制输出频率，warmer 原2秒 sleep 每轮最多3条；同步输出耗时可能影响墙钟节奏。
+没有测量 CPU、延迟或调度开销，不能将本地回归签作性能通过。
+
+夹具 `static_service` 对完整 `/NAME/get_state` 记录 begin/ready/request/response（原
+state_id）和 wait_error（原等待阶段、异常类型），trace 自带 steady_ns；原30秒服务等待、
+外层60秒和退出45秒均不变。同时并行轮询只读 `state.get`，每次最多1秒、间隔2秒，记录为
+`static_diagnostic_state` 或读取错误；不会用快照替代原服务 active/ready 断言，离开
+static_ready 时取消并结算该诊断任务。快照与末尾 state.get 共用原 IPC 锁，取消仍走原锁结算。
+新增 trace emit 失败保留首个 trace.error，使原 TraceWriter 退出检查仍失败；不替换原
+GetState 超时/取消对象，所有已建立的 service client 仍走原 destroy finally。
+trace 错误不能签为观测完整或运行成功。未出现合格 pose、快照失败及服务超时都保持 RED，
+不得更改0.5秒年龄/协方差门槛、自签 ready/stopped/permit 或注入假定位来通过验证。
+
+运行真实验证的外部 subreaper 必须在 pytest 存活期间持续收割已收养子孙，并保留
+PID/starttime/收割记录；主 pytest 仍由原 Popen 唯一 wait owner 处理。不得等 pytest
+退出才收割，也不得让 waitpid 抢主进程，或将 zombie 从夹具结算义务中排除。
+外部工具修复由其原 owner 负责；本改动未修改工具、VM 或 native context-invalid 退出。
+
+以下是**后续 VM 派单命令**，不是本机已执行命令。先将负责人最终正常集成后的准确 commit
+冻结到私有源码/独立 build/install/log；禁止混 T6 未提交源。先复核 Humble/ABI、磁盘、空闲
+localhost domain 和原 dependency report，再进入源码根目录。原 12+5 Python prefix 仅是
+依赖：`/tmp/navigation-final-python-20261126/prefix` 与
+`/tmp/navigation-candidate-5d929e-20261126/python-prefix`，不能复用后者旧产品源码。
+
+```bash
+source /opt/ros/humble/setup.bash
+source /tmp/navigation-costmap-a097-lethal-first-20261126/install/local_setup.bash
+source /tmp/nav2-s13-unknown-cost-20261126/install-mppi/local_setup.bash
+export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="/tmp/navigation-final-python-20261126/prefix:/tmp/navigation-candidate-5d929e-20261126/python-prefix:${PYTHONPATH}"
+export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1
+# task_run 指本次新建的 0700 私有目录；不覆盖旧 prefix/build。
+export CMAKE_BUILD_PARALLEL_LEVEL=1 MAKEFLAGS=-j1
+colcon --log-base "$task_run/log" build --base-paths ros2/src \
+  --build-base "$task_run/build" --install-base "$task_run/install" \
+  --packages-up-to senior_mapping senior_navigation senior_robot senior_sim \
+  --executor sequential --parallel-workers 1
+source "$task_run/install/local_setup.bash"
+export PYTHONPATH="$PWD:$PWD/contracts/src:$PWD/senior_control/src:$PWD/ros2/src/senior_mapping:$PWD/ros2/src/senior_localization:$PWD/ros2/src/senior_robot:$PWD/ros2/src/senior_navigation:$PWD/ros2/src/senior_perception:$PWD/ros2/src/senior_motion_estimation:$PWD/ros2/src/senior_motion_control:$PWD/ros2/src/senior_sensor_ingress:$PYTHONPATH"
+colcon --log-base "$task_run/test-log" test --build-base "$task_run/build" \
+  --install-base "$task_run/install" --packages-select senior_mapping senior_navigation senior_interfaces
+colcon test-result --test-result-base "$task_run/build" --verbose
+# ROS_DOMAIN_ID 由 VM owner 核空闲后指定，不在此猜一个已空闲域。
+export ROS_LOCALHOST_ONLY=1 SENIOR_SHARED_LAYERS_PROCESS=1
+python3 -m pytest -p pytest_asyncio.plugin \
+  ros2/tests/test_shared_layers_process.py::test_owner_adapter_native_capture_restore_and_retirement \
+  --basetemp "$task_run/functional-pytest" -vv -s
+```
+
+十包闭包为 interfaces/localization/mapping/motion_control/motion_estimation/navigation/
+perception/robot/sensor_ingress/sim。先核真实导入、生成 typesupport、插件 XML/.so、ELF/maps
+及实际消费者参数；fixture 会查询 controller_server 的 batch=400、vx_max=.22、vx_min=-.15、
+wz_max=.4，并记录 overlay/实际 descendant argv。不能用旧 S13 的 batch=2000 结果替代。
+build 使用 CMAKE_BUILD_PARALLEL_LEVEL/MAKEFLAGS 请求单编译；VM 须核实际编译并发，不能将此文本当构建证据。
+
+Stationary-only sensor/SLAM reference 输入仅生成一次（不满足持续 MPPI/S16）：
+
+```bash
+python3 ros2/tests/shared_layers_sensor_source.py \
+  --freeze "$task_run/reference-input.jsonl" \
+  --world ros2/src/senior_sim/worlds/motion_qualification.sdf \
+  --urdf ros2/src/senior_sim/urdf/senior.urdf.xacro
+# 冻结文件通过同一 schema/hash 后供两版各用一次，不重新抽样或以控制输出改输入。
+export SENIOR_SHARED_LAYERS_REFERENCE_TRACE="$task_run/reference-input.jsonl"
+python3 -m pytest -p pytest_asyncio.plugin \
+  ros2/tests/test_shared_layers_process.py::test_frozen_stationary_system_reference \
+  --basetemp "$task_run/reference-pytest" -vv -s
+# TRACE 指对应 pytest 私有目录内的 native/system-trace.jsonl 或 reference/system-trace.jsonl。
+python3 tools/occupancy_replay_benchmark.py --system-trace "$TRACE" --output "$task_run/summary.json"
+```
+
+执行 reference pytest 前，由 VM owner 在独立 transient **task-only** scope 内核实际
+`cpu.max=400000 100000`、四 CPU affinity/cpuset、`memory.max=4294967296`、swap 策略和
+MemAvailable≥6GiB；不要改用户/system slice，不在 Bot1 创建 scope。两版串行、同输入/hash、
+同包络，scope 内包括 recorder。若需 taskset fallback，逐 descendant 核继承。历史产品基线
+`11a26906c9831b000b09e2279ad7ef4ea514d903` 的旧装配没有新 factory/Q/coverage，不能把
+当前 pytest 原样当作旧版 runner；其原入口适配及缺项 N/A 仍需后续 VM 对照 owner 核实，
+本轮没有构建/取得可比旧版栈或补写旧版产品。
+
+stationary-only reference 是 60s/300×5Hz×2048 的物体 stable A→motion→stable B，原曲面从3.0m到+0.4m，
+第150帧一次显式 save，第299帧结束后原 restore/export；20Hz wheel/TF 固定零轨迹，普通
+IMU 与原 mount 一致。参考 stamp 按冻结偏移与每次运行记录的 epoch 形成，不以晚到回调
+重新盖新鲜时间；实际 lateness 另记。bootstrap/postlude 不计入300帧，恢复 postlude 为同一 B。
+功能模式的原 SE2 则仅跟随最终 `/cmd_vel`。冻结模式仅发起同一原 route 观察其生命周期，
+不跟随私有 MPPI Twist，也不伪造车动；零 odom 无法满足原 progress 的 .2m/10s，不能提供健康持续60s控制；真实失败时测试
+保留失败并 RED，不重复发任务、调超时或把记录成功当导航成功。restore/export/close
+可能按原 lifecycle 必须再 capture，不能把它们藏成“只有一次 native SaveToFile”。
+
+trace schema=1：metadata（run/commit/tree/host、输入/地图/URDF/profile/params hash）、
+stage/steady_ns、完整 host+ScanKey、原 stamp/sample/deadline、原契约 R/G/role/authority/
+permit/plugin_instance/cycle、进程 PID/starttime/PPID/PGID/cgroup、resource/file/DDS 观察。
+CPU 200ms，PSS/RSS/IO/context-switch 1s；JSONL writer 队列4096、单行262144 bytes，
+capture 索引512，summary capture 窗4096、进程512，overflow/eviction/error 明记。
+控制回调只入队；磁盘 writer 与资源采样独立 task-owned 线程，结尾有 drop/queue高水位/
+writer CPU/emit耗时，开销不冒称零。summary 的 complete 仅表示存在 trace_end，不能当
+功能通过；无 footer、丢 trace、未配对 coverage 分列。接收/周期延迟是观测上界，Twist
+没有 capture key，只能窗口关联；未导出的 native 发布时刻、锁等待、DDS queue/match/loop
+指标 N/A，sequence gap 不是 DDS 纯丢包。最终 T6 UI 未集成前不能签完整 S16/实车。
+
+VM reference scope 可直接用以下命令包住上面的 reference pytest（仅 VM 执行 owner 在功能
+门槛、prefix/输入 hash、swap 与原 warm-chain 资源亲核后执行）。作用域是本次唯一任务，
+标准库 preflight 在任何 ROS 导入/启动前核实际 cgroup/affinity/可用内存，失败即停；
+cpuset 不支持时由 VM owner 记录失败与批准的 taskset 继承核验，不改系统 slice。
+
+```bash
+systemd-run --scope --unit=navigation-task7-reference-20261126 \
+  --property=CPUQuota=400% --property=MemoryMax=4G --property=AllowedCPUs=0-3 \
+  python3 -c '
+import os, pathlib, sys
+line = next(s for s in pathlib.Path("/proc/self/cgroup").read_text().splitlines() if s.startswith("0::"))
+root = pathlib.Path("/sys/fs/cgroup") / line[3:].lstrip("/")
+assert line != "0::/", "task-only cgroup required"
+quota, period = root.joinpath("cpu.max").read_text().split()
+assert int(quota) == 4 * int(period)
+assert root.joinpath("memory.max").read_text().strip() == "4294967296"
+assert os.sched_getaffinity(0) == {0, 1, 2, 3}
+available = next(int(s.split()[1]) for s in pathlib.Path("/proc/meminfo").read_text().splitlines() if s.startswith("MemAvailable:"))
+assert available >= 6 * 1024 * 1024
+print("task cgroup", root, "swap.max", root.joinpath("memory.swap.max").read_text().strip(), flush=True)
+os.execv(sys.executable, [sys.executable, "-m", "pytest", "-p", "pytest_asyncio.plugin", "ros2/tests/test_shared_layers_process.py::test_frozen_stationary_system_reference", "--basetemp", os.environ["TASK7_REFERENCE_BASETEMP"], "-vv", "-s"])
+'
+```
+
+`TASK7_REFERENCE_BASETEMP` 指新的私有 pytest 目录，须在执行前显式 export；scope unit 名称也
+应为本次唯一且未占用名称。上面没有设置 MemorySwapMax，也没有把历史 scope 的25%/256MiB
+探针当作车辆规格。完整基线/UI 并发与最终 S16 仍由负责人另派，不能只跑这段就签通过。
+
+
+### 八项独立审核返修边界（2026-11-26）
+
+当前入口名称含 `stationary`，仅记录静止 sensor/SLAM；采满300帧不代表全负载成功，
+终态/idle之后MPPI指标N/A，真实failed/missing等仍保留并使pytest RED。运动参考仅有
+仓库外提案，未实现/运行；短原route不能承诺一次健康60s，T6 UI未集成仍不签完整S16。
+
+coverage contract的schema=1与trace envelope的schema=1独立：完整payload置于record，
+拒未知contract schema；解码兼容原file.record和原扁平helper。原async pump每100ms只读
+slot与两coverage，即使主loop在save/restore await仍观察；磁盘读在IO worker，capture
+索引只由asyncio owner访问，控制回调只入队。每角色各自按完整host/ScanKey回Q/TF/slot，
+不要求双角色同sequence，不续原sample+500ms。summary按bootstrap/stationary_reference/
+save/restore_export列样本数、缺角色N/A与缺Q/TF/slot；bootstrap不能冒充主窗60s。
+
+原navigation.task_status按execution_id/task_epoch观察starting/running/cancel_pending/
+failed/succeeded/canceled/missing，accepted不算active。原私有controller Twist与最终
+cmd_vel仅按窗口关联；输出只在最近200ms内确有running及ready观察时计入该窗口，查询
+阻塞/缺样时未知，不外推负载时长。终态/失格时刻是观察上界，分开保留。取消仅发一次，
+按同effect_id/sequence/epoch查询原revoke，须accepted/output_exited/fenced-through及
+原progress退出同时确认；ok本身不够，未确认失败留trace，不造退休file。
+
+CPU ticks另带实际identity读取前后的monotonic区间，完成时刻作为统一的采样端点上界，
+不采用full字段读完后的入队时间。两次CPU读区间之间或区间内触及phase边界的差分标
+straddling，不分配阶段CPU；同名phase往返也不合并。阶段按CPU读区间归属，整次平均
+同样用CPU读完成端点；这是有界分次观察，非原子快照。旧trace缺CPU读取区间则CPU
+指标缺项（N/A），不从入队时间猜端点；非CPU字段仍为原入队观察口径。IO/上下文切换为
+同PID:starttime整次first-last差分，不称阶段计数。cgroup按字段保留最近实际值及时间，
+轻量cpu行不抹内存/events/peak/max；kernel memory.peak与sampled current max口径不同。
+RSS不相加异时峰值，PSS没有异时求和；task cgroup含producer/recorder，不称产品独占。
+
+发现后代时将原starttime及父身份带到register复核，full采样前后复核incarnation/cgroup；
+不符丢弃并记unconfirmed。stat/cgroup为同incarnation内的有界分次观察，不是原子内核
+快照。受控读取序列覆盖竞态分支，未在Linux现场制造PID复用；无按名字补认/进程控制。
+本次仅本child定向helper/summary/factory及必要旧回归；Humble/十包/真实链仍留后续VM。
+
+### 已选 A：原短路线的运动输入记录/冻结/重放
+
+保留上面的 schema1 stationary 文件、命令和 SHA256，不能把它签成运动参考。
+新增 VM 专用入口复用同一 manager/catalog、NativeSession、原 world/URDF/profile 和
+`[0.7,0,0]` 单 execution/epoch；不延长路线、不重发任务、不改 progress/资格/安全。
+以下沿用前文已准备的安装环境、隔离域和 task-only 四核 scope；Bot1 未执行 ROS 或性能。
+
+```bash
+# 仅 VM：生成一次，输出路径必须不存在；原最终 /cmd_vel 经原 SE2 驱动普通输入。
+unset SENIOR_SHARED_LAYERS_MOTION_REPLAY
+export SENIOR_SHARED_LAYERS_MOTION_RECORD="$task_run/motion-input.jsonl"
+python -m pytest -p pytest_asyncio.plugin \
+  ros2/tests/test_shared_layers_process.py::test_motion_system_reference \
+  --basetemp "$task_run/motion-record" -vv -s
+sha256sum "$SENIOR_SHARED_LAYERS_MOTION_RECORD"
+
+# 仅 VM：两版各一次，使用上次原文件/hash、同 offset；不从输出反控输入。
+export SENIOR_SHARED_LAYERS_MOTION_REPLAY="$SENIOR_SHARED_LAYERS_MOTION_RECORD"
+unset SENIOR_SHARED_LAYERS_MOTION_RECORD
+python -m pytest -p pytest_asyncio.plugin \
+  ros2/tests/test_shared_layers_process.py::test_motion_system_reference \
+  --basetemp "$task_run/motion-replay" -vv -s
+```
+
+schema2 JSONL 上限仍为 32MiB：metadata + 1200 个真实 20Hz tick + input_end。
+每 tick 存实际 ROS/host monotonic offset、原受限 dt、最新 command 及该 tick 间全部收到的
+最终 command 时间/数值（最多256条，超限报错），wheel/同 stamp TF 共用 pose/twist；
+IMU 由同一 yaw/wz 和原固定重力、协方差无损生成，常量契约进入 format SHA256。
+每4 tick 保存原5Hz×2048 raw（无回波 null）、原对象 phase/offset、save/restore recipe；
+事件的实际 offset 是所属 tick 的 offset，recipe 的 offset 仍保留原名义时间表。
+metadata 包含录制 epoch、host boot、source commit/tree、producer SHA256、format SHA256、
+原资产/地图/profile/launch/参数 hash 与原 plan；fixture 原 trace 仍保留各版实际参数及输出。
+录制完成文件转0400，并输出完整 SHA256；中断仍保留 complete=false footer，reader 拒绝重放。
+文件完整只表示普通输入完整，不表示运动/资格/导航成功。
+
+重放先校验每帧/每 tick、原 scene/marker 与 world/URDF hash，再逐 tick 消费；
+stamp=该 run 新记录的 epoch+冻结 offset，未到时等待，迟到保留旧 stamp 并报告 lateness。
+第1200 tick 后停止 tape 发布，postlude 显式恢复原 B 静态输入。
+最终/private 输出只进入原 trace，不能改变冻结 pose、twist、IMU、raw 或操作 offset；
+不保存/重放 ScanKey、GID、Q、permit、coverage、ACK，这些由每版原 owner 重新产生。
+
+60s 尾段仅 sensor/SLAM。只比较两版同 execution/epoch、实际 running+qualified、
+健康 motion/TF/scan 和新鲜 private/final 输出的共有短窗；沿原200ms观测新鲜度，查询阻塞、
+缺样、终态/失格之后不能外推，终态时间仅为观察上界。save仍用原第150帧 marker，
+restore/export仍在原第299帧 marker之后走原生命周期；若没有实测 active/save 重叠，
+明确缺该证据，不能声称持续60s MPPI、完整S16或整T7成功。
+原 trace 工具未扩展，phase 可包含 motion_reference，按两份实际 trace 另行核共有窗口；
+其 sustained_mppi 始终 N/A，旧 stationary 提示不是运动成功判定。
+
+### 隔离仿真 AMCL 输入初始化与静止更新（2026-11-26）
+
+原 NativeFixture 在原 observer node/async owner 中，于 map_server、AMCL 的真实
+GetState 返回 ACTIVE 后、等待 controller 之前，调用官方 `/set_initial_pose`
+（nav2_msgs/srv/SetInitialPose）。仅已知隔离 world 出生点使用 map 坐标 (0,0,0)，
+以原 node clock 的实际 stamp 和完整36项 covariance 输入一次 seed：x/y=0.5²、
+yaw=(π/12)²，其余项零。这些值复用官方 navigation2
+[`a097086719c88f781aa59788eca29ac6ca5e56db` 的 initOdometry 默认 prior](https://github.com/ros-navigation/navigation2/blob/a097086719c88f781aa59788eca29ac6ca5e56db/nav2_amcl/src/amcl_node.cpp#L1571)，
+源文件 SHA256 为 `29a6402bf643fc8ea0d2dcea29619d4cbdcaf7014c811332ed4e86e593d3f1af`。
+它是普通仿真初始化输入，不能签为实车误差 profile、定位误差实测或产品通过阈值。
+原 launch 参数 seed 未填 covariance，会覆盖该默认 prior 为零；数学零方差本身不是坏报文，
+这里修正的是测试输入，不在产品中添加 epsilon 或降低协方差要求。
+
+服务空响应只表示调用完成，不是“已定位”。必须由原 AMCL 在真实 scan/TF 上生成
+posterior，再经原 native MessageInfo、writer/receipt/clock、map serial、回放/退休保护、
+严格正且有界 covariance 和原测量年龄 <0.5s 检查；原 state.get/navigation_ready 和
+warmer 仍有最终决定权。夹具既不发布 amcl_pose/Q/TF/ready，也不重盖任何 pose 时间。
+只读 `/amcl_pose` 观察记录原 stamp、完整 covariance 与计数，observer 没有逐消息 GID，
+不能代替 native 身份认证，历史观察也不能代认 seed 后 posterior。
+
+仅 startup.phase==static 时，独立 async 任务按新观察到的 `/scan` 原 stamp 推进，
+最多按原5Hz节奏、最多一个请求在途调用官方 `/request_nomotion_update`。重复/倒序
+stamp 不触发，无新 scan 不忙请求；慢服务期间只保留最新 scan，不追补请求队列。
+这只设置 AMCL force_update，仍需下一次真实 scan 的滤波/发布，响应不续 pose 年龄。
+`static_amcl_service` 记录初始化来源/先验/ACTIVE依据、请求与响应、触发 scan stamp、
+实际已观察 pose 数及错误/取消；`static_amcl_pose` 记录真实接收样本原 stamp，
+`static_amcl_settled` 记录资源结算。trace 自带观察 steady_ns，不声称请求与某条 pose
+具有未证明的因果对应关系。
+
+调用沿用原 wait/call 模式和30秒等待，外层60秒、shutdown45秒均不变；独立任务等待
+服务时原 executor pump 继续 spin。static_ready 真正返回 ready 前取消并结算此任务，
+然后调用方才能进入原 preparing/live；phase 离开 static 也停止发送，shutdown 在原
+Launch 退出之前取消 future、移除 pending request 并销毁新增的两个 clients 和两个
+只读 subscriptions。失败仍失败，服务任务失败不免除原 Launch 清退义务；不新增 node、
+进程或业务调度 owner。原功能 case 的 S05/S07/S09/R4、world、0.7m路线、scan/轮速/TF、
+足迹与 progress 断言均保持。组件替身仅验证输入/生命周期契约，本机没有 ROS/rclpy，
+真实服务、AMCL posterior、native 与整功能仍须由负责人亲审后交原 VM 验证。

@@ -11,6 +11,7 @@ keep their local execution lifetime. This adapter never writes an actuator veloc
 
 import asyncio
 import fcntl
+import json
 import os
 import re
 import stat
@@ -64,6 +65,7 @@ class AdapterCore:
         mapping: MappingRequests | None = None,
         state_provider: Callable[[], dict[str, Any]] | None = None,
         pose_provider: Callable[[], dict[str, Any]] | None = None,
+        state_preview: Callable[[dict[str, Any], int], None] | None = None,
         routes: "RouteService | None" = None,
         navigation_ready: Callable[[], bool] | None = None,
         ros_domain: int | None = None,
@@ -79,6 +81,7 @@ class AdapterCore:
         self._workspace_map = workspace_map
         self._state_provider = state_provider
         self._pose_provider = pose_provider
+        self._state_preview = state_preview
         self._routes = routes
         self._settled_sequence = 0
         self._task_effect_sequences: dict[str, int] = {}
@@ -130,7 +133,6 @@ class AdapterCore:
         if kind == "learning":
             import asyncio
             import hashlib
-            import json
             import os
             from pathlib import Path
 
@@ -225,6 +227,17 @@ class AdapterCore:
             if kind == "state.get":
                 result["task_lifecycle_version"] = 2 if self._routes is not None else 0
                 result["manual_protocol_version"] = 1 if self._manual is not None else 0
+                # Match ipc._answer/_encode after all provider/runtime/version fields exist.
+                result["v"] = 1
+                if result.get("scan_layer") is not None and self._state_preview is not None:
+                    for budget in range(96, -1, -1):
+                        self._state_preview(result, budget)
+                        body = json.dumps(
+                            result, separators=(",", ":"), allow_nan=False, ensure_ascii=True
+                        ).encode()
+                        if len(body) <= 8192:
+                            break
+                    # If the original non-preview reply exceeds the limit, IPC still rejects it.
             return result
         if kind in {"map.active", "map.manifest", "map.tile"}:
             if self._workspace_map is None or self._exiting:
@@ -646,6 +659,13 @@ def main() -> None:
         previous_route_failure = None
         node.declare_parameter("navigation_controller_params", "")
         nav_params = str(node.get_parameter("navigation_controller_params").value)
+        from senior_navigation.parameters import read_navigation_contract, request_live_handoff
+
+        contract = (
+            read_navigation_contract(Path(nav_params))
+            if nav_params and Path(nav_params).is_file()
+            else None
+        )
         node.declare_parameter("navigation_odometry_topic", "/wheel/odom")
         if reference is not None and nav_params and Path(nav_params).is_file():
             from senior_navigation.dedicated_controller import DedicatedController
@@ -660,6 +680,9 @@ def main() -> None:
                 node,
                 Path(nav_params),
                 odometry_topic=str(node.get_parameter("navigation_odometry_topic").value),
+                permit_changed=lambda permit: mapping_backend._navigation.rotate_local_permit(
+                    permit
+                ),
             )
 
             def qualified(ref, generation, *, continuing=True):
@@ -733,7 +756,35 @@ def main() -> None:
                 and (route is None or route.status in {"succeeded", "failed", "canceled"})
             )
 
-        mapping_backend = RosMappingBackend(node, stopped=mapping_stopped, reference=reference)
+        preparing_live = False
+
+        async def prepare_live():
+            nonlocal preparing_live
+            if contract is None:
+                raise RuntimeError("live navigation handoff incomplete: no startup contract")
+            if contract["mode"] == "live":
+                return
+            if not contract.get("handoff_socket"):
+                raise RuntimeError(
+                    "live navigation handoff incomplete: "
+                    "external static localization owner has no control handle"
+                )
+            preparing_live = True
+            try:
+                if controller is not None:
+                    await controller.close()
+                await request_live_handoff(contract)
+                mapping_backend._navigation.contract.update(contract)
+            finally:
+                preparing_live = False
+
+        mapping_backend = RosMappingBackend(
+            node,
+            stopped=mapping_stopped,
+            reference=reference,
+            contract=contract,
+            prepare_live=prepare_live,
+        )
         core = AdapterCore(
             robot_id=robot_id,
             mapping=mapping_backend,
@@ -742,6 +793,7 @@ def main() -> None:
             request_exit=request_exit,
             workspace_map=WorkspaceMap(reference.grid) if reference is not None else None,
             state_provider=state,
+            state_preview=reference.resize_preview,
             pose_provider=reference.pose_reply if reference is not None else None,
             routes=routes,
             navigation_ready=navigation_ready,
@@ -761,10 +813,39 @@ def main() -> None:
 
             async def warm_controller() -> None:
                 assert controller is not None
+
+                def diagnose(phase, pose_available):
+                    try:
+                        diagnostic = dict(
+                            phase=phase,
+                            steady_ns=time.monotonic_ns(),
+                            reference_mode=(
+                                "live" if getattr(reference, "enabled", False) else "static"
+                            ),
+                            preparing_live=preparing_live,
+                            pose_available_at_entry=pose_available,
+                            controller_available=controller.available(),
+                            controller_owned=len(controller._owned),
+                            controller_closing=controller._closing,
+                        )
+                        node.get_logger().info("warmer_diagnostic " + json.dumps(diagnostic))
+                    except Exception:
+                        # Only new observations are optional; never skip warm or
+                        # retry a failing diagnostic through the same logger.
+                        pass
+
                 while not exiting:
                     try:
-                        if reference is not None and reference.pose() is not None:
+                        pose_available = (
+                            reference.pose() is not None
+                            if not preparing_live and reference is not None
+                            else None
+                        )
+                        diagnose("pose_check", pose_available)
+                        if pose_available:
+                            diagnose("warm_begin", pose_available)
                             await controller.warm()
+                            diagnose("warm_return", pose_available)
                     except (RuntimeError, OSError) as exc:
                         node.get_logger().warning(f"Scoped Nav2 warm-up failed: {exc}")
                     await asyncio.sleep(2)
@@ -818,9 +899,16 @@ def main() -> None:
                 if warmer is not None:
                     warmer.cancel()
                     await asyncio.gather(warmer, return_exceptions=True)
-                await mapping_backend.close()
-                if controller is not None:
-                    await controller.close()
+                try:
+                    try:
+                        await mapping_backend.close()
+                    finally:
+                        if controller is not None:
+                            await controller.close()
+                except BaseException as exc:
+                    # A zero process exit is the launch owner's settlement proof.
+                    # Do not let the ROS CLI wrapper swallow an interrupted cleanup.
+                    raise RuntimeError("navigation consumer cleanup incomplete") from exc
                 try:
                     if started:
                         await server.close()

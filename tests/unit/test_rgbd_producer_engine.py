@@ -2,7 +2,7 @@ import time
 
 from senior_perception.vision.independent_motion import Profile
 from senior_perception.vision.rgbd_producer_engine import RgbdProducerEngine
-from senior_perception.vision.static_tf_binding import Edge, Receipt, StaticBinding
+from senior_perception.vision.static_tf_binding import Edge, StaticBinding, TransformSnapshot
 from test_rgbd_coordinator import capture
 
 
@@ -10,17 +10,13 @@ def test_four_streams_produce_compact_candidate_through_real_spawn():
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert binding.observe(
-        Receipt("tfboot", "03", 1, 1, 0, 0.0, (edge,), "04"),
-        current_gid="03",
-        current_relay_gid="04",
+        TransformSnapshot((edge,)),
     )
-    assert binding.admit(1_000_000_000, 1.0)
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     engine = RgbdProducerEngine(
         profile,
         binding,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
         generation=1,
         sequence_floor=0,
@@ -56,17 +52,13 @@ def test_invalid_capture_status_revokes_then_old_generation_is_ignored():
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert binding.observe(
-        Receipt("tfboot", "03", 1, 1, 0, 0.0, (edge,), "04"),
-        current_gid="03",
-        current_relay_gid="04",
+        TransformSnapshot((edge,)),
     )
-    assert binding.admit(1_000_000_000, 1.0)
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     engine = RgbdProducerEngine(
         profile,
         binding,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
         generation=1,
         sequence_floor=0,
@@ -87,8 +79,7 @@ def test_invalid_capture_status_revokes_then_old_generation_is_ignored():
             valid=False,
             capture_generation=2,
             sequence=2,
-            stamp_ns=0,
-            received_ros_ns=0,
+            time=replace(headers[0].time, stamp_ns=0, received_ros_ns=0),
             frame_id="",
             raw_gid="",
             source_epoch="",
@@ -112,7 +103,6 @@ def test_recovery_retains_frontiers_and_requires_new_worker_generation():
         profile,
         binding,
         registration="registered",
-        fresh_after_ros_ns=100,
         fresh_after_steady=1.0,
         generation=7,
         sequence_floor=17,
@@ -125,7 +115,6 @@ def test_recovery_retains_frontiers_and_requires_new_worker_generation():
             profile,
             binding,
             registration="registered",
-            fresh_after_ros_ns=101,
             fresh_after_steady=1.1,
             generation=7,
             sequence_floor=17,
@@ -136,7 +125,6 @@ def test_recovery_retains_frontiers_and_requires_new_worker_generation():
             profile,
             binding,
             registration="registered",
-            fresh_after_ros_ns=101,
             fresh_after_steady=1.1,
             generation=8,
             sequence_floor=16,
@@ -146,7 +134,6 @@ def test_recovery_retains_frontiers_and_requires_new_worker_generation():
         profile,
         binding,
         registration="registered",
-        fresh_after_ros_ns=101,
         fresh_after_steady=1.1,
         generation=8,
         sequence_floor=17,
@@ -158,7 +145,6 @@ def test_recovery_retains_frontiers_and_requires_new_worker_generation():
                 profile,
                 binding,
                 registration="registered",
-                fresh_after_ros_ns=102,
                 fresh_after_steady=1.2,
                 generation=9,
                 sequence_floor=17,
@@ -181,7 +167,6 @@ def test_recovery_never_returns_frontiers_when_old_worker_fails_to_stop(monkeypa
         profile,
         binding,
         registration="registered",
-        fresh_after_ros_ns=100,
         fresh_after_steady=1.0,
         generation=1,
         sequence_floor=0,
@@ -206,7 +191,6 @@ def test_retired_raw_replay_after_recovery_never_reaches_new_worker():
         profile,
         binding,
         registration="registered",
-        fresh_after_ros_ns=100,
         fresh_after_steady=1.0,
         generation=1,
         sequence_floor=0,
@@ -236,7 +220,6 @@ def test_retired_raw_replay_after_recovery_never_reaches_new_worker():
         profile,
         binding,
         registration="registered",
-        fresh_after_ros_ns=1_200_000_000,
         fresh_after_steady=1.2,
         generation=retained.worker_generation + 1,
         sequence_floor=retained.sequence_frontier,

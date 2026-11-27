@@ -259,7 +259,7 @@ class MotionSensorRuntime:
             )
         observed = [a for a in (r.vx, r.wz) if a.observed]
         roots = tuple(dict.fromkeys(root for a in observed for root in a.roots))
-        key = tuple((root.family, root.epoch, root.sequence) for root in roots)
+        key = tuple((root.family, root.epoch, root.time.stamp_ns) for root in roots)
         if key != self._evidence_key:
             self._evidence_key = key
             self._evidence_sequence += 1
@@ -295,7 +295,7 @@ class MotionSensorRuntime:
                 dict.fromkeys(root for axis in independent for root in axis.roots)
             )
             independent_key = tuple(
-                (root.family, root.epoch, root.sequence) for root in independent_roots
+                (root.family, root.epoch, root.time.stamp_ns) for root in independent_roots
             )
             if independent_key != self._independent_key:
                 self._independent_sequence += 1

@@ -20,6 +20,17 @@ inline int64_t stamp_ns(const builtin_interfaces::msg::Time & stamp)
   return int64_t(stamp.sec) * 1000000000LL + stamp.nanosec;
 }
 
+// Capture association uses source lifetime and original coordinates. GID and
+// sequence are diagnostics, so changing either cannot invalidate an association.
+inline bool same_capture_coordinates(const senior_interfaces::msg::RawCaptureHeader & a,
+                                     const senior_interfaces::msg::RawCaptureHeader & b)
+{
+  return a.bridge_boot_id == b.bridge_boot_id && a.capture_generation == b.capture_generation &&
+    a.clock_generation == b.clock_generation && a.frame_id == b.frame_id && a.stamp == b.stamp &&
+    a.received_ros == b.received_ros && a.received_steady_ns == b.received_steady_ns &&
+    a.sample_steady_ns == b.sample_steady_ns && a.valid == b.valid;
+}
+
 // A bounded frontier belongs to one real publisher and one local clock segment.
 // Check it before mapping so a retransmission never acquires a new receipt.
 class StampFrontier {

@@ -201,8 +201,7 @@ def test_depth_snapshot_validates_real_pixel_and_transform_and_is_immutable(stam
         depth_snapshot(wire)
     wire = wire_depth(stamp_ns)
     wire.source_epoch = ""
-    with pytest.raises(ValueError):
-        depth_snapshot(wire)
+    assert depth_snapshot(wire).stamp_ns == stamp_ns
 
 
 def test_synchronizer_ros_correction_keeps_original_pair_without_future_queue():

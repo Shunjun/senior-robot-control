@@ -1,3 +1,4 @@
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -56,8 +57,8 @@ class Guard : public rclcpp::Node {
   }
   bool topology() {
     const auto endpoints = get_publishers_info_by_topic(topic_);
-    const bool good = endpoints.size() == 1 && endpoints[0].node_name() == "command_node" &&
-                      endpoints[0].node_namespace() == "/";
+    const bool good = endpoints.size() == 1 && endpoints[0].node_name() == senior_sensor_ingress::wiring::node_command_node &&
+                      endpoints[0].node_namespace() == senior_sensor_ingress::wiring::ns_command_node;
     Gid next{};
     if (good) next = endpoints[0].endpoint_gid();
     const bool changed = good != valid_gid_ || (good && next != gid_);

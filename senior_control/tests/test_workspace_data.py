@@ -362,3 +362,115 @@ async def test_task_names_reject_explicit_null_or_blank_without_writing(tmp_path
         await port.create({**task_body("one"), "name": "  夜班  巡检  "})
         await port.create({**task_body("two"), "name": "夜班  巡检"})
         assert [item.name for item in await tasks.list_tasks()] == ["夜班  巡检"] * 2
+
+
+async def test_in_map_unknown_navigation_uses_reference_generation_and_free_only_waypoints(
+    tmp_path: Path,
+) -> None:
+    from agent_fakes import operation
+    from senior_contracts.wire import RobotPosePayload
+    from vehicle_manager.agent.local_adapters import IpcNavigation
+    from vehicle_manager.agent.local_state import RuntimeState
+    from vehicle_manager.agent.production import build_task_runtime
+    from vehicle_manager.agent.request_bindings import LifecycleNavigationOperations
+
+    from vehicle_core.values import OperationStatus
+
+    grid = WorkspaceGrid(
+        REF, "current", 3, 1, 1.0, Pose2D(0, 0, 0), (0, -1, 100), waypoint_writes=True
+    )
+    live = RuntimeState(
+        True,
+        True,
+        False,
+        REF,
+        "idle",
+        "reference-generation",
+        "reference-generation",
+        True,
+        robot_pose=RobotPosePayload(x=0.25, y=0.25, yaw=0.0),
+        task_lifecycle_version=2,
+        task_evidence_ready=True,
+        map_grid_id=grid.grid_id,
+    )
+
+    class State:
+        async def read(self) -> RuntimeState:
+            return live
+
+    class Receiver:
+        def __init__(self) -> None:
+            self.plans: list[dict[str, Any]] = []
+
+        async def request(self, kind: str, **fields: Any) -> dict[str, Any]:
+            assert kind == "navigation.task_start"
+            plan = fields["plan"]
+            self.plans.append(plan)
+            return {
+                "ok": True,
+                "execution_id": fields["execution_id"],
+                "accepted": True,
+                "lifecycle_version": 2,
+                "effect_id": plan["effect_id"],
+                "task_epoch": plan["task_epoch"],
+            }
+
+    async with Database(tmp_path / "unknown.db") as database:
+        tasks = TaskStore(database, robot_id="r1")
+        waypoints = WaypointStore(database, robot_id="r1")
+        await tasks.prepare()
+        await waypoints.prepare()
+        workspace = WorkspaceReader("r1", tasks, waypoints, LoopbackMap(WorkspaceMap(lambda: grid)))
+        receiver = Receiver()
+        _, executor = build_task_runtime(
+            database, tasks, IpcNavigation(receiver, tasks=tasks), boot_id="unknown-episode"
+        )
+        executor.context = live.for_tasks(True)
+        navigation = LifecycleNavigationOperations(executor, State(), workspace, waypoints)
+        body = {
+            "map_id": REF.map_id,
+            "reference_revision": REF.reference_revision,
+            "grid_id": grid.grid_id,
+            "x": 1.5,
+            "y": 0.25,
+            "yaw": 0.0,
+        }
+        envelope = operation("navigation.goal", "unknown", body, robot_id="r1")
+        accepted = await navigation.accept(envelope, "unknown-fingerprint")
+        assert accepted.status is OperationStatus.ACCEPTED
+        assert executor.lifecycle is not None
+        receipt = await executor.lifecycle.store.query("unknown")
+        assert receipt is not None and receipt.accepted
+        identity = receipt.task_id
+        assert await tasks.execution_route(identity) == ((1.5, 0.25, 0.0),)
+        assert (await executor.lifecycle.store.load(identity)).phase == "running"
+        assert len(receiver.plans) == 1
+        plan = receiver.plans[0]
+        assert (plan["map_id"], plan["reference_revision"]) == (REF.map_id, REF.reference_revision)
+        assert plan["map_generation"] == "reference-generation"
+        assert plan["poses"] == [[1.5, 0.25, 0.0]]
+        assert plan["execution_id"] == identity and plan["task_epoch"] == 1
+        assert plan["action_ids"] == ["0:0"] and plan["effect_id"]
+        assert (await navigation.accept(envelope, "unknown-fingerprint")) == accepted
+        assert len(receiver.plans) == 1
+
+        with pytest.raises(DomainError) as unknown_waypoint:
+            await workspace.create_waypoint({**body, "waypoint_id": "unknown"})
+        assert unknown_waypoint.value.code is ErrorCode.CONFLICT
+        assert await waypoints.waypoint("unknown") is None
+        await workspace.create_waypoint({**body, "waypoint_id": "free", "x": 0.25})
+        assert (await waypoints.waypoint("free")).waypoint.pose == Pose2D(0.25, 0.25, 0)
+
+        for request_id, target, code in (
+            ("occupied", {**body, "x": 2.5}, ErrorCode.CONFLICT),
+            ("outside", {**body, "x": 3.5}, ErrorCode.VALIDATION),
+            ("old-grid", {**body, "grid_id": "old"}, ErrorCode.CONFLICT),
+            ("old-map", {**body, "reference_revision": 1}, ErrorCode.CONFLICT),
+        ):
+            with pytest.raises(DomainError) as blocked:
+                await navigation.accept(
+                    operation("navigation.goal", request_id, target, robot_id="r1"), request_id
+                )
+            assert blocked.value.code is code
+            assert await executor.lifecycle.store.query(request_id) is None
+        assert len(receiver.plans) == 1

@@ -1,0 +1,10 @@
+uint8 INVALID=0
+uint8 QUALIFIED=1
+string<=36 backend_boot
+uint8 status
+string<=64 reason
+senior_interfaces/BoundedRawLaserScan scan
+geometry_msgs/Pose2D odom_base
+geometry_msgs/Transform base_lidar
+int8 raw_ray_angle_sign
+string geometry_id

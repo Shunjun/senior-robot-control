@@ -204,6 +204,7 @@ class SnapshotState:
             robot_pose=state.robot_pose,
             navigation_block_reason=state.navigation_block_reason,
             scan_points=state.scan_points,
+            scan_layer=state.scan_layer,
             vehicle_ui=ui,
             manual_controller_generation=(state.manual_authority or {}).get(
                 "controller_generation"

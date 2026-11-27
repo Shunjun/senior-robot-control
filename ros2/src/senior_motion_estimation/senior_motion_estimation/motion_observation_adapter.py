@@ -32,6 +32,7 @@ from senior_motion_estimation.sample_types import (
 from senior_motion_estimation.source_admission import AdmissionOwner
 from senior_motion_estimation.source_modes import SourceMode
 from senior_motion_estimation.temporal import TemporalConfig, TemporalResolver
+from vehicle_core.ros_wiring import TOPICS, matching_publisher, publisher
 from vehicle_core.sample_time import SampleTime
 from vehicle_core.values import Pose2D
 
@@ -52,6 +53,7 @@ class PublisherOrigin:
     sample_gid: bytes | None
     topology_gid: bytes
     basis: str
+    receiver_boot: str = ""
 
 
 def observation_origin(
@@ -63,35 +65,21 @@ def observation_origin(
 ) -> PublisherOrigin | None:
     """Validate real metadata; never label a discovery GID as a sample GID."""
     if isinstance(info, dict) and info.get("native_receipt_authenticated") is True:
-        # The private inherited channel binds configuration to the native
-        # consumer, which checked sole-writer topology AND this MessageInfo GID.
-        # Python discovery may lag native discovery; it supplies no sample ID.
-        gid = publisher_gid(info)
-        if (
-            gid
-            and any(gid)
-            and info.get("native_writer_name") == expected_name
-            and info.get("native_writer_namespace") == expected_namespace
-        ):
-            return PublisherOrigin(gid, gid, "native_message_info_and_writer_binding")
-        return None
-    if (
-        len(endpoints) != 1
-        or endpoints[0].node_name != expected_name
-        or endpoints[0].node_namespace != expected_namespace
-    ):
-        return None
-    topology_gid = bytes(endpoints[0].endpoint_gid)
-    if not topology_gid or not any(topology_gid):
-        return None
-    gid = publisher_gid(info)
-    if gid and any(gid):
-        return (
-            PublisherOrigin(gid, topology_gid, "per_sample_dds_gid")
-            if gid == topology_gid
-            else None
+        # The inherited channel's native subscriber owns configured topology.
+        # Actual message GID remains diagnostic; graph GID is unavailable here.
+        return PublisherOrigin(
+            publisher_gid(info) or None,
+            b"",
+            "native_configured_writer",
+            str(info.get("receipt_boot_id", "")),
         )
-    return None
+    if matching_publisher(endpoints, expected_name, expected_namespace) is None:
+        return None
+    return PublisherOrigin(
+        publisher_gid(info) or None,
+        bytes(endpoints[0].endpoint_gid),
+        "configured_writer_with_optional_message_gid",
+    )
 
 
 def stamp_nanoseconds(stamp: Any) -> int:
@@ -150,24 +138,26 @@ class NativeObservations:
     def identity(
         self, source: Source, gid: bytes | PublisherOrigin, producer_epoch: str, now_ros: float
     ) -> tuple[str, int]:
-        if not gid:
-            raise ValueError("native source has no DDS identity")
         self._sequences[source] += 1
         return self.source_epoch(gid, producer_epoch), self._sequences[source]
 
     def source_epoch(self, gid: bytes | PublisherOrigin, producer_epoch: str) -> str:
         """Describe provenance without advancing source/sample state (diagnostics)."""
-        # Preserve producer epoch and DDS identity independently of ROS clock labels.
-        provenance = (
+        receiver_boot = gid.receiver_boot if isinstance(gid, PublisherOrigin) else ""
+        parts = producer_epoch.rsplit(":", 2)
+        try:
+            generation = int(parts[-2]) if len(parts) >= 2 else 1
+            source_boot = (
+                parts[0] if len(parts) == 3 else (producer_epoch if len(parts) == 1 else "")
+            )
+        except ValueError:
+            generation, source_boot = 1, producer_epoch
+        return json.dumps(
             {
-                "sample_gid": gid.sample_gid.hex() if gid.sample_gid is not None else None,
-                "topology_gid": gid.topology_gid.hex(),
-                "basis": gid.basis,
+                "boot_id": json.dumps([self.boot_id, receiver_boot, source_boot]),
+                "generation": generation,
             }
-            if isinstance(gid, PublisherOrigin)
-            else {"sample_gid": gid.hex(), "basis": "per_sample_dds_gid"}
         )
-        return json.dumps([self.boot_id, provenance, producer_epoch])
 
     def ingest(
         self, sample: MotionSample, now_ros: float, now_steady: float, *, origins=None
@@ -328,13 +318,9 @@ class NativeObservations:
         if (
             not first.valid
             or not second.valid
-            or not first.raw_gid
-            or first.raw_gid != second.raw_gid
-            or first.source_epoch != second.source_epoch
             or first.bridge_boot_id != second.bridge_boot_id
             or first.capture_generation != second.capture_generation
             or first.time.clock_generation != second.time.clock_generation
-            or first.sequence >= second.sequence
             or first.stamp_ns != stamp_nanoseconds(msg.interval_start)
             or second.stamp_ns != stamp_nanoseconds(msg.header.stamp)
         ):
@@ -342,8 +328,7 @@ class NativeObservations:
             raise ValueError("scan interval crossed original capture lineage")
         epoch = self.source_epoch(
             gid,
-            f"{msg.source_epoch}:{second.bridge_boot_id}:{second.source_epoch}:"
-            f"{second.capture_generation}:{second.time.clock_generation}",
+            f"{second.bridge_boot_id}:{second.capture_generation}:{second.time.clock_generation}",
         )
         sample = DeltaObservation(
             Source.LASER,
@@ -369,7 +354,7 @@ class NativeObservations:
         origins = tuple(
             Origin(
                 "laser",
-                f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
+                f"{h.bridge_boot_id}:{h.capture_generation}:{h.time.clock_generation}",
                 h.sequence,
                 h.time,
             )
@@ -464,7 +449,7 @@ class NativeObservationRosBridge:
             source_invalidated=source_invalidated,
         )
         self.publisher = (
-            node.create_publisher(String, "/motion/core_reference", 10) if publish else None
+            node.create_publisher(String, TOPICS.motion_core_reference, 10) if publish else None
         )
         self._message_type = String
         self._warn_at = 0.0
@@ -483,11 +468,11 @@ class NativeObservationRosBridge:
             (Imu, profile.imu_topic, "/imu/data", self._imu, Source.IMU, profile.imu_publisher),
             (
                 ScanMotion,
-                "/motion/scan",
-                "/motion/scan",
+                TOPICS.motion_scan,
+                TOPICS.motion_scan,
                 self._laser,
                 Source.LASER,
-                "scan_motion_node",
+                publisher("scan_motion_node").name,
             ),
         ):
             self._subscriptions.append(
@@ -497,7 +482,9 @@ class NativeObservationRosBridge:
                     topic,
                     self._callback(handler, logical, topic),
                     writer=writer,
-                    namespace=profile.source_namespace if source is not Source.LASER else "/",
+                    namespace=profile.source_namespace
+                    if source is not Source.LASER
+                    else publisher("scan_motion_node").namespace,
                     qos="sensor" if source is not Source.LASER else "reliable",
                     invalidate=lambda source=source: self.core.invalidate_source(source),
                     expired=lambda message, info, source=source: self._record_rejected_receipt(
@@ -524,7 +511,7 @@ class NativeObservationRosBridge:
                 roots = tuple(
                     Origin(
                         "laser",
-                        f"{h.bridge_boot_id}:{h.source_epoch}:{h.capture_generation}:{h.raw_gid}",
+                        f"{h.bridge_boot_id}:{h.capture_generation}:{h.clock_generation}",
                         int(h.sequence),
                         capture_from_message(h).time,
                     )
@@ -578,32 +565,43 @@ class NativeObservationRosBridge:
             expected = {
                 "/wheel/odom": self.profile.wheel_publisher,
                 "/imu/data": self.profile.imu_publisher,
-                "/motion/scan": "scan_motion_node",
+                TOPICS.motion_scan: publisher("scan_motion_node").name,
             }
+            native_checked = (
+                isinstance(info, dict) and info.get("native_receipt_authenticated") is True
+            )
+            endpoints = (
+                []
+                if native_checked
+                else self.node.get_publishers_info_by_topic(
+                    self.node.resolve_topic_name(wire_topic)
+                )
+            )
             origin = observation_origin(
                 info,
-                self.node.get_publishers_info_by_topic(self.node.resolve_topic_name(wire_topic)),
+                endpoints,
                 expected[topic],
                 expected_namespace=self.profile.source_namespace
-                if topic != "/motion/scan"
-                else "/",
+                if topic != TOPICS.motion_scan
+                else publisher("scan_motion_node").namespace,
             )
             if origin is None:
                 from vehicle_core.diagnostics import process_diagnostics
 
-                role = {"/wheel/odom": "wheel", "/imu/data": "imu", "/motion/scan": "laser"}[topic]
+                role = {"/wheel/odom": "wheel", "/imu/data": "imu", TOPICS.motion_scan: "laser"}[
+                    topic
+                ]
                 process_diagnostics().sensor_attempt(role, "raw", None, ("source_rejected",))
                 if now - self._warn_at > 1:
                     self._warn_at = now
                     self.node.get_logger().warning(
                         f"native motion source rejected on {topic}: expected sole "
-                        f"publisher {expected[topic]} with per-sample DDS identity; "
-                        "per-sample identity is required"
+                        f"publisher {expected[topic]} in the configured namespace"
                     )
                 return
             try:
                 ros_now = self.node.get_clock().now().nanoseconds / 1e9
-                if topic == "/motion/scan":
+                if topic == TOPICS.motion_scan:
                     accepted = handler(msg, origin, ros_now, now)
                 else:
                     sample = received_sample(info)
@@ -617,7 +615,7 @@ class NativeObservationRosBridge:
                         generation=int(info["receipt_generation"]),
                         sequence=int(info["receipt_sequence"]),
                     )
-                if accepted and topic == "/motion/scan":
+                if accepted and topic == TOPICS.motion_scan:
                     self._publish(laser_update=True)
             except (
                 ValueError,
@@ -632,9 +630,11 @@ class NativeObservationRosBridge:
                 # Runtime already recorded clocks that reached its age classifier.
                 # Earlier malformed payload/TF failures have counters, never age=0.
                 if not isinstance(exc, SensorClockError):
-                    role = {"/wheel/odom": "wheel", "/imu/data": "imu", "/motion/scan": "laser"}[
-                        topic
-                    ]
+                    role = {
+                        "/wheel/odom": "wheel",
+                        "/imu/data": "imu",
+                        TOPICS.motion_scan: "laser",
+                    }[topic]
                     process_diagnostics().sensor_attempt(role, "raw", None, ("invalid_data",))
                     self.core.invalidate_source(Source(role))
                 if now - self._warn_at > 1:

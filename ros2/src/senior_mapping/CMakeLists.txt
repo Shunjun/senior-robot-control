@@ -18,6 +18,7 @@ find_package(rclcpp REQUIRED)
 find_package(senior_interfaces REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 find_package(slam_toolbox 2.6.10 EXACT REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(TBB REQUIRED)
@@ -43,10 +44,9 @@ find_library(SLAM_TOOLBOX_KARTO_LIBRARY NAMES kartoSlamToolbox
   PATHS "${slam_toolbox_library_dir}" NO_DEFAULT_PATH REQUIRED)
 
 add_executable(slam_graph_node
-  src/slam/slam_graph_node.cpp src/slam/staged_graph.cpp src/slam/native_capture.cpp src/slam/bounded_scan_ingress.cpp
-  src/slam/static_lidar_tf_ingress.cpp)
+  src/slam/slam_graph_node.cpp src/slam/staged_graph.cpp src/slam/native_capture.cpp src/slam/bounded_scan_ingress.cpp)
 target_compile_features(slam_graph_node PRIVATE cxx_std_17)
-ament_target_dependencies(slam_graph_node rclcpp senior_interfaces sensor_msgs nav_msgs slam_toolbox tf2_ros senior_sensor_ingress)
+ament_target_dependencies(slam_graph_node rclcpp senior_interfaces sensor_msgs nav_msgs geometry_msgs slam_toolbox tf2_ros senior_sensor_ingress)
 target_link_libraries(slam_graph_node
   "${SLAM_TOOLBOX_ASYNC_LIBRARY}"
   "${SLAM_TOOLBOX_COMMON_LIBRARY}"
@@ -66,7 +66,7 @@ if(BUILD_TESTING)
   configure_file(scripts/candidate_preflight.py candidate_preflight.py COPYONLY)
   ament_add_test(candidate_preflight
     COMMAND "${CMAKE_COMMAND}" -E env
-      "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/scripts"
+      "PYTHONPATH=${CMAKE_CURRENT_SOURCE_DIR}/scripts:${CMAKE_CURRENT_SOURCE_DIR}/../../.."
       "${Python3_EXECUTABLE}" -B "${CMAKE_CURRENT_SOURCE_DIR}/test/native/test_candidate_preflight.py"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
   )
@@ -100,13 +100,7 @@ if(BUILD_TESTING)
     COMMAND "$<TARGET_FILE:test_stationary_match_quality>"
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
   )
-  add_executable(test_static_lidar_tf test/native/test_static_lidar_tf.cpp)
-  target_compile_features(test_static_lidar_tf PRIVATE cxx_std_17)
-  target_include_directories(test_static_lidar_tf PRIVATE src/slam)
-  ament_add_test(static_lidar_tf
-    COMMAND "$<TARGET_FILE:test_static_lidar_tf>"
-    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
-  )
+
   add_executable(test_native_capture test/native/test_native_capture.cpp src/slam/native_capture.cpp)
   target_compile_features(test_native_capture PRIVATE cxx_std_17)
   target_include_directories(test_native_capture PRIVATE src/slam)
@@ -148,6 +142,13 @@ if(BUILD_TESTING)
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 60
   )
+  ament_add_test(bounded_scan_geometry_runtime
+    COMMAND "${Python3_EXECUTABLE}"
+      "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_bounded_scan_ingress.py"
+      "$<TARGET_FILE:slam_graph_node>" --geometry-drift
+    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
+    TIMEOUT 60
+  )
   ament_add_test(bounded_graph_capture_runtime
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_bounded_scan_ingress.py"
@@ -162,18 +163,8 @@ if(BUILD_TESTING)
     GENERATE_RESULT_FOR_RETURN_CODE_ZERO
     TIMEOUT 65
   )
-  ament_add_test(static_lidar_tf_runtime
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_static_lidar_tf.py"
-      "$<TARGET_FILE:slam_graph_node>"
-    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
-    TIMEOUT 60
-  )
-  ament_add_test(static_lidar_tf_drift_runtime
-    COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_static_lidar_tf.py"
-      "$<TARGET_FILE:slam_graph_node>" --drift
-    GENERATE_RESULT_FOR_RETURN_CODE_ZERO
-    TIMEOUT 60
-  )
+
+
   ament_add_test(candidate_live_scan_runtime
     COMMAND "${Python3_EXECUTABLE}"
       "${CMAKE_CURRENT_SOURCE_DIR}/test/probes/probe_candidate_live_scan.py"
@@ -211,4 +202,6 @@ if(BUILD_TESTING)
 endif()
 
 install(DIRECTORY launch config DESTINATION share/${PROJECT_NAME})
+include("${CMAKE_CURRENT_SOURCE_DIR}/../../../tools/ros_wiring.cmake")
+senior_configure_wiring(config/slam.yaml)
 ament_package()

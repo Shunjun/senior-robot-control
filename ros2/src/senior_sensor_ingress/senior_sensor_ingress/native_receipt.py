@@ -11,6 +11,7 @@ import struct
 import subprocess
 import threading
 import time
+import uuid
 from collections import deque
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -44,7 +45,7 @@ _CHILD_EXIT_REASONS = {
     11: "send_failure",
     12: "poll_failure",
     13: "oversize_payload",
-    14: "retired_source_exhaustion",
+    14: "retired_source_exhaustion",  # //Compatible: archived binaries only.
     15: "invalid_arguments",
     16: "invalid_fd_or_parent",
     17: "parent_death_setup",
@@ -127,6 +128,7 @@ class NativeReceiptGroup:
         self._invalid: set[int] = set()
         self._last_receipt = float("-inf")
         self._started_at: float | None = None
+        self._boot_id = ""
         self._failed = False
         self._failure_reason = ""
         self._closed = False
@@ -178,6 +180,7 @@ class NativeReceiptGroup:
         self._started_at = time.monotonic()
         try:
             self._process = subprocess.Popen(arguments, pass_fds=(child.fileno(),), close_fds=True)
+            self._boot_id = uuid.uuid4().hex  # Managed native child lifetime, not a sensor ID.
         except BaseException:
             parent.close()
             raise
@@ -271,7 +274,7 @@ class NativeReceiptGroup:
                 with self._lock:
                     entry = self.inputs[key]
                     if generation < entry.generation:
-                        raise ValueError("native receipt generation rollback")
+                        continue
                     if kind == 0 or generation != entry.generation:
                         self._invalid.add(key)
                         entry.barrier += 1
@@ -285,8 +288,8 @@ class NativeReceiptGroup:
                         entry.barrier += 1
                         continue
                     if kind == 1:
-                        if not any(gid) or sequence <= entry.sequence or not payload:
-                            raise ValueError("native receipt sample identity/order invalid")
+                        if not payload:
+                            raise ValueError("native receipt sample has no payload")
                         entry.sequence = sequence
                         if key not in self._pending:
                             self._pending[key] = DiagnosticDeque(
@@ -316,6 +319,7 @@ class NativeReceiptGroup:
                                     "source_timestamp": source_ns,
                                     "received_timestamp": received_ns,
                                     "receipt_generation": generation,
+                                    "receipt_boot_id": self._boot_id,
                                     "receipt_sequence": sequence,
                                     "receipt_barrier": entry.barrier,
                                 },
@@ -377,24 +381,11 @@ class NativeReceiptGroup:
                 entry = self.inputs[key]
                 delivery_wait = time.monotonic() - received_steady(info)
                 process_diagnostics().duration("native_delivery_wait", delivery_wait)
-                expired = delivery_wait >= _MAX_TRANSPORT_AGE
                 try:
                     message = deserialize_message(payload, entry.message_type)
-                    if revoked or expired:
-                        entry.invalidate()
-                        # Latching consumers may preserve a negative state from
-                        # an old receipt, but may never refresh its original TTL
-                        # or consume its positive state as current evidence.
-                        if entry.expired is not None:
-                            entry.expired(message, info)
-                        if time.monotonic() - self._late_warning_at >= 2:
-                            self._late_warning_at = time.monotonic()
-                            self.node.get_logger().warning(
-                                f"native DDS receipt stale/revoked on {entry.topic}; "
-                                "evidence withdrawn; waiting for fresh samples"
-                            )
-                    else:
-                        entry.callback(message, info)
+                    if revoked:
+                        continue
+                    entry.callback(message, info)
                 except (ValueError, TypeError, RuntimeError) as exc:
                     # An undecodable state could contain a latch edge. Do not
                     # skip it and let a later positive frame restore authority.

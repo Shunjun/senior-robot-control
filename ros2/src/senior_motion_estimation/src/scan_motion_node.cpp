@@ -1,4 +1,8 @@
+#include <senior_sensor_ingress/publisher_topology.hpp>
+#include <senior_sensor_ingress/ros_wiring.hpp>
 #include <senior_sensor_ingress/sample_time.hpp>
+#include <senior_sensor_ingress/sample_record.hpp>
+#include <senior_sensor_ingress/source_order.hpp>
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -26,13 +30,14 @@
 namespace senior_motion_estimation::scan_matching {
 class ScanMotionNode : public rclcpp::Node {
 public:
-  ScanMotionNode() : Node("scan_motion_node"), buffer_(get_clock()), listener_(buffer_)
+  ScanMotionNode() : Node(senior_sensor_ingress::wiring::node_scan_motion_node, senior_sensor_ingress::wiring::ns_scan_motion_node), buffer_(get_clock()), listener_(buffer_)
   {
     body_ = declare_parameter<std::string>("body_frame", "base_link");
-    const auto scan_topic = declare_parameter<std::string>("scan_topic", "/perception/scan_filtered");
+    const auto scan_topic = declare_parameter<std::string>("scan_topic", senior_sensor_ingress::wiring::perception_scan_filtered);
     scan_topic_ = scan_topic;
-    raw_topic_ = declare_parameter<std::string>("raw_scan_topic", "/safety/raw/scan");
-    max_age_ = declare_parameter<double>("sensor_hard_age_ms", -1.0) / 1000;
+    raw_topic_ = declare_parameter<std::string>("raw_scan_topic", senior_sensor_ingress::wiring::safety_raw_scan);
+    //Compatible: legacy launch may supply this policy; raw input has no TTL.
+    declare_parameter<double>("sensor_hard_age_ms", -1.0);
     max_speed_ = declare_parameter<double>("max_linear_speed", -1.0);
     max_yaw_rate_ = declare_parameter<double>("max_yaw_rate", -1.0);
     MatcherLimits limits;
@@ -49,20 +54,20 @@ public:
     limits.reanchor_yaw = declare_parameter<double>("reanchor_yaw", -1.0);
     const int min_rays = declare_parameter<int>("min_rays", -1);
     if (body_.empty() || scan_topic.empty() || min_rays < 3 ||
-        !positive(max_age_) || !positive(max_speed_) || !positive(max_yaw_rate_)) {
+        !positive(max_speed_) || !positive(max_yaw_rate_)) {
       std::ostringstream detail;
       detail << "invalid scan-motion parameters: body_frame='" << body_
              << "', scan_topic='" << scan_topic << "', min_rays=" << min_rays
-             << ", scan_max_age=" << max_age_ << ", max_linear_speed=" << max_speed_
+             << ", max_linear_speed=" << max_speed_
              << ", max_yaw_rate=" << max_yaw_rate_
              << "; frames/topics must be nonempty, min_rays >= 3, limits finite and > 0";
       throw std::invalid_argument(detail.str());
     }
     limits.min_rays = static_cast<unsigned>(min_rays);
     matcher_ = std::make_unique<LocalMatcher>(limits);
-    publisher_ = create_publisher<senior_interfaces::msg::ScanMotion>("/motion/scan", 10);
+    publisher_ = create_publisher<senior_interfaces::msg::ScanMotion>(senior_sensor_ingress::wiring::motion_scan, 10);
     //Compatible: add independent diagnostics without changing ScanMotion consumers.
-    diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/motion/scan_diagnostics", rclcpp::SensorDataQoS().keep_last(1));
+    diagnostics_publisher_ = create_publisher<diagnostic_msgs::msg::DiagnosticArray>(senior_sensor_ingress::wiring::motion_scan_diagnostics, rclcpp::SensorDataQoS().keep_last(1));
     subscription_ = create_subscription<senior_interfaces::msg::FencedFilteredScan>(
       scan_topic, rclcpp::SensorDataQoS(),
       [this](senior_interfaces::msg::FencedFilteredScan::ConstSharedPtr message,
@@ -93,7 +98,6 @@ private:
     text << std::hex << random() << random() << random() << random() << '-' << ++epoch_counter_;
     epoch_ = text.str();
     pose_ = {};
-    extrinsic_valid_ = false;
     published_qualified_ = false;
     previous_stamp_valid_ = false;
     stamp_origin_ns_ = -1;
@@ -110,7 +114,6 @@ private:
       // A sustained bad stream is one interruption, not hundreds of source
       // lifetimes. Rotate after qualified continuity is actually broken.
       if (published_qualified_) new_epoch();
-      else extrinsic_valid_ = false;
     }
     output.source_epoch = epoch_;
     output.valid = false;
@@ -118,15 +121,8 @@ private:
     publisher_->publish(output);
     publish_diagnostics(output);
   }
-  static std::string gid_hex(const uint8_t * data, size_t count)
-  {
-    std::ostringstream output;
-    output << std::hex << std::setfill('0');
-    for (size_t i = 0; i < count; ++i) output << std::setw(2) << unsigned(data[i]);
-    return output.str();
-  }
   void on_scan(const senior_interfaces::msg::FencedFilteredScan & envelope,
-               const rclcpp::MessageInfo & info)
+               const rclcpp::MessageInfo &)
   {
     current_diagnostics_ = {};
     const auto & message = envelope.body;
@@ -144,133 +140,33 @@ private:
       return;
     }
     if (local_clock.discontinuity) {
-      local_receipt_floor_ns_ = current_steady;
-      invalidate(output, "clock_rollback", true);
+        invalidate(output, "clock_rollback", true);
       return;
     }
     const auto sources = get_publishers_info_by_topic(scan_topic_);
-    const auto & incoming = info.get_rmw_message_info().publisher_gid;
-    if (sources.size() != 1 || sources[0].node_name() != "scan_receipt" ||
-        sources[0].node_namespace() != "/") {
-      bound_source_ = false;
-      invalidate(output, "scan_publisher_unqualified", true); return;
+    if (!senior_sensor_ingress::publisher_matches(sources,
+        senior_sensor_ingress::wiring::node_scan_receipt,
+        senior_sensor_ingress::wiring::ns_scan_receipt,
+        "senior_interfaces/msg/FencedFilteredScan")) {
+      invalidate(output, "scan_owner_unavailable", true); return;
     }
-    const auto current = sources[0].endpoint_gid();
-    if (!std::equal(current.begin(), current.end(), incoming.data)) return;
-    if (owner.relay_gid != gid_hex(incoming.data, RMW_GID_STORAGE_SIZE)) return;
-    if (bound_source_ && current != source_gid_) {
-      matcher_->reset();
-      new_epoch();
-      relay_boot_.clear(); relay_sequence_ = 0;
-      owner_gid_.clear(); owner_epoch_.clear(); owner_generation_ = owner_sequence_ = 0;
-      scan_boot_.clear(); scan_epoch_.clear(); scan_raw_gid_.clear();
-      scan_generation_ = scan_sequence_ = 0;
-      retired_owner_epochs_.clear(); retired_scan_epochs_.clear();
+    const auto generation = scan_order_.generation();
+    if (!owner.valid || owner.owner_lost || owner.upstream_invalid || !message.valid || !capture.valid) {
+      if (!scan_order_.observe_generation(capture.bridge_boot_id, capture.capture_generation)) return;
+      invalidate(output, message.reason.empty() ? "scan_invalid" : message.reason, true); return;
     }
-    source_gid_ = current;
-    bound_source_ = true;
-    if (owner.relay_boot.empty() || owner.relay_boot.size() > 64 ||
-        (relay_boot_.size() && owner.relay_boot != relay_boot_) ||
-        owner.relay_sequence <= relay_sequence_ || owner.owner_generation < owner_generation_ ||
-        retired_owner_epochs_.count(owner.owner_epoch) != 0) return;
-    if (!owner.valid) {
-      const bool same_owner = !owner_epoch_.empty() && owner.owner_gid == owner_gid_ &&
-        owner.owner_epoch == owner_epoch_;
-      if (owner.owner_lost) {
-        if (owner.upstream_invalid || !same_owner || owner.owner_sequence != 0 ||
-            owner.owner_generation <= owner_generation_) return;
-        retired_owner_epochs_.insert(owner_epoch_);
-        owner_epoch_.clear(); owner_gid_.clear();
-        owner_generation_ = owner.owner_generation; owner_sequence_ = 0;
-      } else if (owner.upstream_invalid) {
-        if (!same_owner || owner.owner_generation != owner_generation_ ||
-            owner.owner_sequence != owner_sequence_) return;
-      } else {
-        if (owner.owner_gid.empty() || owner.owner_epoch.empty() || owner.owner_sequence == 0 ||
-            owner.owner_epoch != message.source_epoch || owner.owner_sequence != message.sequence) return;
-        if (owner.owner_generation == owner_generation_) {
-          if (!same_owner || owner.owner_sequence <= owner_sequence_) return;
-        } else {
-          if (owner.owner_generation < owner_generation_) return;
-          if (!owner_epoch_.empty()) retired_owner_epochs_.insert(owner_epoch_);
-          owner_gid_ = owner.owner_gid; owner_epoch_ = owner.owner_epoch;
-          owner_generation_ = owner.owner_generation;
-        }
-        owner_sequence_ = owner.owner_sequence;
-      }
-      relay_boot_ = owner.relay_boot;
-      relay_sequence_ = owner.relay_sequence;
-      if (retired_owner_epochs_.size() >= 256) {
-        invalidate(output, "scan_owner_exhausted", true); return;
-      }
-      invalidate(output, owner.reason.empty() ? "scan_owner_invalid" : owner.reason, true);
-      return;
+    int64_t stamp_ns;
+    try {stamp_ns = senior_sensor_ingress::stamp_ns(capture.stamp);}
+    catch (const std::invalid_argument &) {invalidate(output, "invalid_stamp", true); return;}
+    if (capture.frame_id.empty() || capture.clock_generation == 0 ||
+        capture.sample_steady_ns > capture.received_steady_ns) {
+      invalidate(output, "invalid_capture", true); return;
     }
-    if (owner.owner_gid.empty() || owner.owner_epoch.empty() || owner.owner_generation == 0 ||
-        owner.owner_sequence == 0 || owner.owner_epoch != message.source_epoch ||
-        owner.owner_sequence != message.sequence || !message.valid) {
-      invalidate(output, "scan_owner_unqualified", true); return;
-    }
-    if (owner.owner_generation == owner_generation_ && !owner_epoch_.empty() &&
-        (owner.owner_epoch != owner_epoch_ || owner.owner_gid != owner_gid_ ||
-         owner.owner_sequence <= owner_sequence_)) return;
-    if (owner.owner_generation > owner_generation_) {
-      if (!owner_epoch_.empty()) retired_owner_epochs_.insert(owner_epoch_);
-      if (retired_owner_epochs_.size() >= 256) {
-        invalidate(output, "scan_owner_exhausted", true); return;
-      }
-      if (!owner_epoch_.empty()) {matcher_->reset(); new_epoch();}
-      owner_generation_ = owner.owner_generation;
-      owner_gid_ = owner.owner_gid;
-      owner_epoch_ = owner.owner_epoch;
-      owner_sequence_ = 0;
-    }
-    const auto raw_sources = get_publishers_info_by_topic(raw_topic_);
-    const auto raw_gid = raw_sources.size() == 1 ?
-      gid_hex(raw_sources[0].endpoint_gid().data(), RMW_GID_STORAGE_SIZE) : "";
-    if (!capture.valid || raw_gid.empty() || capture.bridge_gid != raw_gid ||
-        capture.bridge_boot_id.empty() || capture.source_epoch.empty() || capture.raw_gid.empty() ||
-        capture.sequence == 0 || capture.capture_generation == 0) {
-      invalidate(output, "raw_scan_identity_unqualified", true); return;
-    }
-    if (capture.bridge_boot_id == scan_boot_ && capture.capture_generation < scan_generation_) return;
-    if (retired_scan_epochs_.count(capture.source_epoch) != 0) return;
-    const bool scan_changed = !scan_boot_.empty() &&
-      (capture.bridge_boot_id != scan_boot_ || capture.capture_generation != scan_generation_ ||
-       capture.source_epoch != scan_epoch_ || capture.raw_gid != scan_raw_gid_ ||
-       capture.clock_generation != scan_clock_generation_);
-    if (scan_changed) {
-      if (capture.source_epoch != scan_epoch_) retired_scan_epochs_.insert(scan_epoch_);
-      if (retired_scan_epochs_.size() >= 256) {
-        invalidate(output, "raw_scan_epoch_exhausted", true); return;
-      }
+    const auto previous_boot = scan_order_.boot_id();
+    if (!scan_order_.accept_capture(capture.bridge_boot_id, capture.capture_generation,
+        stamp_ns, capture.received_steady_ns)) return;
+    if (previous_boot != scan_order_.boot_id() || generation != scan_order_.generation()) {
       matcher_->reset(); new_epoch();
-      scan_sequence_ = 0;
-    }
-    if (capture.sequence <= scan_sequence_) return;
-    const auto now_ns = senior_sensor_ingress::time::monotonic_ns();
-    if (capture.clock_generation == 0 || capture.sample_steady_ns > capture.received_steady_ns ||
-        capture.received_steady_ns > now_ns || capture.received_steady_ns < local_receipt_floor_ns_ ||
-        static_cast<double>(now_ns - capture.sample_steady_ns) / 1e9 >= max_age_) {
-      invalidate(output, "raw_scan_receipt_expired", true); return;
-    }
-    relay_boot_ = owner.relay_boot;
-    relay_sequence_ = owner.relay_sequence;
-    owner_sequence_ = owner.owner_sequence;
-    scan_boot_ = capture.bridge_boot_id;
-    scan_generation_ = capture.capture_generation;
-    scan_epoch_ = capture.source_epoch;
-    scan_raw_gid_ = capture.raw_gid;
-    scan_sequence_ = capture.sequence;
-    scan_clock_generation_ = capture.clock_generation;
-    const int64_t stamp_ns = rclcpp::Time(capture.stamp).nanoseconds();
-    if (stamp_ns < 0 || capture.frame_id.empty() || !std::isfinite(message.time_increment) ||
-        message.time_increment != 0.0) {
-      invalidate(output, "time_or_deskew_unqualified", true); return;
-    }
-    if (last_stamp_ns_ >= 0 && stamp_ns <= last_stamp_ns_) {
-      if (stamp_ns < last_stamp_ns_) invalidate(output, "raw_stamp_out_of_order", true);
-      return;
     }
     if (stamp_origin_ns_ < 0) stamp_origin_ns_ = stamp_ns;
     const double relative_stamp = static_cast<double>(stamp_ns - stamp_origin_ns_) / 1e9;
@@ -289,13 +185,6 @@ private:
         invalidate(output, "invalid_extrinsic", true); return;
       }
       Pose extrinsic{t.x, t.y, std::atan2(2*(q.w*q.z+q.x*q.y), 1-2*(q.y*q.y+q.z*q.z))};
-      if (extrinsic_valid_ && (std::hypot(extrinsic.x-extrinsic_.x, extrinsic.y-extrinsic_.y) > 1e-5 ||
-          std::abs(std::atan2(std::sin(extrinsic.yaw-extrinsic_.yaw),
-                             std::cos(extrinsic.yaw-extrinsic_.yaw))) > 1e-5)) {
-        invalidate(output, "extrinsic_changed", true); return;
-      }
-      extrinsic_ = extrinsic;
-      extrinsic_valid_ = true;
       LaserScan scan;
       scan.stamp = relative_stamp; scan.angle_min = message.angle_min;
       scan.angle_increment = message.angle_increment; scan.range_min = message.range_min;
@@ -307,6 +196,7 @@ private:
         if (match.reason == "initializing") {
           previous_stamp_ = rclcpp::Time(capture.stamp);
           previous_capture_ = capture;
+          previous_extrinsic_ = extrinsic;
           previous_stamp_valid_ = true;
         }
         invalidate(output, match.reason, match.reason != "initializing"); return;
@@ -315,7 +205,7 @@ private:
           static_cast<double>(previous_stamp_.nanoseconds() - stamp_origin_ns_) / 1e9 != match.start) {
         invalidate(output, "source_stamp_unavailable", true); return;
       }
-      const Pose delta = to_body_delta(match.sensor_delta, extrinsic_);
+      const Pose delta = compose(compose(previous_extrinsic_, match.sensor_delta), inverse(extrinsic));
       const double dt = static_cast<double>(stamp_ns - previous_stamp_.nanoseconds()) / 1e9;
       if (!positive(dt) || std::hypot(delta.x, delta.y) > max_speed_*dt ||
           std::abs(delta.yaw) > max_yaw_rate_*dt) {
@@ -329,6 +219,7 @@ private:
       output.second_capture = capture;
       previous_stamp_ = rclcpp::Time(capture.stamp);
       previous_capture_ = capture;
+      previous_extrinsic_ = extrinsic;
       output.source_epoch = epoch_;
       output.valid = true;
       output.reason = match.reason;
@@ -353,23 +244,16 @@ private:
     }
   }
   std::string body_, epoch_, scan_topic_, raw_topic_;
-  std::string relay_boot_, owner_gid_, owner_epoch_, scan_boot_, scan_epoch_, scan_raw_gid_;
-  std::set<std::string> retired_owner_epochs_, retired_scan_epochs_;
-  uint64_t relay_sequence_ = 0, owner_generation_ = 0, owner_sequence_ = 0;
-  uint64_t scan_generation_ = 0, scan_sequence_ = 0, scan_clock_generation_ = 0;
   unsigned epoch_counter_ = 0;
   senior_sensor_ingress::time::ClockTracker clock_;
-  uint64_t local_receipt_floor_ns_ = 0;
   int64_t stamp_origin_ns_ = -1, last_stamp_ns_ = -1;
-  double max_age_ = 0, max_speed_ = 0, max_yaw_rate_ = 0;
-  Pose extrinsic_, pose_;
-  bool extrinsic_valid_ = false;
-  bool bound_source_ = false;
+  double max_speed_ = 0, max_yaw_rate_ = 0;
+  Pose extrinsic_, previous_extrinsic_, pose_;
+  senior_sensor_ingress::SourceOrder scan_order_;
   bool published_qualified_ = false;
   rclcpp::Time previous_stamp_{static_cast<int64_t>(0), RCL_ROS_TIME};
   bool previous_stamp_valid_ = false;
   senior_interfaces::msg::RawCaptureHeader previous_capture_;
-  std::array<uint8_t, RMW_GID_STORAGE_SIZE> source_gid_{};
   bool diagnostic_failure_reported_ = false;
   MatchDiagnostics current_diagnostics_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_publisher_;

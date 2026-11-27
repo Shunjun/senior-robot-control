@@ -344,7 +344,7 @@ class Hub:
             session_id="cloud-cache",
             connection_epoch=agent.epoch if agent is not None else 0,
             request_id="cloud-cache",
-            seq=0,
+            seq=cached.sequence,
             expires_at=time.time() + SNAPSHOT_TTL_SECONDS,
             stale=cached.stale,
             last_synced_at=cached.last_synced_at,
@@ -387,6 +387,7 @@ class Hub:
             started_at=time.monotonic(),
         )
         previous, link.agent = link.agent, connection
+        self.snapshots.begin_session(robot_id, connection.epoch)
         link.workspace_request = None
         if previous is not None:
             if previous.heartbeat_at is not None:

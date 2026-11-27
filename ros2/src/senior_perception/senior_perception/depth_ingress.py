@@ -34,6 +34,7 @@ from senior_perception.vision.raw_capture import (
     compatible_captures,
 )
 from vehicle_core.diagnostics import process_diagnostics
+from vehicle_core.ros_wiring import TOPICS, publisher, publisher_identity
 from vehicle_core.sensor_policy import default_policy
 
 
@@ -52,14 +53,15 @@ class DepthIngress(Node):
 
     def __init__(self, *, parameter_overrides=None):
         super().__init__(
-            "depth_ingress",
+            publisher("depth_ingress").name,
+            namespace=publisher("depth_ingress").namespace,
             parameter_overrides=parameter_overrides or [],
             start_parameter_services=False,
         )
         self.declare_parameter("body_frame", "base_link")
-        self.declare_parameter("depth_topic", "/safety/raw/depth")
-        self.declare_parameter("camera_info_topic", "/safety/raw/depth_info")
-        self.declare_parameter("bounded_depth_topic", "/safety/depth_candidate")
+        self.declare_parameter("depth_topic", TOPICS.safety_raw_depth)
+        self.declare_parameter("camera_info_topic", TOPICS.safety_raw_depth_info)
+        self.declare_parameter("bounded_depth_topic", TOPICS.safety_depth_candidate)
         self.declare_parameter("min_range_m", -1.0)
         self.declare_parameter("max_range_m", -1.0)
         self.declare_parameter("range_error_m", -1.0)
@@ -147,13 +149,7 @@ class DepthIngress(Node):
 
     def _source(self, topic):
         endpoints = self.get_publishers_info_by_topic(topic)
-        if len(endpoints) != 1:
-            return ""
-        endpoint = endpoints[0]
-        gid_bytes = bytes(endpoint.endpoint_gid)
-        if not gid_bytes or not any(gid_bytes):
-            return ""
-        return gid_bytes.hex()
+        return publisher_identity(endpoints, "raw_receipt")
 
     def _check_sources(self):
         depth = self._source(self._depth_topic)
@@ -161,11 +157,12 @@ class DepthIngress(Node):
         ready_depth = self._capture_group.observe_bridge("depth", depth)
         ready_info = self._capture_group.observe_bridge("info", info)
         ready = ready_depth and ready_info
-        if (depth, info, ready) != (self._depth_source, self._info_source, self._ready):
+        if ready != self._ready:
             self._depth_source, self._info_source, self._ready = depth, info, ready
             self._new_epoch(
                 "raw_source_changed", self.get_clock().now().nanoseconds, time.monotonic()
             )
+        self._depth_source, self._info_source = depth, info
         return ready
 
     def _clock_ok(self, ros_ns, steady):

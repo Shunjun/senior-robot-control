@@ -26,7 +26,7 @@ from senior_perception.vision.independent_motion import (
 )
 from senior_perception.vision.raw_capture import RawCaptureHeader
 from senior_perception.vision.rgbd_frame_builder import CameraInfoSnapshot, ImageLayoutSnapshot
-from senior_perception.vision.static_tf_binding import Receipt
+from senior_perception.vision.static_tf_binding import TransformSnapshot
 from vehicle_core.diagnostics import QueueSnapshot, process_diagnostics
 from vehicle_core.sensor_policy import default_policy, sensor_current
 
@@ -51,8 +51,7 @@ class CompactResult:
     preprocessing_versions: tuple[str, ...] = ()
     image_layouts: tuple[tuple[ImageLayoutSnapshot, ...], ...] = ()
     camera_info: tuple[tuple[CameraInfoSnapshot, ...], ...] = ()
-    tf_receipts: tuple[Receipt, ...] = ()
-    tf_admitted_from: tuple[tuple[int, float], ...] = ()
+    tf_receipts: tuple[TransformSnapshot, ...] = ()
     hard_error_qualified: bool = field(default=False, init=False)
 
 

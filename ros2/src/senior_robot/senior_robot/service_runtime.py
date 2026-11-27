@@ -2,8 +2,10 @@
 
 import asyncio
 import os
+import secrets
 import socket
 import struct
+import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
@@ -159,7 +161,29 @@ async def supervise(
     *,
     profile: "VehicleProfile | None" = None,
 ) -> int:
-    return await _canonical.supervise(root, command, environment, profile=profile, ports=_ports())
+    if profile is None or profile.navigation_parameters is None:
+        return await _canonical.supervise(
+            root, command, environment, profile=profile, ports=_ports()
+        )
+    from senior_navigation.parameters import prepare_navigation_parameters
+
+    # Canonical supervise settles its children before returning; only then release our run.
+    with tempfile.TemporaryDirectory(prefix="senior-navigation-") as temporary:
+        directory = Path(temporary)
+        overlay = prepare_navigation_parameters(
+            profile.navigation_parameters,
+            output=directory / "nav2.yaml",
+            mode="static",
+            contract_directory=directory,
+            run_nonce=secrets.token_hex(16),
+            host_boot_id=Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+            global_instance=secrets.token_hex(16),
+            local_instance=secrets.token_hex(16),
+        )
+        selected = profile.model_copy(update={"navigation_parameters": overlay})
+        return await _canonical.supervise(
+            root, command, environment, profile=selected, ports=_ports()
+        )
 
 
 async def stop(root: Path) -> int:

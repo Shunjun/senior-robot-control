@@ -8,7 +8,7 @@
 #include <senior_interfaces/msg/raw_image_layout.hpp>
 
 namespace senior_sensor_ingress {
-// Caller must first authenticate actual DDS owner and observe source changes.
+// Receiving entry checks configured source and capture order once.
 class RgbdCandidateLedger {
 public:
   using Image = senior_interfaces::msg::BoundedRawImage;

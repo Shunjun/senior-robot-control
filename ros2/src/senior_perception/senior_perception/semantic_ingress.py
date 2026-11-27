@@ -38,6 +38,7 @@ from senior_perception.vision.semantic_runtime import (
 )
 from senior_perception.vision.spawn_detector import SpawnInferenceWorker
 from vehicle_core.diagnostics import process_diagnostics
+from vehicle_core.ros_wiring import TOPICS, publisher, publisher_identity
 from vehicle_core.sensor_policy import default_policy
 
 
@@ -50,16 +51,17 @@ class SemanticIngress(Node):
 
     def __init__(self, *, parameter_overrides=None, _worker=None):
         super().__init__(
-            "semantic_ingress",
+            publisher("semantic_ingress").name,
+            namespace=publisher("semantic_ingress").namespace,
             parameter_overrides=parameter_overrides or [],
             start_parameter_services=False,
         )
-        self.declare_parameter("rgb_topic", "/safety/raw/rgb")
-        self.declare_parameter("rgb_camera_info_topic", "/safety/raw/rgb_info")
-        self.declare_parameter("bounded_depth_topic", "/safety/bounded_depth")
-        self.declare_parameter("raw_depth_topic", "/safety/raw/depth")
-        self.declare_parameter("raw_depth_info_topic", "/safety/raw/depth_info")
-        self.declare_parameter("candidate_topic", "/safety/semantic_candidate_unfenced")
+        self.declare_parameter("rgb_topic", TOPICS.safety_raw_rgb)
+        self.declare_parameter("rgb_camera_info_topic", TOPICS.safety_raw_rgb_info)
+        self.declare_parameter("bounded_depth_topic", TOPICS.safety_bounded_depth)
+        self.declare_parameter("raw_depth_topic", TOPICS.safety_raw_depth)
+        self.declare_parameter("raw_depth_info_topic", TOPICS.safety_raw_depth_info)
+        self.declare_parameter("candidate_topic", TOPICS.safety_semantic_candidate_unfenced)
         self.declare_parameter("registered_profile", False)
         self.declare_parameter("weights_path", "")
         self.declare_parameter("device", "cpu")
@@ -105,7 +107,6 @@ class SemanticIngress(Node):
         self._depth_epoch = ""
         self._depth_lineage = None
         self._depth_sequence = 0
-        self._retired_epochs = set()
         self._publisher = self.create_publisher(
             BoundedSemanticEvidence,
             str(self.get_parameter("candidate_topic").value),
@@ -131,7 +132,6 @@ class SemanticIngress(Node):
 
     def _reset(self, reason, *, retire_depth=False):
         if retire_depth and self._depth_epoch:
-            self._retired_epochs.add(self._depth_epoch)
             self._depth_epoch = ""
             self._depth_lineage = None
             self._depth_sequence = 0
@@ -147,13 +147,7 @@ class SemanticIngress(Node):
 
     def _source(self, topic):
         endpoints = self.get_publishers_info_by_topic(topic)
-        if len(endpoints) != 1:
-            return ""
-        endpoint = endpoints[0]
-        gid = bytes(endpoint.endpoint_gid)
-        if not gid or not any(gid):
-            return ""
-        return gid.hex()
+        return publisher_identity(endpoints, "raw_receipt")
 
     def _check_sources(self):
         current = tuple(self._source(topic) for topic in self._topics)
@@ -162,10 +156,11 @@ class SemanticIngress(Node):
             for name, index in (("rgb", 0), ("rgb_info", 1), ("depth", 3), ("depth_info", 4))
         )
         relay_ready = self._depth_egress.observe_relay(current[2])
-        ready = all(current) and graph_ready and relay_ready and len(self._retired_epochs) < 256
-        if current != self._sources or ready != self._ready:
+        ready = all(current) and graph_ready and relay_ready
+        if ready != self._ready:
             self._sources, self._ready = current, ready
             self._reset("raw_source_changed", retire_depth=True)
+        self._sources = current
         return ready
 
     def _clock_ok(self, ros_ns):
@@ -287,9 +282,7 @@ class SemanticIngress(Node):
                 return
             message = envelope.body
             if (
-                owner.owner_epoch != message.source_epoch
-                or owner.owner_sequence != message.sequence
-                or depth_capture_headers(
+                depth_capture_headers(
                     message,
                     depth_gid=self._sources[3],
                     info_gid=self._sources[4],
@@ -300,15 +293,7 @@ class SemanticIngress(Node):
                 is None
             ):
                 raise ValueError("depth_owner_mismatch")
-            epoch = str(message.source_epoch)
-            if epoch in self._retired_epochs:
-                return
             if not message.valid:
-                sequence = int(message.sequence)
-                if epoch and epoch == self._depth_epoch and 0 < sequence <= self._depth_sequence:
-                    return
-                if epoch == self._depth_epoch and sequence > self._depth_sequence:
-                    self._depth_sequence = sequence
                 self._reset("depth_invalid")
                 return
             depth = depth_snapshot(message)
@@ -328,32 +313,12 @@ class SemanticIngress(Node):
                 or info_capture.received_ros_ns != depth.info_received_ros_ns
                 or depth_capture.received_steady != depth.received_steady
                 or info_capture.received_steady != depth.info_received_steady
-                or depth_capture.raw_gid != depth.raw_source
-                or info_capture.raw_gid != depth.info_source
                 or depth_capture.frame_id != depth.frame_id
                 or info_capture.frame_id != depth.frame_id
             ):
                 raise ValueError("depth_capture_mismatch")
-            if depth.source_epoch != self._depth_epoch:
-                if self._depth_epoch:
-                    self._retired_epochs.add(self._depth_epoch)
-                    self._reset("depth_epoch_changed")
-                self._depth_epoch = depth.source_epoch
-                self._depth_lineage = None
-                self._depth_sequence = 0
-            lineage = (
-                depth.raw_source,
-                depth.info_source,
-                depth.calibration_id,
-                depth.frame_id,
-                depth.body_frame,
-            )
-            if (
-                self._depth_lineage is not None and lineage != self._depth_lineage
-            ) or depth.sequence <= self._depth_sequence:
-                self._reset("depth_lineage_invalid", retire_depth=True)
-                return
-            self._depth_lineage, self._depth_sequence = lineage, depth.sequence
+            self._depth_epoch = depth.source_epoch
+            self._depth_sequence = depth.sequence
             self._depth_messages[depth.stamp_ns] = (message, envelope.owner)
             while len(self._depth_messages) > 4:
                 del self._depth_messages[next(iter(self._depth_messages))]
@@ -451,13 +416,9 @@ class SemanticIngress(Node):
         current_owner = self._depth_egress.latest
         if (
             current_owner is None
-            or retained_owner.owner_gid != current_owner.owner_gid
-            or retained_owner.owner_epoch != current_owner.owner_epoch
             or retained_owner.owner_generation != current_owner.owner_generation
-            or retained_owner.relay_gid != current_owner.relay_gid
             or retained_owner.relay_boot != current_owner.relay_boot
-            or original_depth.sequence != depth.sequence
-            or original_depth.source_epoch != depth.source_epoch
+            or Time.from_msg(original_depth.stamp).nanoseconds != depth.stamp_ns
         ):
             self._invalid("semantic_result_expired")
             return

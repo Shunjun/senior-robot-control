@@ -3,6 +3,9 @@
 Run with a saved baseline module, e.g. git show <revision>:ros2/src/senior_mapping/
 senior_mapping/occupancy.py > /tmp/occupancy-baseline.py. This is a local pure
 algorithm replay, not a four-core vehicle/control-latency acceptance test.
+
+--system-trace reads the task recorder JSONL and --output writes its observed
+system summary; missing native/lock/queue metrics remain N/A.
 """
 
 import argparse
@@ -15,13 +18,12 @@ import tracemalloc
 from dataclasses import asdict
 from pathlib import Path
 
-from senior_mapping.evidence import MappingObservation, OccupancyThresholds, RangeRay, SceneHit
-from senior_mapping.occupancy import OccupancyMaintainer
 
-from vehicle_core.values import MapRef, Pose2D
+def trace():
+    from senior_mapping.evidence import MappingObservation, RangeRay, SceneHit
 
+    from vehicle_core.values import MapRef, Pose2D
 
-def trace() -> tuple[MappingObservation, ...]:
     rays = tuple(RangeRay(i * math.tau / 360, 12.0, True, False, None) for i in range(360))
     return tuple(
         MappingObservation(
@@ -43,6 +45,8 @@ def trace() -> tuple[MappingObservation, ...]:
 
 
 def replay(factory, inputs):
+    from senior_mapping.evidence import OccupancyThresholds
+
     limits = OccupancyThresholds(0.05, 3, 0.4, 3, 0.4, 0.1, 1.0, 1.0, 2.5, 0.5, 0.0, 6.0, 0.5, 0.5)
     owner = factory(limits)
     deltas = tuple(owner.update(frame) for frame in inputs)
@@ -60,10 +64,34 @@ def measure(factory, inputs):
     return result, {"wall_s": elapsed, "peak_temporary_bytes": peak}
 
 
+def summarize_system_trace(path: Path) -> dict:
+    # Direct script execution has tools/ on sys.path; module execution has root.
+    if __package__:
+        from .shared_layers_system_trace import summarize_system_trace as summarize
+    else:
+        from shared_layers_system_trace import summarize_system_trace as summarize
+    return summarize(path)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", type=Path, required=True)
+    group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--baseline", type=Path)
+    group.add_argument("--system-trace", type=Path)
+    parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.system_trace is not None:
+        result = summarize_system_trace(args.system_trace)
+        encoded = json.dumps(result, indent=2) + "\n"
+        if args.output is not None:
+            args.output.write_text(encoded)
+        else:
+            print(encoded, end="")
+        return
+    if args.output is not None:
+        parser.error("--output is only supported with --system-trace")
+    from senior_mapping.occupancy import OccupancyMaintainer
+
     spec = importlib.util.spec_from_file_location("occupancy_baseline", args.baseline)
     if spec is None or spec.loader is None:
         raise ValueError("baseline is not a Python module")

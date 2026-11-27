@@ -10,30 +10,49 @@ import json
 import math
 import os
 import signal
+import stat
 import tempfile
 import uuid
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
+from senior_perception.vision.raw_capture import capture_from_message
+
 from senior_mapping.navigation_bridge import NativeNavigationBridge
+from senior_mapping.references import decode_fixed_snapshot
+from senior_mapping.shared_scan import LatestScanSlot, decode_qualified_scan
 from vehicle_core.errors import DomainError, ErrorCode
 from vehicle_core.lifecycle_events import ResourceProcesses
+from vehicle_core.ros_wiring import TOPICS
 
 
 class RosMappingBackend:
-    def __init__(self, node: Any, *, stopped: Any, reference: Any = None) -> None:
+    def __init__(
+        self, node: Any, *, stopped: Any, reference: Any = None, contract=None, prepare_live=None
+    ) -> None:
         self.node, self._stopped = node, stopped
+        self._prepare_live = prepare_live
         self._services: dict[str, tuple[Any, Any]] = {}
         self._child: asyncio.subprocess.Process | None = None
-        self._relay: asyncio.subprocess.Process | None = None
         self._resources = ResourceProcesses("mapping")
         self._boot = ""
+        self._input_deadline: float | None = None
         self._root: Path | None = None
         ram = "/dev/shm" if Path("/dev/shm").is_dir() else None
         self._transfer = tempfile.TemporaryDirectory(prefix="senior-map-", dir=ram)
         self._lock = asyncio.Lock()
         self._navigation = NativeNavigationBridge(node, reference, self._call)
-        self._pose_task: asyncio.Task[None] | None = None
+        self._scan_subscription = self._scan_timer = None
+        self._scan_accepting = False
+        self._qualified_gid = None
+        self._learning_client = None
+        self._scan_slot = None
+        self._host_boot_id = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+        self._navigation.host_boot_id = self._host_boot_id
+        if contract is not None:
+            self._navigation.configure_contract(contract)
+        self._register_qualified_receipt()
 
     def _prepare_services(self) -> None:
         if self._services:
@@ -55,24 +74,25 @@ class RosMappingBackend:
 
         self._services = {
             "grid": (
-                self.node.create_client(ReadMappingGrid, "/senior/slam/read_mapping_grid"),
+                self.node.create_client(ReadMappingGrid, TOPICS.senior_slam_read_mapping_grid),
                 ReadMappingGrid,
             ),
+            # //Compatible: retained diagnostic service; no production freshness polling.
             "pose": (
-                self.node.create_client(ReadMappingPose, "/senior/slam/read_mapping_pose"),
+                self.node.create_client(ReadMappingPose, TOPICS.senior_slam_read_mapping_pose),
                 ReadMappingPose,
             ),
-            "graph": (self.node.create_client(ReadGraph, "/senior/slam/read_graph"), ReadGraph),
+            "graph": (self.node.create_client(ReadGraph, TOPICS.senior_slam_read_graph), ReadGraph),
             "next": (
-                self.node.create_client(ReadGraphCommit, "/senior/slam/read_graph_commit"),
+                self.node.create_client(ReadGraphCommit, TOPICS.senior_slam_read_graph_commit),
                 ReadGraphCommit,
             ),
             "capture": (
-                self.node.create_client(CaptureGraph, "/senior/slam/capture_graph"),
+                self.node.create_client(CaptureGraph, TOPICS.senior_slam_capture_graph),
                 CaptureGraph,
             ),
             "gate": (
-                self.node.create_client(MappingGate, "/senior/slam/mapping_gate"),
+                self.node.create_client(MappingGate, TOPICS.senior_slam_mapping_gate),
                 MappingGate,
             ),
         }
@@ -112,6 +132,16 @@ class RosMappingBackend:
                 if method == "status":
                     return {"ok": True, "stopped": bool(self._stopped())}
                 if method == "start":
+                    if self._child is not None or not self._stopped():
+                        raise DomainError(
+                            ErrorCode.CONFLICT, "vehicle must stop before live handoff"
+                        )
+                    if self._prepare_live is not None:
+                        try:
+                            await self._prepare_live()
+                        except (RuntimeError, OSError) as exc:
+                            self.node.get_logger().error(str(exc))
+                            raise DomainError(ErrorCode.UNAVAILABLE, str(exc)) from exc
                     return await self._start(fields)
                 if method == "stop":
                     await self._stop()
@@ -122,15 +152,38 @@ class RosMappingBackend:
                     response = await self._call(
                         "gate", boot_id=self._boot, accepting=fields["accepting"]
                     )
+                    if response.ok and fields["accepting"] and response.graph_commit_sequence == 0:
+                        await self._wait_initial_commit()
                     return {"ok": bool(response.ok), "sequence": response.graph_commit_sequence}
                 if method == "grid":
+                    if fields.get("purpose") not in ("diagnostic", "migrate_legacy"):
+                        raise DomainError(ErrorCode.CONFLICT, "raw raster is localization-only")
+                    if fields.get("purpose") == "migrate_legacy":
+                        if getattr(self, "_legacy_raster_used", False):
+                            raise DomainError(ErrorCode.CONFLICT, "legacy raster already consumed")
+                        self._legacy_raster_used = True
                     cut = await self._navigation.raster(fields["sequence"])
                     return (
                         {"ok": True, **cut} if cut.get("pending") else await self._transfer_cut(cut)
                     )
                 if method == "reference":
-                    self._navigation.install(fields)
+                    if fields.get("active") is False:
+                        self._navigation.withdraw()
+                    else:
+                        self._navigation.authorize_reference(fields)
                     return {"ok": True}
+                if method == "install_fixed":
+                    cut = await asyncio.to_thread(
+                        _read_fixed_transfer, fields["path"], fields["sha256"]
+                    )
+                    if fields.get("acceptance_floor_steady_ns") != self._navigation._owner_floor_ns:
+                        raise DomainError(ErrorCode.CONFLICT, "fixed reference floor changed")
+                    ack = self._navigation.install_fixed(cut, graph_cut=self._navigation._cut)
+                    if fields.get("coverage_reason") == "coverage_limit":
+                        self._navigation.authorize_reference(
+                            {**fields, "sequence": cut.watermark.graph_sequence}
+                        )
+                    return ack
                 if method == "next":
                     response = await self._call(
                         "next", boot_id=self._boot, graph_commit_sequence=fields["sequence"]
@@ -155,6 +208,37 @@ class RosMappingBackend:
                 raise DomainError(ErrorCode.VALIDATION, "unknown mapping backend request")
             except DomainError as exc:
                 return {"ok": False, "error": exc.code.value}
+            except (OSError, ValueError, KeyError, TypeError):
+                return {"ok": False, "error": ErrorCode.VALIDATION.value}
+
+    async def _wait_initial_commit(self) -> None:
+        """Wait for a qualified first cut within the original start deadline.
+
+        An owned EMPTY watermark is not a scan witness. Native status and input
+        qualification remain authoritative; no UNAVAILABLE cut is consumed.
+        """
+        deadline = self._input_deadline
+        if deadline is None:
+            raise DomainError(ErrorCode.CONFLICT, "SLAM input deadline is unavailable")
+        loop = asyncio.get_running_loop()
+        while (remaining := deadline - loop.time()) > 0:
+            try:
+                graph = await asyncio.wait_for(self._call("graph"), remaining)
+            except asyncio.TimeoutError:
+                break
+            if graph.boot_id != self._boot:
+                raise DomainError(ErrorCode.CONFLICT, "SLAM boot changed")
+            if loop.time() >= deadline:
+                break
+            if (
+                graph.status == graph.OK
+                and graph.graph_commit_watermark_valid
+                and graph.graph_commit_sequence > 0
+                and graph.last_committed_scan_valid
+            ):
+                return
+            await asyncio.sleep(min(0.02, max(0.0, deadline - loop.time())))
+        raise DomainError(ErrorCode.UNAVAILABLE, "SLAM input did not become ready")
 
     async def _start(self, fields: dict[str, Any]) -> dict[str, Any]:
         from ament_index_python.packages import get_package_prefix, get_package_share_directory
@@ -178,17 +262,13 @@ class RosMappingBackend:
             "production_boot_id": expected_boot,
             "production_session": True,
             "capture_directory": str(root),
-            "bounded_scan_topic": "/safety/raw/scan",
+            "bounded_scan_topic": TOPICS.safety_raw_scan,
             "use_map_saver": False,
             "enable_interactive_mode": False,
             "transform_publish_period": 0.0,
             "odom_frame": fields.get("odom_frame", "odom"),
             "use_sim_time": bool(self.node.get_parameter("use_sim_time").value),
-            "verified_static_lidar_tf_topic": "/senior/slam/static_lidar_tf_receipt",
-            "verified_static_lidar_frame": fields.get("lidar_frame", "laser_link"),
-            "verified_static_lidar_relay_node": "/slam_static_lidar_tf_receipt",
-            "verified_static_lidar_tf_source_topic": "/tf_static",
-            "verified_static_lidar_tf_source_node": "/robot_state_publisher",
+            "lidar_frame": fields.get("lidar_frame", "laser_link"),
         }
         if fields.get("prefix"):
             parameters.update(
@@ -213,33 +293,11 @@ class RosMappingBackend:
             *args, env=environment, start_new_session=True
         )
         self._resources.started(self._child.pid)
-        relay = (
-            Path(get_package_prefix("senior_sensor_ingress"))
-            / "lib/senior_sensor_ingress/static_tf_receipt_node"
-        )
-        relay_parameters = {
-            "input_topic": "/tf_static",
-            "output_topic": "/senior/slam/static_lidar_tf_receipt",
-            "base_frame": "base_link",
-            "camera_frame": fields.get("lidar_frame", "laser_link"),
-            "expected_node_name": "robot_state_publisher",
-            "expected_namespace": "/",
-            "use_sim_time": parameters["use_sim_time"],
-        }
-        relay_args = [str(relay), "--ros-args", "-r", "__node:=slam_static_lidar_tf_receipt"]
-        for key, value in relay_parameters.items():
-            relay_args.extend(["-p", f"{key}:={json.dumps(value)}"])
-        try:
-            self._relay = await asyncio.create_subprocess_exec(
-                *relay_args, env=environment, start_new_session=True
-            )
-            self._resources.started(self._relay.pid)
-        except BaseException:
-            await self._stop()
-            raise
         self._root = root
+        self._legacy_raster_used = False
         try:
             deadline = asyncio.get_running_loop().time() + 10
+            self._input_deadline = deadline
             while True:
                 graph = await self._call("graph")
                 if graph.graph_commit_watermark_valid:
@@ -255,26 +313,115 @@ class RosMappingBackend:
                 raise DomainError(ErrorCode.CONFLICT, "SLAM did not start a fresh owned graph")
             self._boot = graph.boot_id
             self._navigation.begin(self._boot, graph.odom_frame)
-            if self._navigation.reference is not None:
-                self._pose_task = asyncio.create_task(self._navigation.run())
+            self._start_scan_channel()
             return {
                 "ok": True,
                 "boot_id": self._boot,
                 "odom_frame": graph.odom_frame,
                 "map_frame": graph.map_frame,
                 "loaded": await self._transfer_cut(self._graph(graph)),
+                "qualified_scan_path": str(self._scan_slot.path),
+                "qualified_scan_nonce": self._scan_slot.nonce,
+                "qualified_scan_schema": 1,
+                "host_boot_id": self._host_boot_id,
             }
         except BaseException:
             await self._stop()
             raise
 
+    def _register_qualified_receipt(self) -> None:
+        # //Compatible: Humble rclpy has no per-message GID. Reuse the node's
+        # original authenticated native receipt group, registered before first spin.
+        try:
+            from senior_interfaces.msg import QualifiedMappingScan
+        except ImportError:
+            # //Compatible: older installs keep control available, but cannot start mapping.
+            return
+        from senior_sensor_ingress.native_receipt import subscribe
+
+        self._scan_subscription = subscribe(
+            self.node,
+            QualifiedMappingScan,
+            TOPICS.senior_slam_qualified_scan,
+            self._on_qualified_scan,
+            writer="slam_toolbox",
+            qos="reliable",
+            invalidate=self._invalidate_qualified,
+        )
+
+    def _invalidate_qualified(self) -> None:
+        if self._scan_accepting:
+            self._navigation.invalidate_current("qualified_receipt_unavailable")
+
+    def _start_scan_channel(self) -> None:
+        from senior_perception.learning_client import LearningClient
+
+        from vehicle_core.config import DeviceProfile
+
+        if self._scan_subscription is None:
+            raise DomainError(ErrorCode.UNAVAILABLE, "qualified scan interfaces need a rebuild")
+        self._scan_profile = DeviceProfile()
+        claim = os.environ.get("SENIOR_STARTUP_LEARNING_CLAIM")
+        if claim:
+            self._learning_client = LearningClient(Path(claim), read_only=True)
+        self._scan_slot = LatestScanSlot(
+            Path(self._transfer.name) / "latest-scan.json",
+            nonce=str(uuid.uuid4()),
+            backend_boot=self._boot,
+            host_boot_id=self._host_boot_id,
+        )
+        self._navigation.slot = self._scan_slot
+        self._qualified_gid = None
+        self._scan_accepting = True
+        self._scan_timer = self.node.create_timer(0.05, self._poll_scan_channel)
+
+    def _on_qualified_scan(self, message: Any, info: Any) -> None:
+        if not self._scan_accepting or message.backend_boot != self._boot:
+            return
+        # The native receiving entry already checked configured writer/type/namespace.
+        if not isinstance(info, dict) or info.get("native_receipt_authenticated") is not True:
+            return
+        self._qualified_gid = info.get("publisher_gid")  # Diagnostic only.
+        if message.status != message.QUALIFIED:
+            self._navigation.invalidate_current(message.reason or "native_invalid")
+            return
+        try:
+            view = None if self._learning_client is None else self._learning_client.view
+            scan = decode_qualified_scan(
+                message, self._scan_profile, learning_view=view, host_boot_id=self._host_boot_id
+            )
+            self._navigation.observe_scan(scan, message.scan.capture)
+        except ValueError:
+            self._navigation.invalidate_current("scan_decode_invalid")
+
+    def _poll_scan_channel(self) -> None:
+        if not self._scan_accepting:
+            return
+        if self._learning_client is not None:
+            self._learning_client.poll()
+        # Receiving-entry loss is delivered by _invalidate_qualified; do not
+        # repeat graph qualification in this forwarding/housekeeping layer.
+        self._navigation.check_current()
+        self._navigation.poll_contract()
+        if self._scan_slot is not None and self._scan_slot.error is not None:
+            if self._navigation.reference is not None:
+                self._navigation.reference.set_current_coverage(False, "scan_slot_unavailable")
+
     async def _stop(self) -> None:
+        self._scan_accepting = False
         self._navigation.withdraw()
-        if self._pose_task is not None:
-            self._pose_task.cancel()
-            await asyncio.gather(self._pose_task, return_exceptions=True)
-            self._pose_task = None
-        for child in (self._child, self._relay):
+        # The shared receipt group belongs to the node and is closed by its context;
+        # the accepting fence above disables only this mapping session's input.
+        if self._scan_timer is not None:
+            self.node.destroy_timer(self._scan_timer)
+            self._scan_timer = None
+        if self._learning_client is not None:
+            self._learning_client.close()
+            self._learning_client = None
+        if self._scan_slot is not None:
+            await asyncio.to_thread(self._scan_slot.close)
+            self._scan_slot = self._navigation.slot = None
+        for child in (self._child,):
             if child is None:
                 continue
             if child.returncode is None:
@@ -288,7 +435,8 @@ class RosMappingBackend:
                     os.killpg(child.pid, signal.SIGKILL)
                     await child.wait()
             self._resources.exited(child.pid)
-        self._child = self._relay = None
+        self._child = None
+        self._input_deadline = None
 
     @staticmethod
     def _graph(response: Any) -> dict[str, Any]:
@@ -302,11 +450,12 @@ class RosMappingBackend:
 
     async def _publish_cut(self, response: Any) -> dict[str, Any]:
         scan = response.scan
-        if not response.static_lidar_tf_receipt_valid or response.raw_ray_angle_sign not in (-1, 1):
+        if response.raw_ray_angle_sign not in (-1, 1):
             raise DomainError(ErrorCode.UNAVAILABLE, "SLAM scan geometry is unavailable")
         cut = self._graph(response)
         cut.update(
             keyframe_id=response.committed_keyframe_id,
+            capture=asdict(capture_from_message(scan.capture)),
             stamp=response.sample_stamp.sec + response.sample_stamp.nanosec * 1e-9,
             sensor=[
                 response.corrected_sensor_x,
@@ -343,3 +492,40 @@ class RosMappingBackend:
         self._navigation.close()
         for client, _ in self._services.values():
             self.node.destroy_client(client)
+
+
+def _read_fixed_transfer(path: str, digest: str):
+    path = Path(path)
+    if not path.is_absolute() or ".." in path.parts:
+        raise DomainError(ErrorCode.VALIDATION, "fixed transfer path must be canonical")
+    directory_fd = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        # Pin each ancestor inode without following symlinks, including races.
+        for part in path.parts[1:-1]:
+            parent = os.open(
+                part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory_fd
+            )
+            os.close(directory_fd)
+            directory_fd = parent
+        directory = os.fstat(directory_fd)
+        if directory.st_uid != os.getuid() or directory.st_mode & 0o077:
+            raise DomainError(ErrorCode.VALIDATION, "fixed transfer directory must be private")
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    with os.fdopen(fd, "rb") as stream:
+        metadata = os.fstat(stream.fileno())
+        if (
+            not stat.S_ISREG(metadata.st_mode)
+            or metadata.st_uid != os.getuid()
+            or metadata.st_mode & 0o077
+            or metadata.st_size > 8 * 1024 * 1024
+        ):
+            raise DomainError(ErrorCode.VALIDATION, "fixed transfer must be private and bounded")
+        payload = stream.read(8 * 1024 * 1024 + 1)
+    if len(payload) > 8 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != digest:
+        raise DomainError(ErrorCode.CONFLICT, "fixed transfer digest changed")
+    try:
+        return decode_fixed_snapshot(payload, transfer=True)
+    except (ValueError, TypeError) as exc:
+        raise DomainError(ErrorCode.VALIDATION, "fixed transfer is invalid") from exc

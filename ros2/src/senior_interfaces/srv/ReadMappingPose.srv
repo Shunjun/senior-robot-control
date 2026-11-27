@@ -7,4 +7,3 @@ float64 odom_x
 float64 odom_y
 float64 odom_yaw
 senior_interfaces/RawCaptureHeader capture
-bool static_lidar_tf_receipt_valid

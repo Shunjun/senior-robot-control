@@ -1,6 +1,6 @@
 # Statistical measurement candidate: hard_error_qualified MUST be false.
-string<=64 producer_boot_id
-string<=128 producer_gid
+string producer_boot_id
+string producer_gid
 uint64 owner_generation
 uint64 worker_generation
 uint64 sequence
@@ -28,9 +28,9 @@ senior_interfaces/BoundedRawCameraInfo first_rgb_calibration
 senior_interfaces/BoundedRawCameraInfo first_depth_calibration
 senior_interfaces/BoundedRawCameraInfo second_rgb_calibration
 senior_interfaces/BoundedRawCameraInfo second_depth_calibration
-senior_interfaces/BoundedStaticTf first_tf
-senior_interfaces/BoundedStaticTf second_tf
-string<=128 body_frame
+tf2_msgs/TFMessage first_tf
+tf2_msgs/TFMessage second_tf
+string body_frame
 builtin_interfaces/Time interval_start
 builtin_interfaces/Time interval_end
 # Row-major C2<-C1 static-point transform; not a qualified body motion.

@@ -33,6 +33,10 @@ TEST(RgbdCandidateLedger, MatchesExactRawHeaderLayoutAndOriginalBodyHash)
   EXPECT_FALSE(ledger.match_image(0, layout));
   layout.sha256[0] ^= 1;
   ++layout.capture.sequence;
+  layout.capture.raw_gid = "changed diagnostic";
+  layout.capture.bridge_gid.clear();
+  EXPECT_TRUE(ledger.match_image(0, layout));
+  ++layout.capture.stamp.nanosec;
   EXPECT_FALSE(ledger.match_image(0, layout));
 }
 
@@ -52,7 +56,7 @@ TEST(RgbdCandidateLedger, SameHeaderDifferentBodyFailsClosedAndInfoMustMatchExac
   ledger.clear();
   image.data[0] = 'a';
   EXPECT_FALSE(ledger.remember_image(0, image));
-  ++image.capture.sequence;
+  ++image.capture.stamp.nanosec;
   EXPECT_TRUE(ledger.remember_image(0, image));
   senior_interfaces::msg::BoundedRawCameraInfo info;
   info.capture.valid = true;
@@ -68,6 +72,6 @@ TEST(RgbdCandidateLedger, SameHeaderDifferentBodyFailsClosedAndInfoMustMatchExac
   EXPECT_FALSE(ledger.match_info(0, info));
   ledger.clear();
   EXPECT_FALSE(ledger.remember_info(0, info));
-  ++info.capture.sequence;
+  ++info.capture.stamp.nanosec;
   EXPECT_TRUE(ledger.remember_info(0, info));
 }

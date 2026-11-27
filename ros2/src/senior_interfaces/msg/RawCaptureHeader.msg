@@ -4,14 +4,14 @@ builtin_interfaces/Time received_ros
 uint64 received_steady_ns
 uint64 sample_steady_ns
 uint64 clock_generation
-string<=128 frame_id
+string frame_id
 # Lowercase hex encoding of the actual rclcpp MessageInfo publisher GID.
-string<=128 raw_gid
+string raw_gid
 # Lowercase hex encoding of the typed bridge publisher's own get_gid().
-string<=128 bridge_gid
-string<=64 source_epoch
-# Shared by all four sources; increments whenever any source changes or fails.
-string<=64 bridge_boot_id
+string bridge_gid
+string source_epoch
+# Receiver process identity. Generation changes only on stream/clock reinitialization.
+string bridge_boot_id
 uint64 capture_generation
 uint64 sequence
 bool valid

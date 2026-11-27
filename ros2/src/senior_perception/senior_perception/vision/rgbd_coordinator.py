@@ -125,7 +125,7 @@ class RgbdCoordinator:
             self.ledger.invalidate()
             self.worker.invalidate()
             return False
-        epoch = f"{first.boot}:{first.relay_gid}:{self.binding.generation}"
+        epoch = str(self.binding.generation)
         try:
             built = build_frame(
                 headers,
@@ -241,9 +241,7 @@ class RgbdCoordinator:
                 None,
                 None,
             )
-        expected_epoch = (
-            f"{static_receipt.boot}:{static_receipt.relay_gid}:{self.binding.generation}"
-        )
+        expected_epoch = str(self.binding.generation)
         if result.tf_epochs != (expected_epoch, expected_epoch) or result.dependencies != (
             (expected_epoch,),
             (expected_epoch,),
@@ -305,8 +303,8 @@ class RgbdCoordinator:
                     None,
                 )
         a_meta, b_meta = self._preprocessing[first.number], self._preprocessing[second.number]
-        receipt, admitted = self.binding.first_receipt, self.binding.admitted_from
-        if receipt is None or admitted is None:
+        receipt = self.binding.first_receipt
+        if receipt is None:
             self.ledger.invalidate()
             self.worker.invalidate()
             return CompactResult(
@@ -330,7 +328,6 @@ class RgbdCoordinator:
             camera_info=((a_meta[2], a_meta[3]), (b_meta[2], b_meta[3])),
             image_layouts=((a_meta[4], a_meta[5]), (b_meta[4], b_meta[5])),
             tf_receipts=(receipt, receipt),
-            tf_admitted_from=(admitted, admitted),
         )
 
     def close(self) -> None:

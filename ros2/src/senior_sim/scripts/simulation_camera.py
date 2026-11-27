@@ -41,15 +41,12 @@ class SimulationCamera(Node):
             "/",
         ):
             return
-        # //Compatible: Humble may omit per-message publisher_gid.
-        gid = info.get("publisher_gid")
-        if gid is not None and bytes(gid) != bytes(sources[0].endpoint_gid):
-            return
+        # MessageInfo GID is optional diagnostic metadata, never a preview gate.
         stamp = image.header.stamp.sec * 10**9 + image.header.stamp.nanosec
         age = self.get_clock().now().nanoseconds - stamp
         if (
             stamp <= 0
-            or stamp == self._last_stamp
+            or stamp <= self._last_stamp
             or not 0 <= age < round(default_policy().hard_age_ms * 1_000_000)
         ):
             return

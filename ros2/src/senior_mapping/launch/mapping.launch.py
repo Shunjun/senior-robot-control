@@ -2,8 +2,8 @@
 
 The default uses stock slam_toolbox and its adapter. A nonempty
 capture_directory instead selects the native senior_mapping runtime
-and exposes native pose-graph capture. The verified static lidar mode
-requires the matching bridge consumer and an existing scan receipt process.
+and exposes native pose-graph capture. Bounded lidar input uses the existing
+scan receipt process and standard TF.
 """
 
 from pathlib import Path
@@ -16,6 +16,7 @@ from launch_ros.substitutions import FindPackageShare
 
 from vehicle_core.launch_recovery import restart_prefix
 from vehicle_core.lifecycle_events import resource_handlers
+from vehicle_core.ros_wiring import TOPICS
 
 
 def _mapping_actions(context):
@@ -23,12 +24,7 @@ def _mapping_actions(context):
     use_sim_time = LaunchConfiguration("use_sim_time")
     params = PathJoinSubstitution([share, "config", "slam.yaml"])
     odom_frame = LaunchConfiguration("odom_frame").perform(context)
-    if (
-        not odom_frame
-        or odom_frame == "map"
-        or len(odom_frame) > 128
-        or any(not 33 <= ord(character) <= 126 for character in odom_frame)
-    ):
+    if not odom_frame or odom_frame == "map":
         raise ValueError("odom_frame must name a valid frame distinct from map")
     capture_directory = LaunchConfiguration("capture_directory").perform(context)
     verified_lidar = LaunchConfiguration("verified_static_lidar").perform(context) == "true"
@@ -48,49 +44,10 @@ def _mapping_actions(context):
             lidar_frame = LaunchConfiguration("lidar_frame").perform(context)
             if not bounded_scan.startswith("/") or bounded_scan in ("/", "/scan"):
                 raise ValueError("bounded_scan_topic must be an absolute relay topic")
-            if (
-                not lidar_frame
-                or lidar_frame == "base_link"
-                or len(lidar_frame) > 128
-                or any(not 33 <= ord(character) <= 126 for character in lidar_frame)
-            ):
-                raise ValueError("lidar_frame must name a distinct valid sensor frame")
-
-            relay_name = "slam_static_lidar_tf_receipt"
-            receipt_topic = "/senior/slam/static_lidar_tf_receipt"
-            raw_tf_topic = "/tf_static"
-            raw_tf_node = "robot_state_publisher"
-            nodes.append(
-                Node(
-                    package="senior_sensor_ingress",
-                    executable="static_tf_receipt_node",
-                    prefix=restart_prefix(),
-                    name=relay_name,
-                    namespace="/",
-                    output="screen",
-                    parameters=[
-                        {
-                            "use_sim_time": use_sim_time,
-                            "input_topic": raw_tf_topic,
-                            "output_topic": receipt_topic,
-                            "base_frame": "base_link",
-                            # //Compatible: the relay's target parameter also supports lidar.
-                            "camera_frame": lidar_frame,
-                            "expected_node_name": raw_tf_node,
-                            "expected_namespace": "/",
-                        }
-                    ],
-                )
-            )
+            if not lidar_frame or lidar_frame == "base_link":
+                raise ValueError("lidar_frame must name a distinct sensor frame")
             bridge_parameters.update(
-                {
-                    "bounded_scan_topic": bounded_scan,
-                    "verified_static_lidar_tf_topic": receipt_topic,
-                    "verified_static_lidar_frame": lidar_frame,
-                    "verified_static_lidar_relay_node": f"/{relay_name}",
-                    "verified_static_lidar_tf_source_topic": raw_tf_topic,
-                    "verified_static_lidar_tf_source_node": f"/{raw_tf_node}",
-                }
+                {"bounded_scan_topic": bounded_scan, "lidar_frame": lidar_frame}
             )
         nodes.append(
             Node(
@@ -152,7 +109,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "bounded_scan_topic",
-                default_value="/safety/raw/scan",
+                default_value=TOPICS.safety_raw_scan,
                 description="Existing scan_receipt output, used only in verified lidar mode.",
             ),
             DeclareLaunchArgument(

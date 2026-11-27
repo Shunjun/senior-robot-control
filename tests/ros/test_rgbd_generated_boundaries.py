@@ -4,42 +4,46 @@ import pytest
 
 pytest.importorskip("rclpy")
 import numpy as np  # noqa: E402
+from geometry_msgs.msg import TransformStamped  # noqa: E402
 from senior_interfaces.msg import (  # noqa: E402
     BoundedRawCameraInfo,
     BoundedRawImage,
-    BoundedStaticTf,
-    StaticTransformEdge,
 )
 from senior_interfaces.msg import (
     RawCaptureHeader as RosHeader,
 )
 from senior_perception.vision.raw_capture import capture_from_message  # noqa: E402
 from senior_perception.vision.rgbd_frame_builder import build_frame  # noqa: E402
-from senior_perception.vision.static_tf_binding import StaticBinding  # noqa: E402
-from senior_perception.vision.static_tf_wire import observe_verified_tf  # noqa: E402
+from senior_perception.vision.static_tf_binding import Edge, StaticBinding, TransformSnapshot  # noqa: E402
+from tf2_msgs.msg import TFMessage  # noqa: E402
 
 
-def test_generated_static_tf_float_arrays_are_admitted():
-    edge = StaticTransformEdge()
-    edge.parent_frame = "base_link"
-    edge.child_frame = "camera"
-    edge.translation = np.array([0.1, 0.2, 0.3], dtype=np.float64)
-    edge.rotation_xyzw = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float64)
-    assert isinstance(edge.translation[0], np.float64)
-    value = BoundedStaticTf()
-    value.bridge_boot_id = "boot"
-    value.bridge_gid = "02"
-    value.raw_gid = "01"
-    value.generation = value.sequence = value.first_sequence = 1
-    value.valid = value.admitted = True
-    value.admitted_from_ros.nanosec = 200
-    value.admitted_from_steady = 0.2
-    value.edges = [edge]
+def test_generated_standard_tf_preserves_geometry_without_credential():
+    edge = TransformStamped()
+    edge.header.frame_id = "base_link"
+    edge.child_frame_id = "camera"
+    edge.transform.translation.x = 0.1
+    edge.transform.translation.y = 0.2
+    edge.transform.translation.z = 0.3
+    edge.transform.rotation.w = 1.0
+    value = TFMessage(transforms=[edge])
+    actual = value.transforms[0]
+    t, q = actual.transform.translation, actual.transform.rotation
     binding = StaticBinding("base_link", "camera")
-    assert observe_verified_tf(binding, value, current_relay_gid="02")
-    assert binding.current is not None
+    assert binding.observe(
+        TransformSnapshot(
+            (
+                Edge(
+                    actual.header.frame_id,
+                    actual.child_frame_id,
+                    0,
+                    (t.x, t.y, t.z),
+                    (q.x, q.y, q.z, q.w),
+                ),
+            )
+        )
+    )
     assert binding.current.edges[0].translation == (0.1, 0.2, 0.3)
-    assert binding.admitted_from == (200, 0.2)
 
 
 def test_generated_camera_info_builds_frame_and_native_float_snapshot():

@@ -8,6 +8,7 @@ import math
 from dataclasses import dataclass, field
 
 from vehicle_core.sensor_policy import sensor_current
+from vehicle_core.source_order import SourceOrder
 
 
 @dataclass(frozen=True)
@@ -22,17 +23,12 @@ class DepthHeader:
     calibration_id: str
     valid: bool
     measurement_steady: float = field(kw_only=True)
-
-
-def _bounded_identity(value: str, limit: int) -> bool:
-    try:
-        return bool(value) and len(value.encode("utf-8")) <= limit
-    except UnicodeError:
-        return False
+    boot_id: str = field(default="", kw_only=True)
+    capture_generation: int = field(default=1, kw_only=True)
 
 
 class DepthAdmission:
-    """Authenticated source ordering and immutable monotonic measurement age."""
+    """Consume each source stamp once; safety adoption keeps its existing age policy."""
 
     def __init__(self, *, max_age_ms: float) -> None:
         if not math.isfinite(max_age_ms) or max_age_ms <= 0:
@@ -40,82 +36,60 @@ class DepthAdmission:
         self.max_age_ms = max_age_ms
         self.latest: DepthHeader | None = None
         self.generation = 0
-        self._active: str | None = None
-        self._retired: set[str] = set()
-        self._exhausted = False
-        self._sequence = 0
-        self._frontier_steady = -math.inf
-        self._identity: tuple[str, str, str] | None = None
-        self._identity_failed = False
+        self._order = SourceOrder()
         self._last_steady: float | None = None
 
     def retire(self) -> None:
-        if self._active is not None:
-            if len(self._retired) >= 256:
-                self._exhausted = True
-            else:
-                self._retired.add(self._active)
-        self._active = None
-        self._sequence = 0
-        self._frontier_steady = -math.inf
-        self._identity = None
-        self._identity_failed = False
-        self.latest = None
-        self.generation += 1
+        # //Compatible: old callers invalidate current evidence; no source is blacklisted.
+        if self.latest is not None:
+            self.latest = None
+            self.generation += 1
+
+    def confirm_boot(self, boot: str) -> None:
+        if self._order.boot_id != boot:
+            self._order.confirm_boot(boot)
+            self.retire()
 
     def _clock_ok(self, now_steady: float) -> bool:
-        if not math.isfinite(now_steady) or (
-            self._last_steady is not None and now_steady < self._last_steady
-        ):
+        if not math.isfinite(now_steady):
             self.retire()
             return False
+        rollback = self._last_steady is not None and now_steady < self._last_steady
         self._last_steady = now_steady
-        return True
+        if rollback:
+            self.retire()
+        return not rollback
 
     def accept(self, header: DepthHeader, *, now_ros_ns: int, now_steady: float) -> bool:
         if not self._clock_ok(now_steady):
             return False
-        if not _bounded_identity(header.source_epoch, 64):
-            self.retire()
-            return False
-        if self._exhausted or header.source_epoch in self._retired:
-            return False
-        if header.source_epoch != self._active:
-            self.retire()
-            if self._exhausted:
+        if not header.valid:
+            if header.boot_id and self._order.boot_id not in (None, header.boot_id):
                 return False
-            self._active = header.source_epoch
-        if header.sequence <= self._sequence:
+            if header.capture_generation < self._order.generation:
+                return False
+            self.retire()
             return False
-        self._sequence = header.sequence
-        self.generation += 1
-        self.latest = None
-        identity = (header.raw_source, header.frame_id, header.calibration_id)
-        if self._identity is not None and self._identity != identity:
-            self._identity_failed = True
-        current = sensor_current(
-            measured_steady=header.measurement_steady,
-            received_steady=header.received_steady,
-            now_steady=now_steady,
-            max_age_ms=self.max_age_ms,
-        )
-        shape_ok = (
-            _bounded_identity(header.raw_source, 128)
-            and _bounded_identity(header.frame_id, 128)
-            and _bounded_identity(header.calibration_id, 128)
-            and header.stamp_ns >= 0
-            and math.isfinite(header.measurement_steady)
-            and header.measurement_steady > self._frontier_steady
-            and not self._identity_failed
-        )
-        # Valid original timing may advance the source frontier; a future or
-        # malformed message cannot poison it using a receiver-generated time.
-        if current:
-            self._frontier_steady = max(self._frontier_steady, header.measurement_steady)
-        if not header.valid or not shape_ok or not current:
+        if (
+            not header.frame_id
+            or not header.calibration_id
+            or header.stamp_ns < 0
+            or header.stamp_ns > header.received_ros_ns
+            or not math.isfinite(header.measurement_steady)
+            or not math.isfinite(header.received_steady)
+            or header.measurement_steady > header.received_steady
+            or header.received_steady > now_steady
+        ):
+            self.retire()
             return False
-        self._identity = identity
+        # //Compatible: pure legacy callers have one consumer-local stream.
+        boot = header.boot_id or "legacy-depth-consumer"
+        if not self._order.accept_capture(
+            boot, header.capture_generation, header.stamp_ns, round(header.received_steady * 1e9)
+        ):
+            return False
         self.latest = header
+        self.generation += 1
         return True
 
     def usable(self, *, now_ros_ns: int, now_steady: float) -> bool:

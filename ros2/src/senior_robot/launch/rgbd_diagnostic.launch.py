@@ -7,12 +7,13 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 
 from vehicle_core.launch_recovery import restart_prefix
+from vehicle_core.ros_wiring import TOPICS
 from vehicle_core.sensor_parameters import ros_sensor_parameters
 
 
 def generate_launch_description():
     remappings = [
-        ("/rgbd_diagnostic/" + stream, "/safety/raw/" + stream)
+        (getattr(TOPICS, f"rgbd_diagnostic_{stream}"), getattr(TOPICS, f"safety_raw_{stream}"))
         for stream in ("rgb", "depth", "rgb_info", "depth_info")
     ]
     common = {
@@ -24,12 +25,6 @@ def generate_launch_description():
             DeclareLaunchArgument("use_sim_time", default_value="true"),
             DeclareLaunchArgument("camera_frame", default_value="camera_color_optical_frame"),
             DeclareLaunchArgument("static_background_declared", default_value="false"),
-            Node(
-                package="senior_sensor_ingress",
-                executable="static_tf_receipt_node",
-                prefix=restart_prefix(),
-                parameters=[common, {"output_topic": "/rgbd_diagnostic/tf"}],
-            ),
             Node(
                 package="senior_sensor_ingress",
                 executable="rgbd_candidate_receipt_node",

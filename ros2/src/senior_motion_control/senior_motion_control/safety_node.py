@@ -46,6 +46,7 @@ from senior_sensor_ingress.ros_lifecycle import MotionExecutor, run
 from senior_motion_control.arbiter import FinalCommandFence
 from senior_motion_control.native import native_executable
 from senior_motion_control.source_fences import ProducerTopology, SourceEpochFence
+from vehicle_core.ros_wiring import TOPICS, publisher
 from vehicle_core.sensor_policy import default_policy
 from vehicle_core.values import Velocity
 
@@ -65,7 +66,10 @@ class SafetyGate(Node):
 
     def _initialize(self, *, parameter_overrides, input_channel):
         super().__init__(
-            "safety_input" if input_channel is not None else "safety_gate",
+            publisher("safety_input" if input_channel is not None else "safety_gate").name,
+            namespace=publisher(
+                "safety_input" if input_channel is not None else "safety_gate"
+            ).namespace,
             parameter_overrides=parameter_overrides or [],
             start_parameter_services=False,
         )
@@ -77,13 +81,13 @@ class SafetyGate(Node):
         self.declare_parameter("simulation_rate_hz", 20.0)
         self.declare_parameter("body_frame", "base_link")
         self.declare_parameter("wheel_frame", "odom")
-        self.declare_parameter("final_command_topic", "/safety/final_command")
+        self.declare_parameter("final_command_topic", TOPICS.safety_final_command)
         self.declare_parameter("robot_id", "robot")
-        self.declare_parameter("bounded_scan_topic", "/safety/bounded_scan")
-        self.declare_parameter("raw_scan_topic", "/safety/raw/scan")
-        self.declare_parameter("bounded_depth_topic", "/safety/bounded_depth")
-        self.declare_parameter("raw_depth_topic", "/safety/raw/depth")
-        self.declare_parameter("raw_depth_info_topic", "/safety/raw/depth_info")
+        self.declare_parameter("bounded_scan_topic", TOPICS.safety_bounded_scan)
+        self.declare_parameter("raw_scan_topic", TOPICS.safety_raw_scan)
+        self.declare_parameter("bounded_depth_topic", TOPICS.safety_bounded_depth)
+        self.declare_parameter("raw_depth_topic", TOPICS.safety_raw_depth)
+        self.declare_parameter("raw_depth_info_topic", TOPICS.safety_raw_depth_info)
         self.declare_parameter("depth_policy", "required")
         self.declare_parameter("depth_collision_min_z", 1e10)
         self.declare_parameter("depth_collision_max_z", -1e10)
@@ -122,8 +126,12 @@ class SafetyGate(Node):
         self._scan_source = ""
         self._scan_masked_count = 0
         self._scan_ambiguous_count = 0
-        self._scan_topology = ProducerTopology("scan_receipt", "/")
-        self._depth_topology = ProducerTopology("raw_receipt", "/")
+        self._scan_topology = ProducerTopology(
+            publisher("scan_receipt").name, publisher("scan_receipt").namespace
+        )
+        self._depth_topology = ProducerTopology(
+            publisher("raw_receipt").name, publisher("raw_receipt").namespace
+        )
         self._scan_generation = 0
         hard_age_ms = default_policy().hard_age_ms
         scan_age = hard_age_ms / 1000
@@ -163,7 +171,7 @@ class SafetyGate(Node):
         )
         self._drive_feedback_publisher = (
             self.create_publisher(
-                DriveFeedbackMessage, "/safety/drive_feedback", qos_profile_sensor_data
+                DriveFeedbackMessage, TOPICS.safety_drive_feedback, qos_profile_sensor_data
             )
             if input_channel is None
             else None
@@ -471,11 +479,7 @@ class SafetyGate(Node):
                 now_steady=steady,
                 max_age_ms=(self._freshness.max_age) * 1000,
             )
-            if (
-                owner.owner_epoch != msg.source_epoch
-                or owner.owner_sequence != msg.sequence
-                or capture is None
-            ):
+            if capture is None:
                 self._scan_generation += 1
                 self._clear_scan()
                 return
@@ -491,10 +495,6 @@ class SafetyGate(Node):
             self._scan_generation += 1
             self._clear_scan()
             return
-        if not msg.source_epoch:
-            self._scan_generation += 1
-            self._clear_scan()
-            return
         previous_epoch = self._scan_fence.active
         if not self._scan_fence.accept(msg.source_epoch):
             # A retired source cannot revoke its successor. Exhaustion has no
@@ -507,8 +507,6 @@ class SafetyGate(Node):
             self._scan_sequence = 0
             self._scan_source = msg.raw_source
             self._clear_scan()
-        if msg.sequence <= self._scan_sequence:
-            return
         self._scan_sequence = msg.sequence
         self._scan_generation += 1
         try:
@@ -517,8 +515,7 @@ class SafetyGate(Node):
             if (
                 not self._clock_ok(steady)
                 or not msg.valid
-                or msg.raw_source != self._scan_source
-                or not 1 <= len(msg.ranges) <= 2048
+                or not msg.ranges
                 or not self._freshness.scan(capture.measurement_steady, msg.ingress_steady, steady)
             ):
                 raise ValueError("bounded scan unqualified")
@@ -581,8 +578,6 @@ class SafetyGate(Node):
                 msg.valid
                 and msg.body_frame == self._body
                 and bool(msg.frame_id)
-                and bool(msg.raw_source)
-                and bool(msg.camera_info_source)
                 and len(msg.calibration_id) == 64
                 and all(ch in "0123456789abcdef" for ch in msg.calibration_id)
                 and 1 <= msg.width <= 4096
@@ -671,12 +666,7 @@ class SafetyGate(Node):
                 now_steady=steady,
                 max_age_ms=admission.max_age_ms,
             )
-            valid = (
-                owner.owner_epoch == msg.source_epoch
-                and owner.owner_sequence == msg.sequence
-                and captures is not None
-                and self._depth_shape_valid(msg, ros_ns, steady)
-            )
+            valid = captures is not None and self._depth_shape_valid(msg, ros_ns, steady)
             header = DepthHeader(
                 msg.source_epoch,
                 msg.raw_source,
@@ -688,6 +678,8 @@ class SafetyGate(Node):
                 msg.calibration_id,
                 valid,
                 measurement_steady=capture_from_message(msg.depth_capture).measurement_steady,
+                boot_id=msg.depth_capture.bridge_boot_id,
+                capture_generation=msg.depth_capture.capture_generation,
             )
             generation = admission.generation
             admission.accept(header, now_ros_ns=ros_ns, now_steady=steady)

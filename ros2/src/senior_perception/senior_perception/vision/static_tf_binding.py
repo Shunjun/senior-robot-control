@@ -1,12 +1,7 @@
-"""Static calibration lifetime with authenticated first-receipt lineage.
-
-This contract does not authenticate DDS messages. Its caller must bind the
-receipt to the current native relay and inspect the graph independently.
-"""
+"""Actual TF geometry used by the RGB-D algorithm, without source credentials."""
 
 import math
 from dataclasses import dataclass
-from typing import cast
 
 
 @dataclass(frozen=True)
@@ -19,72 +14,32 @@ class Edge:
 
 
 @dataclass(frozen=True)
-class Receipt:
-    boot: str
-    source_gid: str
-    generation: int
-    sequence: int
-    received_ros_ns: int
-    received_steady: float
+class TransformSnapshot:
     edges: tuple[Edge, ...]
-    relay_gid: str
+
+    @property
+    def geometry(self) -> tuple:
+        return tuple((e.parent, e.child, e.translation, e.quaternion) for e in self.edges)
 
 
-def _text(value: str, limit: int) -> bool:
-    try:
-        return bool(value) and len(value.encode("utf-8")) <= limit
-    except (AttributeError, UnicodeError):
-        return False
-
-
-def _finite(value: object) -> bool:
-    try:
-        return type(value) in (int, float) and math.isfinite(cast(float, value))
-    except OverflowError:
-        return False
-
-
-def _valid(receipt: Receipt, base: str, camera: str) -> bool:
-    if (
-        not _text(receipt.boot, 64)
-        or not _text(receipt.source_gid, 128)
-        or not _text(receipt.relay_gid, 128)
-        or type(receipt.generation) is not int
-        or type(receipt.sequence) is not int
-        or type(receipt.received_ros_ns) is not int
-        or receipt.generation <= 0
-        or receipt.sequence <= 0
-        or receipt.received_ros_ns < 0
-        or not _finite(receipt.received_steady)
-        or receipt.received_steady < 0
-        or type(receipt.edges) is not tuple
-        or not 0 < len(receipt.edges) <= 32
-    ):
+def _valid(snapshot: TransformSnapshot, base: str, camera: str) -> bool:
+    if not snapshot.edges:
         return False
     edges = {}
-    byte_count = 0
-    for edge in receipt.edges:
+    for edge in snapshot.edges:
         if (
-            type(edge) is not Edge
-            or type(edge.translation) is not tuple
-            or type(edge.quaternion) is not tuple
-            or not _text(edge.parent, 128)
-            or not _text(edge.child, 128)
+            not edge.parent
+            or not edge.child
             or edge.parent == edge.child
             or edge.child in edges
-            or type(edge.stamp_ns) is not int
             or edge.stamp_ns < 0
             or len(edge.translation) != 3
             or len(edge.quaternion) != 4
-            or not all(_finite(v) for v in (*edge.translation, *edge.quaternion))
-            or abs(sum(v * v for v in edge.quaternion) - 1.0) > 1e-6
+            or not all(math.isfinite(v) for v in (*edge.translation, *edge.quaternion))
+            or abs(sum(v * v for v in edge.quaternion) - 1) > 1e-6
         ):
             return False
-        byte_count += len(edge.parent.encode("utf-8")) + len(edge.child.encode("utf-8")) + 64
         edges[edge.child] = edge.parent
-    if byte_count > 16384:
-        return False
-    # Check every branch, not just the requested chain, for cycles.
     for child in edges:
         seen = set()
         node = child
@@ -100,197 +55,54 @@ def _valid(receipt: Receipt, base: str, camera: str) -> bool:
 
 
 class StaticBinding:
-    """Single static source with explicit lifetime and dual-clock admission."""
+    """Local geometry revision for outstanding algorithm work, not sensor generation."""
 
     def __init__(self, base: str, camera: str) -> None:
-        if not _text(base, 128) or not _text(camera, 128) or base == camera:
+        if not base or not camera or base == camera:
             raise ValueError("invalid_frames")
         self.base, self.camera = base, camera
-        self.current: Receipt | None = None
-        self.first_receipt: Receipt | None = None
-        self._last: Receipt | None = None
+        self.current: TransformSnapshot | None = None
         self.generation = 0
-        self._admitted: tuple[int, float] | None = None
-        self._retired_raw: set[str] = set()
-        self._retired_relays: set[str] = set()
-        self._retired_boots: set[str] = set()
-        self._closed = False
-        self._suspended: tuple[Receipt, Receipt, tuple[int, float]] | None = None
 
     @property
-    def admitted_from(self) -> tuple[int, float] | None:
-        return self._admitted
+    def first_receipt(self) -> TransformSnapshot | None:
+        # //Compatible: coordinator's historical name now refers only to TF geometry.
+        return self.current
 
-    def is_retired_source(self, *, boot: str, source_gid: str, relay_gid: str) -> bool:
-        return (
-            source_gid in self._retired_raw
-            or relay_gid in self._retired_relays
-            or boot in self._retired_boots
-        )
+    def observe(self, snapshot: TransformSnapshot) -> bool:
+        if not _valid(snapshot, self.base, self.camera):
+            self.revoke()
+            return False
+        if self.current is None or self.current.geometry != snapshot.geometry:
+            self.generation += 1
+            self.current = snapshot
+        return True
 
     def revoke(self) -> None:
-        """Revoke a lifetime on topology or clock loss; new native capture required."""
-        self._suspended = None
         if self.current is not None:
-            self._last = self.current
-        self.current = None
-        self.first_receipt = None
-        self._admitted = None
-        self.generation += 1
-
-    def suspend(self) -> None:
-        """Suspend on local input loss while retaining only the exact admitted lifetime."""
-        saved = None
-        if (
-            self.first_receipt is not None
-            and self.current is not None
-            and self._admitted is not None
-        ):
-            saved = (self.first_receipt, self.current, self._admitted)
-        self.revoke()
-        self._suspended = saved
-
-    def reconfirm_suspended(
-        self, first: Receipt, latest: Receipt, admission: tuple[int, float], *, relay_gid: str
-    ) -> bool:
-        """Reconfirm the same original lifetime after a newly authenticated status read."""
-        saved = self._suspended
-        if saved is None or self._closed or self.current is not None:
-            return False
-        prior_first, prior_latest, prior_admission = saved
-        # A clock-admission replay can carry the complete original first capture.
-        # Keep the independently retained latest capture intact in that case.
-        effective_latest = prior_latest if latest == first else latest
-        if (
-            self._last != prior_latest
-            or first != prior_first
-            or admission != prior_admission
-            or relay_gid != first.relay_gid
-            or self.is_retired_source(
-                boot=first.boot, source_gid=first.source_gid, relay_gid=relay_gid
-            )
-            or not _valid(first, self.base, self.camera)
-            or not _valid(effective_latest, self.base, self.camera)
-            or (
-                effective_latest.boot,
-                effective_latest.relay_gid,
-                effective_latest.source_gid,
-                effective_latest.generation,
-                effective_latest.edges,
-            )
-            != (first.boot, first.relay_gid, first.source_gid, first.generation, first.edges)
-            or effective_latest.sequence < prior_latest.sequence
-            or effective_latest.received_steady < prior_latest.received_steady
-            or (
-                effective_latest.sequence == prior_latest.sequence
-                and effective_latest != prior_latest
-            )
-        ):
-            self.revoke()
-            return False
-        self.current = self._last = effective_latest
-        self.first_receipt = first
-        self._admitted = admission
-        self._suspended = None
-        self.generation += 1
-        return True
-
-    def observe(self, receipt: Receipt, *, current_gid: str, current_relay_gid: str) -> bool:
-        if self._closed:
-            return False
-        if (
-            receipt.source_gid in self._retired_raw
-            or receipt.relay_gid in self._retired_relays
-            or receipt.boot in self._retired_boots
-        ):
-            return False
-        # The caller authenticates the native relay using actual MessageInfo and
-        # graph state. Old/foreign queued relay messages never revoke the owner.
-        if receipt.relay_gid != current_relay_gid:
-            return False
-        restarting = self.current is None
-        old = self.current or self._last
-        if current_gid != receipt.source_gid or not _valid(receipt, self.base, self.camera):
-            self.revoke()
-            return False
-        if old is not None:
-            relay_changed = receipt.relay_gid != old.relay_gid
-            raw_changed = receipt.source_gid != old.source_gid
-            if relay_changed:
-                if receipt.boot == old.boot:
-                    self.revoke()
-                    return False
-                if len(self._retired_relays) >= 64 or len(self._retired_boots) >= 64:
-                    self._closed = True
-                    self.revoke()
-                    return False
-                self._retired_relays.add(old.relay_gid)
-                self._retired_boots.add(old.boot)
-            elif receipt.boot != old.boot:
-                self.revoke()
-                return False
-            if raw_changed and not relay_changed:
-                if receipt.generation < old.generation:
-                    return False
-                if receipt.generation == old.generation:
-                    self.revoke()
-                    return False
-            if raw_changed:
-                if len(self._retired_raw) >= 64:
-                    self._closed = True
-                    self.revoke()
-                    return False
-                self._retired_raw.add(old.source_gid)
-            if not relay_changed and not raw_changed:
-                if receipt.generation < old.generation or (
-                    receipt.generation == old.generation and receipt.sequence <= old.sequence
-                ):
-                    return False
-            if (
-                restarting
-                or relay_changed
-                or raw_changed
-                or receipt.generation != old.generation
-                or receipt.edges != old.edges
-            ):
-                self._admitted = None
-                self.first_receipt = receipt
-                self.generation += 1
-        else:
-            self.first_receipt = receipt
+            self.current = None
             self.generation += 1
-        self.current = receipt
-        self._last = receipt
-        return True
-
-    def admit(self, ros_ns: int, steady: float) -> bool:
-        if self.current is None or not math.isfinite(steady) or steady <= 0:
-            return False
-        if self._admitted is None:
-            self._admitted = (ros_ns, steady)
-        return True
 
     def pair_valid(
         self, first_measurement_steady: float, second_measurement_steady: float, *, generation: int
     ) -> bool:
-        if self.current is None or self._admitted is None or generation != self.generation:
-            return False
         return (
-            _finite(first_measurement_steady)
-            and _finite(second_measurement_steady)
-            and self._admitted[1] <= first_measurement_steady < second_measurement_steady
+            self.current is not None
+            and generation == self.generation
+            and math.isfinite(first_measurement_steady)
+            and math.isfinite(second_measurement_steady)
+            and first_measurement_steady < second_measurement_steady
         )
 
 
 def body_from_camera(
     edges: tuple[Edge, ...], base: str, camera: str
 ) -> tuple[tuple[float, ...], ...]:
-    """Compose base<-camera from a validated static tree."""
-    sample = Receipt("validation", "validation", 1, 1, 0, 0.0, edges, "validation")
-    if not _valid(sample, base, camera):
-        raise ValueError("invalid_static_tree")
+    """Compose body<-camera from the actual transform edges."""
+    if not _valid(TransformSnapshot(edges), base, camera):
+        raise ValueError("invalid_tf_geometry")
     by_child = {edge.child: edge for edge in edges}
-    result: tuple[tuple[float, ...], ...] = (
+    result = (
         (1.0, 0.0, 0.0, 0.0),
         (0.0, 1.0, 0.0, 0.0),
         (0.0, 0.0, 1.0, 0.0),
@@ -299,8 +111,7 @@ def body_from_camera(
     node = camera
     while node != base:
         edge = by_child[node]
-        norm = math.sqrt(sum(component * component for component in edge.quaternion))
-        x, y, z, w = (component / norm for component in edge.quaternion)
+        x, y, z, w = edge.quaternion
         tx, ty, tz = edge.translation
         transform = (
             (1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w), tx),

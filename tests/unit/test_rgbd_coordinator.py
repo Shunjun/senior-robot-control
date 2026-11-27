@@ -5,7 +5,7 @@ import numpy as np
 from senior_perception.vision.independent_motion import Profile
 from senior_perception.vision.raw_capture import RawCaptureHeader
 from senior_perception.vision.rgbd_coordinator import RgbdCoordinator
-from senior_perception.vision.static_tf_binding import Edge, Receipt, StaticBinding
+from senior_perception.vision.static_tf_binding import Edge, StaticBinding, TransformSnapshot
 from sensor_time_test_support import sample_time
 from test_independent_motion import scene
 
@@ -68,11 +68,8 @@ def test_candidate_requires_current_tf_and_retained_pair():
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert binding.observe(
-        Receipt("tfboot", "03", 1, 1, 0, 0.0, (edge,), "04"),
-        current_gid="03",
-        current_relay_gid="04",
+        TransformSnapshot((edge,)),
     )
-    assert binding.admit(1_000_000_000, 1.0)
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     coordinator = RgbdCoordinator(
         profile,
@@ -80,7 +77,6 @@ def test_candidate_requires_current_tf_and_retained_pair():
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
     )
     try:
@@ -113,7 +109,6 @@ def test_candidate_requires_current_tf_and_retained_pair():
         assert result.camera_info[0][0].k[0] == 250.0
         assert result.camera_info[1][1].capture == capture(2)[0][3]
         assert result.tf_receipts == (binding.first_receipt, binding.first_receipt)
-        assert result.tf_admitted_from == ((1_000_000_000, 1.0),) * 2
         assert not result.hard_error_qualified
     finally:
         coordinator.close()
@@ -123,11 +118,8 @@ def test_tf_loss_publishes_explicit_invalid_and_revokes_inflight():
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert binding.observe(
-        Receipt("tfboot", "03", 1, 1, 0, 0.0, (edge,), "04"),
-        current_gid="03",
-        current_relay_gid="04",
+        TransformSnapshot((edge,)),
     )
-    assert binding.admit(1_000_000_000, 1.0)
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     coordinator = RgbdCoordinator(
         profile,
@@ -135,7 +127,6 @@ def test_tf_loss_publishes_explicit_invalid_and_revokes_inflight():
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
     )
     try:
@@ -157,11 +148,8 @@ def test_invalid_frame_reports_invalid_after_consuming_its_authenticated_headers
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert binding.observe(
-        Receipt("tfboot", "03", 1, 1, 0, 0.0, (edge,), "04"),
-        current_gid="03",
-        current_relay_gid="04",
+        TransformSnapshot((edge,)),
     )
-    assert binding.admit(1_000_000_000, 1.0)
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     coordinator = RgbdCoordinator(
         profile,
@@ -169,7 +157,6 @@ def test_invalid_frame_reports_invalid_after_consuming_its_authenticated_headers
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
     )
     try:
@@ -208,11 +195,8 @@ def test_evicted_pair_is_explicitly_dropped_without_epoch_reset():
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert binding.observe(
-        Receipt("tfboot", "03", 1, 1, 0, 0.0, (edge,), "04"),
-        current_gid="03",
-        current_relay_gid="04",
+        TransformSnapshot((edge,)),
     )
-    assert binding.admit(1_000_000_000, 1.0)
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     coordinator = RgbdCoordinator(
         profile,
@@ -220,7 +204,6 @@ def test_evicted_pair_is_explicitly_dropped_without_epoch_reset():
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
         capacity=1,
     )
@@ -251,11 +234,8 @@ def test_retired_camera_packet_does_not_invalidate_successor_work():
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert binding.observe(
-        Receipt("tfboot", "03", 1, 1, 0, 0.0, (edge,), "04"),
-        current_gid="03",
-        current_relay_gid="04",
+        TransformSnapshot((edge,)),
     )
-    assert binding.admit(1_000_000_000, 1.0)
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     coordinator = RgbdCoordinator(
         profile,
@@ -263,7 +243,6 @@ def test_retired_camera_packet_does_not_invalidate_successor_work():
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
     )
     try:
@@ -308,11 +287,8 @@ def test_clock_rollback_immediately_revokes_inflight_candidate():
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert binding.observe(
-        Receipt("tfboot", "03", 1, 1, 0, 0.0, (edge,), "04"),
-        current_gid="03",
-        current_relay_gid="04",
+        TransformSnapshot((edge,)),
     )
-    assert binding.admit(1_000_000_000, 1.0)
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     coordinator = RgbdCoordinator(
         profile,
@@ -320,7 +296,6 @@ def test_clock_rollback_immediately_revokes_inflight_candidate():
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
     )
     try:
@@ -331,7 +306,7 @@ def test_clock_rollback_immediately_revokes_inflight_candidate():
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
         )
-        result = coordinator.poll(now_ros_ns=1_100_000_000, now_steady=1.21)
+        result = coordinator.poll(now_ros_ns=1_100_000_000, now_steady=1.19)
         assert result is not None and result.reason == "clock_invalid"
     finally:
         coordinator.close()
@@ -348,7 +323,6 @@ def test_profile_cannot_change_under_running_worker():
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
     )
     try:
@@ -369,7 +343,6 @@ def test_registration_cannot_change_under_running_worker():
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
     )
     try:
@@ -390,7 +363,6 @@ def test_binding_object_cannot_be_swapped_under_running_worker():
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
     )
     try:
@@ -406,11 +378,8 @@ def test_candidate_with_wrong_tf_dependency_is_rejected():
     binding = StaticBinding("base_link", "optical")
     edge = Edge("base_link", "optical", 0, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0))
     assert binding.observe(
-        Receipt("tfboot", "03", 1, 1, 0, 0.0, (edge,), "04"),
-        current_gid="03",
-        current_relay_gid="04",
+        TransformSnapshot((edge,)),
     )
-    assert binding.admit(1_000_000_000, 1.0)
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     c = RgbdCoordinator(
         profile,
@@ -418,7 +387,6 @@ def test_candidate_with_wrong_tf_dependency_is_rejected():
         generation=1,
         sequence_floor=0,
         registration="registered",
-        fresh_after_ros_ns=1_000_000_000,
         fresh_after_steady=1.0,
     )
     try:

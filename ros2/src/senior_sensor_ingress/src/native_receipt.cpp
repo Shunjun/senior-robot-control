@@ -1,6 +1,6 @@
+#include <senior_sensor_ingress/publisher_topology.hpp>
 #include <senior_sensor_ingress/sample_time.hpp>
 #include <optional>
-#include <set>
 // Humble-compatible DDS receipts over an inherited, private AF_UNIX channel.
 // GID is read from MessageInfo for THIS sample, never synthesized from discovery.
 #include <algorithm>
@@ -28,6 +28,7 @@
 #include "sensor_msgs/msg/imu.hpp"
 #include "sensor_msgs/msg/nav_sat_fix.hpp"
 #include "senior_interfaces/msg/scan_motion.hpp"
+#include "senior_interfaces/msg/qualified_mapping_scan.hpp"
 #include "senior_interfaces/msg/drive_execution_feedback.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -42,7 +43,6 @@ enum class ExitCode : int {
   send_failure = 11,
   poll_failure = 12,
   oversize_payload = 13,
-  retired_source_exhaustion = 14,
   invalid_arguments = 15,
   invalid_fd_or_parent = 16,
   parent_death_setup = 17,
@@ -59,8 +59,8 @@ class NativeReceipt : public rclcpp::Node {
     // writer namespace, QoS. One native process serves all this consumer's inputs.
     for (size_t i = 0; i < argv.size(); i += 5) {
       Input in; in.topic = argv[i+1]; in.name = argv[i+2]; in.ns = argv[i+3];
-      if (in.topic.empty() || in.topic.size() > 256 || in.topic[0] != '/' ||
-          in.name.empty() || in.name.size() > 128 || in.ns.empty() || in.ns[0] != '/')
+      if (in.topic.empty() || in.topic[0] != '/' ||
+          in.name.empty() || in.ns.empty() || in.ns[0] != '/')
         throw std::invalid_argument("invalid receipt input");
       inputs_.push_back(in);
       const auto id = inputs_.size() - 1;
@@ -73,6 +73,8 @@ class NativeReceipt : public rclcpp::Node {
       else if (type == "sensor_msgs/msg/NavSatFix") add<sensor_msgs::msg::NavSatFix>(id, qos);
       else if (type == "sensor_msgs/msg/Imu") add<sensor_msgs::msg::Imu>(id, qos);
       else if (type == "senior_interfaces/msg/ScanMotion") add<senior_interfaces::msg::ScanMotion>(id, qos);
+      else if (type == "senior_interfaces/msg/QualifiedMappingScan")
+        add<senior_interfaces::msg::QualifiedMappingScan>(id, qos);
       else if (type == "senior_interfaces/msg/DriveExecutionFeedback")
         add<senior_interfaces::msg::DriveExecutionFeedback>(id, qos);
       else if (type == "std_msgs/msg/String") add<std_msgs::msg::String>(id, qos);
@@ -93,10 +95,8 @@ class NativeReceipt : public rclcpp::Node {
   struct Input {
     std::string topic, name, ns;
     Gid gid{};
-    uint64_t generation = 0, sequence = 0;
+    uint64_t generation = 1, sequence = 0;
     bool valid = false;
-    std::optional<int64_t> latest_stamp;
-    std::set<Gid> retired_gids;
     std::string rejection_reason;
   };
   senior_sensor_ingress::time::ClockTracker clock_;
@@ -145,52 +145,42 @@ class NativeReceipt : public rclcpp::Node {
   bool topology(size_t id) {
     auto &in = inputs_[id];
     const auto endpoints = get_publishers_info_by_topic(in.topic);
-    bool good = endpoints.size() == 1 && endpoints[0].node_name() == in.name &&
-                endpoints[0].node_namespace() == in.ns;
+    bool good = senior_sensor_ingress::publisher_matches(endpoints, in.name, in.ns);
     Gid next{};
     if (good) next = endpoints[0].endpoint_gid();
-    good = good && std::any_of(next.begin(), next.end(), [](uint8_t x) { return x != 0; });
-    if (!good) next.fill(0);
-    if (good && in.retired_gids.count(next)) good = false;
-    if (!good) next.fill(0);
-    if (in.generation == 0 || in.valid != good || in.gid != next) {
-      if (in.valid && in.gid != next) in.retired_gids.insert(in.gid);
-      if (in.retired_gids.size() >= 256) _exit(static_cast<int>(ExitCode::retired_source_exhaustion));
-      in.latest_stamp.reset();
-      in.valid = good; in.gid = next; ++in.generation;
-      frame(id, 0, senior_sensor_ingress::time::monotonic_ns(), nullptr, nullptr);  // invalidate before any new sample
+    const bool changed = in.valid != good;
+    in.valid = good;
+    in.gid = next;  // Discovery identity is diagnostic; it never rejects a sample.
+    if (changed) {
+      frame(id, good ? 2 : 0, senior_sensor_ingress::time::monotonic_ns(), nullptr, nullptr);
     }
     return good;
   }
   static bool bounded(const std_msgs::msg::String &m) { return m.data.size() <= 131072; }
   static bool bounded(const std_msgs::msg::Bool &) { return true; }
-  static bool bounded(const nav_msgs::msg::Odometry &m) {
-    return m.header.frame_id.size() <= 128 && m.child_frame_id.size() <= 128;
-  }
-  static bool bounded(const sensor_msgs::msg::NavSatFix &m) { return m.header.frame_id.size() <= 128; }
-  static bool bounded(const sensor_msgs::msg::Imu &m) { return m.header.frame_id.size() <= 128; }
+  static bool bounded(const nav_msgs::msg::Odometry &) { return true; }
+  static bool bounded(const sensor_msgs::msg::NavSatFix &) { return true; }
+  static bool bounded(const sensor_msgs::msg::Imu &) { return true; }
   static bool bounded(const senior_interfaces::msg::ScanMotion &m) {
-    return m.header.frame_id.size() <= 128 && m.source_epoch.size() <= 128 && m.reason.size() <= 512;
+    return m.reason.size() <= 512;
   }
+  static bool bounded(const senior_interfaces::msg::QualifiedMappingScan &) { return true; }
   static bool bounded(const senior_interfaces::msg::DriveExecutionFeedback &m) {
     return m.robot_id.size() <= 128 && m.owner_boot_id.size() <= 128 &&
       m.session_id.size() <= 128 && m.request_id.size() <= 128 &&
       m.status.size() <= 32 && m.reason.size() <= 512;
   }
-  static bool bounded(const geometry_msgs::msg::PoseWithCovarianceStamped &m) {
-    return m.header.frame_id.size() <= 128;
-  }
+  static bool bounded(const geometry_msgs::msg::PoseWithCovarianceStamped &) { return true; }
   static bool bounded(const nav_msgs::msg::OccupancyGrid &m) {
-    return m.header.frame_id.size() <= 128 && m.data.size() <= 16777216 &&
+    return m.data.size() <= 16777216 &&
       static_cast<uint64_t>(m.info.width) * m.info.height == m.data.size();
   }
-  void reject_sample(size_t id, uint64_t received, const std::string &reason) {
+  void reject_sample(size_t id, uint64_t, const std::string &reason) {
     auto &in = inputs_[id];
     if (in.rejection_reason != reason) {
       in.rejection_reason = reason;
       RCLCPP_WARN(get_logger(), "native sample rejected on %s: %s", in.topic.c_str(), reason.c_str());
     }
-    frame(id, 0, received, nullptr, nullptr);
   }
   bool observe_clock(int64_t ros, uint64_t steady) {
     senior_sensor_ingress::time::ClockObservation observed;
@@ -203,7 +193,6 @@ class NativeReceipt : public rclcpp::Node {
     clock_generation_ = observed.generation;
     if (!observed.discontinuity) return true;
     for (size_t id = 0; id < inputs_.size(); ++id) {
-      inputs_[id].latest_stamp.reset();
       ++inputs_[id].generation;
       frame(id, 0, steady, nullptr, nullptr);
     }
@@ -236,6 +225,15 @@ class NativeReceipt : public rclcpp::Node {
     return senior_sensor_ingress::time::SampleTime{stamp_ns(c.stamp), stamp_ns(c.received_ros),
       c.received_steady_ns, c.sample_steady_ns, c.clock_generation};
   }
+  static std::optional<senior_sensor_ingress::time::SampleTime> derived_sample(
+      const senior_interfaces::msg::QualifiedMappingScan &m) {
+    if (m.status != m.QUALIFIED) return std::nullopt;
+    const auto &c = m.scan.capture;
+    if (!c.valid || c.clock_generation == 0)
+      throw std::invalid_argument("invalid qualified mapping capture");
+    return senior_sensor_ingress::time::SampleTime{stamp_ns(c.stamp), stamp_ns(c.received_ros),
+      c.received_steady_ns, c.sample_steady_ns, c.clock_generation};
+  }
   template<class Message> void add(size_t id, const rclcpp::QoS &qos) {
     subscriptions_.push_back(create_subscription<Message>(inputs_[id].topic, qos,
       [this, id](typename Message::ConstSharedPtr msg, const rclcpp::MessageInfo &info) {
@@ -244,22 +242,14 @@ class NativeReceipt : public rclcpp::Node {
         if (!observe_clock(received_ros, received)) return;
         if (!topology(id)) return;
         const auto &native = info.get_rmw_message_info();
-        if (!std::equal(inputs_[id].gid.begin(), inputs_[id].gid.end(), native.publisher_gid.data)) return;
         if (!bounded(*msg)) { reject_sample(id, received, "raw_dimensions_invalid"); return; }
         std::optional<senior_sensor_ingress::time::SampleTime> sample;
         uint8_t time_mode = 0;
         try {
           const auto stamp = raw_stamp(*msg);
-          auto &in = inputs_[id];
           if (stamp) {
-            if (in.latest_stamp && *stamp == *in.latest_stamp) return;
-            if (in.latest_stamp && *stamp < *in.latest_stamp) {
-              reject_sample(id, received, "raw_stamp_out_of_order");
-              return;
-            }
             sample = senior_sensor_ingress::time::map_sample(*stamp, received_ros, received,
                                                           clock_generation_);
-            in.latest_stamp = stamp;
             time_mode = 1;
           } else {
             sample = derived_sample(*msg);

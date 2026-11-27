@@ -297,7 +297,8 @@ def test_duplicate_and_rejected_laser_do_not_recompute_or_publish(phase):
             "native_receipt_authenticated": False,
         },
     )
-    assert phase.accepted == [True, False]  # Rejected origin never reaches admission.
+    # GID is diagnostic; the configured sole publisher reaches timestamp deduplication.
+    assert phase.accepted == [True, False, False]
     assert (len(phase.node.packets), phase.bridge.core._sequence) == before
     rejected = copy.deepcopy(phase.case["new_laser"])
     rejected["header"]["stamp"] = stamp(1.7)

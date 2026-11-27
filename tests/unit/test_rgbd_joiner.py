@@ -102,7 +102,7 @@ def test_valid_first_message_of_new_generation_revokes_but_remains_joinable():
     for stream in range(4):
         offer(join, stream, header(1, 1_000_000_000), stream, bridge_gid="02")
     first = offer(join, 0, header(2, 1_100_000_000, generation=2), 0, bridge_gid="02")
-    assert first.kind == "invalid"
+    assert first.kind == "pending"
     for stream in range(1, 4):
         result = offer(
             join, stream, header(2, 1_100_000_000, generation=2), stream, bridge_gid="02"
@@ -110,12 +110,12 @@ def test_valid_first_message_of_new_generation_revokes_but_remains_joinable():
     assert result.kind == "ready" and len(result.bodies) == 4
 
 
-def test_old_bridge_callback_is_ignored_after_new_bridge_graph_identity():
+def test_changed_diagnostic_gid_does_not_reject_original_capture():
     join = CaptureJoiner(capacity=2)
     for stream in range(4):
         offer(join, stream, header(1, 1_000_000_000), stream, bridge_gid="02")
     generation = join.generation
-    assert offer(join, 0, header(2, 1_100_000_000), 0, bridge_gid="04").kind == "ignored"
+    assert offer(join, 0, header(2, 1_100_000_000), 0, bridge_gid="04").kind == "pending"
     assert join.generation == generation
 
 
@@ -146,7 +146,7 @@ def test_unjoined_clock_generation_change_revokes_pending_frames():
             clock_generation=2,
         ),
     )
-    assert offer(join, 0, changed, 0, bridge_gid="02").kind == "invalid"
+    assert offer(join, 0, changed, 0, bridge_gid="02").kind == "pending"
 
 
 def test_mutating_image_and_info_after_offer_cannot_change_joined_snapshot():
@@ -205,7 +205,7 @@ def test_mutating_image_and_info_after_offer_cannot_change_joined_snapshot():
     assert result.bodies[2].capture == h
 
 
-def test_same_raw_generation_change_cannot_reset_time_frontier():
+def test_new_source_generation_resets_capture_frontier():
     join = CaptureJoiner(capacity=2)
     for stream in range(4):
         offer(join, stream, header(1, 1_000_000_000), stream, bridge_gid="02")
@@ -215,7 +215,7 @@ def test_same_raw_generation_change_cannot_reset_time_frontier():
     )
     assert offer(join, 0, invalid, None, bridge_gid="02").kind == "invalid"
     result = offer(join, 0, header(4, 1_100_000_000, generation=2), 0, bridge_gid="02")
-    assert result.kind == "invalid"
+    assert result.kind == "pending"
 
 
 def test_info_numpy_vectors_are_copied_to_frozen_numeric_snapshot():
@@ -280,7 +280,7 @@ def test_retired_boot_rollback_does_not_revoke_successor():
     for stream in range(4):
         offer(join, stream, header(1, 1_000_000_000), stream, bridge_gid="02")
     changed = replace(header(1, 1_100_000_000), bridge_boot_id="newboot", bridge_gid="04")
-    assert offer(join, 0, changed, 0, bridge_gid="04").kind == "invalid"
+    assert offer(join, 0, changed, 0, bridge_gid="04").kind == "pending"
     generation = join.generation
     old = header(2, 900_000_000)
     assert offer(join, 0, old, 0, bridge_gid="02").kind == "ignored"
@@ -313,9 +313,9 @@ def test_new_bridge_boot_does_not_reset_same_raw_source_time_frontier():
     join = CaptureJoiner(capacity=4)
     assert offer(join, 0, header(1, 1_200_000_000), 0, bridge_gid="02").kind == "pending"
     first = replace(header(1, 1_100_000_000), bridge_boot_id="newboot", bridge_gid="04")
-    assert offer(join, 0, first, 0, bridge_gid="04").kind == "invalid"
+    assert offer(join, 0, first, 0, bridge_gid="04").kind == "ignored"
     still_old = replace(header(2, 1_150_000_000), bridge_boot_id="newboot", bridge_gid="04")
-    assert offer(join, 0, still_old, 0, bridge_gid="04").kind == "invalid"
+    assert offer(join, 0, still_old, 0, bridge_gid="04").kind == "ignored"
     fresh = replace(header(3, 1_300_000_000), bridge_boot_id="newboot", bridge_gid="04")
     assert offer(join, 0, fresh, 0, bridge_gid="04").kind == "pending"
 
@@ -330,14 +330,14 @@ def test_new_raw_source_can_establish_own_frontier_after_bridge_restart():
         raw_gid="03",
         source_epoch="newsource",
     )
-    assert offer(join, 0, fresh_source, 0, bridge_gid="04").kind == "invalid"
+    assert offer(join, 0, fresh_source, 0, bridge_gid="04").kind == "ignored"
     later = replace(
         fresh_source,
         sequence=2,
         time=sample_time(
             stamp_ns=round((1.15) * 1e9),
             received_ros_ns=round((1.15) * 1e9),
-            received_steady_ns=round((1.15) * 1e9),
+            received_steady_ns=round((1.3) * 1e9),
             clock_generation=1,
         ),
     )

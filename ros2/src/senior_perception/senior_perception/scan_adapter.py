@@ -20,16 +20,21 @@ from senior_perception.learning_client import LearningClient
 from senior_perception.self_filter import ScanObservation, filter_self
 from senior_perception.vision.raw_capture import RawCaptureAdmission, capture_from_message
 from vehicle_core.config import DeviceProfile
+from vehicle_core.ros_wiring import TOPICS, publisher, publisher_identity
 from vehicle_core.sensor_policy import default_policy
 from vehicle_core.values import Pose2D
 
 
 class ScanAdapter(Node):
     def __init__(self, *, parameter_overrides=None):
-        super().__init__("scan_adapter", parameter_overrides=parameter_overrides or [])
+        super().__init__(
+            publisher("scan_adapter").name,
+            namespace=publisher("scan_adapter").namespace,
+            parameter_overrides=parameter_overrides or [],
+        )
         self.declare_parameter("body_frame", "base_link")
-        self.declare_parameter("scan_topic", "/safety/raw/scan")
-        self.declare_parameter("filtered_candidate_topic", "/perception/scan_candidate")
+        self.declare_parameter("scan_topic", TOPICS.safety_raw_scan)
+        self.declare_parameter("filtered_candidate_topic", TOPICS.perception_scan_candidate)
         self.declare_parameter("no_return_clear", False)
         self.body = self.get_parameter("body_frame").value
         hard_age_ms = default_policy().hard_age_ms
@@ -62,7 +67,7 @@ class ScanAdapter(Node):
             str(self.get_parameter("filtered_candidate_topic").value),
             qos_profile_sensor_data,
         )
-        self.status = self.create_publisher(DiagnosticArray, "/perception/scan_status", 10)
+        self.status = self.create_publisher(DiagnosticArray, TOPICS.perception_scan_status, 10)
         self.create_subscription(
             BoundedRawLaserScan, self._raw_topic, self.on_scan, qos_profile_sensor_data
         )
@@ -72,7 +77,9 @@ class ScanAdapter(Node):
         array = DiagnosticArray()
         array.header.stamp = stamp
         status = DiagnosticStatus()
-        status.name = "scan_adapter"
+        status.name = publisher("scan_adapter").name, namespace = publisher(
+            "scan_adapter"
+        ).namespace
         status.hardware_id = "laser"
         status.level = DiagnosticStatus.OK if usable else DiagnosticStatus.ERROR
         status.message = message
@@ -83,8 +90,7 @@ class ScanAdapter(Node):
         if self._failure_active and not force:
             return
         self._failure_active = True
-        self._epoch = uuid.uuid4().hex
-        self._sequence = 1
+        self._sequence += 1
         self._lineage = None
         result = BoundedFilteredScan()
         result.source_epoch, result.sequence, result.reason = (
@@ -100,11 +106,14 @@ class ScanAdapter(Node):
         if self._learning_client is not None:
             self._learning_client.poll()
         endpoints = self.get_publishers_info_by_topic(self._raw_topic)
-        gid = bytes(endpoints[0].endpoint_gid).hex() if len(endpoints) == 1 else ""
+        gid = publisher_identity(
+            endpoints, "scan_receipt", "senior_interfaces/msg/BoundedRawLaserScan"
+        )
         ready = self._admission.observe_bridge(gid)
-        if ready != self._ready or (ready and gid != self._bridge_gid):
+        if ready != self._ready:
             self._bridge_gid, self._ready = gid, ready
             self._invalid("raw_source_changed", force=True)
+        self._bridge_gid = gid
         return ready
 
     def on_scan(self, msg):
@@ -120,14 +129,13 @@ class ScanAdapter(Node):
                 if self._admission.generation != before:
                     self._invalid(capture.reason or "raw_scan_invalid", msg.capture)
                 return
-            lineage = (capture.bridge_boot_id, capture.capture_generation, capture.source_epoch)
+            lineage = (capture.bridge_boot_id, capture.capture_generation)
             if self._lineage is not None and lineage != self._lineage:
                 self._invalid("raw_source_changed", msg.capture, force=True)
             self._lineage = lineage
             stamp = Time.from_msg(msg.capture.stamp)
-            age = (ros_ns - stamp.nanoseconds) / 1e9
-            if not 0 <= age <= self.max_age or not capture.frame_id:
-                raise ValueError("stale scan or missing frame")
+            if not capture.frame_id:
+                raise ValueError("missing scan frame")
             # TF resolves static and dynamic edges at the scan timestamp.
             tf = self.buffer.lookup_transform(self.body, capture.frame_id, stamp)
             q = tf.transform.rotation
@@ -141,8 +149,6 @@ class ScanAdapter(Node):
             yaw = math.atan2(2 * (q.w * q.z + q.x * q.y), 1 - 2 * (q.y * q.y + q.z * q.z))
             seconds = stamp.nanoseconds / 1e9
             tf_seconds = Time.from_msg(tf.header.stamp).nanoseconds / 1e9
-            if not 0 <= seconds - tf_seconds <= self.max_age:
-                raise ValueError("stale dynamic transform")
             observation = ScanObservation(
                 tuple(msg.ranges),
                 msg.angle_min,

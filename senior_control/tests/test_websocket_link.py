@@ -159,3 +159,17 @@ async def test_link_receives_and_sends_video_signaling() -> None:
     answer = offer.model_copy(update={"type": "video.answer"})
     await link.send_video(answer)
     assert json.loads(socket.sent[0]) == answer.model_dump()
+
+
+async def test_snapshot_transport_uses_collection_ordinal_and_closes_on_exhaustion():
+    from dataclasses import replace
+
+    from test_agent_snapshots import scan_snapshot
+
+    socket = Socket()
+    link = WebSocketLink(socket, "robot-a", 3)
+    value = replace(scan_snapshot(), publication_sequence=2**53 - 1)
+    await link.send_snapshot(value)
+    assert json.loads(socket.sent[-1])["seq"] == 2**53 - 1
+    with pytest.raises(ConnectionError, match="sequence"):
+        await link.send_snapshot(replace(value, publication_sequence=2**53))

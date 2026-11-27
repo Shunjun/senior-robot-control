@@ -11,12 +11,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from senior_perception.vision.raw_capture import (
-    RawCaptureAdmission,
     RawCaptureHeader,
     compatible_captures,
 )
 from vehicle_core.sample_time import SampleTime
 from vehicle_core.sensor_policy import default_policy
+from vehicle_core.source_order import SourceOrder
 
 
 def _bounded_text(value: Any, maximum: int, *, nonempty: bool = False) -> bool:
@@ -227,11 +227,11 @@ def _immutable_header(header: Any) -> bool:
         and type(header.time) is SampleTime
         and all(
             type(getattr(header, name)) is int
-            for name in ("stamp_ns", "received_ros_ns", "capture_generation", "sequence")
+            for name in ("stamp_ns", "received_ros_ns", "capture_generation")
         )
         and _number(header.received_steady)
         and all(
-            _bounded_text(getattr(header, name), 256)
+            isinstance(getattr(header, name), str)
             for name in (
                 "frame_id",
                 "raw_gid",
@@ -248,9 +248,6 @@ def _immutable_header(header: Any) -> bool:
 def _identity(frame: Frame) -> tuple[Any, ...]:
     return tuple(
         (
-            h.raw_gid,
-            h.bridge_gid,
-            h.source_epoch,
             h.bridge_boot_id,
             h.capture_generation,
             h.frame_id,
@@ -319,16 +316,10 @@ def _headers_valid(
     for h in headers:
         if not _finite(h.received_steady):
             return False
-        admission = RawCaptureAdmission(max_age_ms=default_policy().hard_age_ms)
-        if not admission.offer(
-            h, bridge_gid=h.bridge_gid, now_ros_ns=now_ros_ns, now_steady=now_steady
-        ):
-            return False
         if (
-            not h.raw_gid
-            or not h.bridge_gid
-            or not h.source_epoch
-            or h.sequence <= 0
+            not h.frame_id
+            or not h.bridge_boot_id
+            or h.capture_generation <= 0
             or not math.isfinite(h.received_steady)
             or not math.isfinite(now_steady)
             or not 0 <= h.measurement_steady <= h.received_steady <= now_steady
@@ -345,11 +336,8 @@ class IndependentMotion:
         self.profile = profile
         self._previous: Frame | None = None
         self._frontier: tuple[RawCaptureHeader, ...] | None = None
-        self._retired: tuple[set[tuple[Any, ...]], ...] = tuple(set() for _ in range(4))
-        self._retired_raw_gids: tuple[set[str], ...] = tuple(set() for _ in range(4))
-        self._retired_boots: tuple[set[str], ...] = tuple(set() for _ in range(4))
-        self._retired_bridges: tuple[set[str], ...] = tuple(set() for _ in range(4))
         self._closed = False
+        self._orders = [SourceOrder() for _ in range(4)]
 
     def invalidate(self) -> None:
         """Revoke the retained frame on externally observed source/TF loss."""
@@ -358,77 +346,28 @@ class IndependentMotion:
     @staticmethod
     def _source(header: RawCaptureHeader) -> tuple[Any, ...]:
         return (
-            header.raw_gid,
-            header.bridge_gid,
-            header.source_epoch,
             header.bridge_boot_id,
             header.capture_generation,
-            header.frame_id,
-            header.bridge_boot_id,
             header.time.clock_generation,
+            header.frame_id,
         )
 
     def _advance(self, incoming: tuple[RawCaptureHeader, ...]) -> tuple[bool, bool]:
-        """Atomically advance four capture frontiers and retire replaced lineages."""
-        if self._closed:
-            return False, False
-        if self._frontier is None:
-            self._frontier = incoming
-            return True, False
-        replacements: list[tuple[int, tuple[Any, ...]]] = []
-        for index, (old, new) in enumerate(zip(self._frontier, incoming, strict=True)):
-            old_key, new_key = self._source(old), self._source(new)
-            if (
-                new.measurement_steady <= old.measurement_steady
-                or new.received_steady <= old.received_steady
-                or new_key in self._retired[index]
-                or new.raw_gid in self._retired_raw_gids[index]
-                or new.bridge_boot_id in self._retired_boots[index]
-                or new.bridge_gid in self._retired_bridges[index]
+        """Consume one frame at the algorithm entry, using the common capture frontier."""
+        replaced = self._frontier is not None and any(
+            self._source(a) != self._source(b)
+            for a, b in zip(self._frontier, incoming, strict=True)
+        )
+        for order, header in zip(self._orders, incoming, strict=True):
+            if not order.accept_capture(
+                header.bridge_boot_id,
+                header.capture_generation,
+                header.stamp_ns,
+                header.time.received_steady_ns,
             ):
                 return False, False
-            if old_key == new_key:
-                if new.sequence <= old.sequence or (
-                    new.time.clock_generation == old.time.clock_generation
-                    and new.time.stamp_ns < old.time.stamp_ns
-                ):
-                    return False, False
-                continue
-            # A new lineage must have an unambiguous source/bridge generation change.
-            same_boot = new.bridge_boot_id == old.bridge_boot_id
-            valid_replacement = (
-                (
-                    same_boot
-                    and new.bridge_gid == old.bridge_gid
-                    and (
-                        new.capture_generation > old.capture_generation
-                        or (
-                            new.capture_generation == old.capture_generation
-                            and new.raw_gid != old.raw_gid
-                            and new.source_epoch != old.source_epoch
-                        )
-                    )
-                )
-                or (not same_boot and new.bridge_gid != old.bridge_gid)
-                or (same_boot and not new.time.clock_generation == old.time.clock_generation)
-            )
-            if not valid_replacement:
-                return False, False
-            replacements.append((index, old_key))
-        if any(len(self._retired[index]) >= 64 for index, _ in replacements):
-            self._closed = True
-            return False, False
-        for index, old_key in replacements:
-            self._retired[index].add(old_key)
-            old = self._frontier[index]
-            new = incoming[index]
-            if old.raw_gid != new.raw_gid:
-                self._retired_raw_gids[index].add(old.raw_gid)
-            if old.bridge_boot_id != new.bridge_boot_id:
-                self._retired_boots[index].add(old.bridge_boot_id)
-                self._retired_bridges[index].add(old.bridge_gid)
         self._frontier = incoming
-        return True, bool(replacements)
+        return True, replaced
 
     def observe_unusable_headers(
         self, headers: tuple[RawCaptureHeader, ...], *, now_ros_ns: int, now_steady: float
@@ -492,10 +431,6 @@ class IndependentMotion:
             return Result("expired_previous")
         if (
             _identity(frame) != _identity(previous)
-            or any(
-                b.sequence <= a.sequence
-                for a, b in zip(_headers(previous), _headers(frame), strict=True)
-            )
             or not 0 < ((frame.rgb_header.stamp_ns - previous.rgb_header.stamp_ns) / 1e9) <= 0.2
         ):
             return Result("pair_revoked")

@@ -107,7 +107,7 @@ def test_weak_laser_does_not_remove_admitted_wheel_and_imu():
 
 def test_gps_requires_known_fresh_heading_and_does_not_assume_covariance_independence():
     owner = AdmissionOwner(config(), event_capacity=128)
-    assert not ingest(owner, sample(Source.GPS)).accepted
+    assert not ingest(owner, sample(Source.GPS, end=9.99, received=19.99)).accepted
     heading = Heading(
         math.pi / 2,
         0.02,
@@ -171,6 +171,7 @@ def test_expiry_future_replay_epoch_restart_and_ros_rollback_do_not_refresh_heal
     assert not owner.ingest(sample(seq=2, end=11.0), now_ros=10.0, now_steady=20.0).accepted
     assert not owner.ingest(sample(seq=2), now_ros=10.6, now_steady=20.6).accepted
     assert not views(owner, now_ros=10.6, now_steady=20.6)
+    owner.confirm_source_boot(Source.LASER, "b")
     assert ingest(owner, sample(seq=1, end=10.7, received=20.7, epoch="b")).accepted
     assert not ingest(owner, sample(seq=99, end=10.8, received=20.8)).accepted
     assert not views(owner, now_ros=1.0, now_steady=21.0)
@@ -225,7 +226,7 @@ def test_invalid_fresh_sample_fences_earlier_packets_from_recovery():
     assert not owner.ingest(earlier, now_ros=10.2, now_steady=20.2).accepted
 
 
-def test_delayed_new_epoch_and_retired_heading_cannot_replace_current_reference():
+def test_unconfirmed_boot_is_rejected_but_newer_heading_is_not_blacklisted():
     owner = AdmissionOwner(config(), event_capacity=128)
     assert ingest(owner, sample()).accepted
     delayed = sample(epoch="late-boot", seq=1, end=10.01, received=19.99)
@@ -254,7 +255,7 @@ def test_delayed_new_epoch_and_retired_heading_cannot_replace_current_reference(
         ),
     )
     assert ingest(owner, sample(Source.GPS, seq=2, end=10.3, received=20.3), h2).accepted
-    assert not ingest(
+    assert ingest(
         owner,
         sample(Source.GPS, seq=3, end=10.31, received=20.31),
         replace(
@@ -423,6 +424,7 @@ def test_clock_reset_retires_old_heading_but_accepts_fresh_clock_generation():
         "new-heading",
         "synthetic heading",
     )
+    owner.confirm_source_boot(Source.GPS, "new-clock-source")
     assert owner.ingest(fresh, now_ros=1.0, now_steady=2.0, heading=new_heading).accepted
 
 

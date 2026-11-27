@@ -739,3 +739,86 @@ async def test_export_rejects_oversized_grid_before_rendering(
         await archive.export_bundle(store, store.map_ref, destination)
     assert failure.value.code is ErrorCode.VALIDATION
     assert not destination.exists()
+
+
+async def test_real_v1_writer_migrates_once_and_v2_export_reloads_absolute_tristate(tmp_path):
+    from dataclasses import replace
+
+    from senior_mapping.references import load_snapshot, migrate_legacy
+    from senior_mapping.workspace import WorkspaceGrid
+    from senior_mapping.workspace_export import load_exported_grid
+
+    original = filled_store()
+    old = tmp_path / "v1.zip"
+    await archive_for(original).export_bundle(original, MAP, old)
+    old_hash = hashlib.sha256(old.read_bytes()).hexdigest()
+    _, members = MapArchive.inspect_bundle(old)
+    legacy_bytes = members["occupancy/occupancy.json"]
+    legacy = SlamSnapshot.from_json(legacy_bytes)  # actual retained V1 writer/parser
+    cells = bytearray(b"\xff" * 64)
+    cells[0], cells[1] = 0, 100
+    native = WorkspaceGrid(MAP, "diagnostic", 8, 8, 0.5, Pose2D(0, 0, 0), bytes(cells))
+    migrated = migrate_legacy(legacy, legacy_grid=None, native_legacy_grid=native)
+    assert migrated.legacy_base.original_archive_digest == hashlib.sha256(legacy_bytes).hexdigest()
+    with pytest.raises(ValueError):
+        migrate_legacy(replace(legacy, fixed=migrated), legacy_grid=None, native_legacy_grid=native)
+    wrapper = replace(legacy, fixed=migrated, legacy_json=legacy_bytes)
+    target = tmp_path / "v2"
+    wrapper.write(target)
+    with pytest.raises(ValueError):
+        SlamSnapshot.read(target)
+    restored = load_snapshot((target / "occupancy.json").read_bytes())
+    assert restored.fixed == migrated
+    store = MapReferenceStore(MAP, legacy.odom_owner, legacy.cell_size_m)
+    store.replace(restored)
+    bundle = tmp_path / "v2.zip"
+    await archive_for(store).export_bundle(store, MAP, bundle)
+    manifest, files = MapArchive.inspect_bundle(bundle)
+    assert manifest.format_version == 2
+    decoded = load_exported_grid(bundle, hashlib.sha256(bundle.read_bytes()).hexdigest(), "robot-a")
+    assert decoded.cells == migrated.grid.cells
+    pgm = files["grid/map.pgm"].split(b"\n", 3)[3]
+    back = bytes(
+        100 if p == 0 else 0 if p == 254 else 255
+        for row in range(8)
+        for p in pgm[(7 - row) * 8 : (8 - row) * 8]
+    )
+    assert back == decoded.cells
+    broken = json.loads((target / "occupancy.json").read_bytes())
+    broken["checksum"] = "0" * 64
+    with pytest.raises(ValueError):
+        load_snapshot(json.dumps(broken).encode())
+    assert hashlib.sha256(old.read_bytes()).hexdigest() == old_hash
+
+
+async def test_export_cancellation_joins_the_actual_bounded_disk_writer(tmp_path, monkeypatch):
+    import threading
+
+    entered, release, finished = threading.Event(), threading.Event(), threading.Event()
+    original = archive_module._write_zip
+
+    def held_write(*args):
+        entered.set()
+        try:
+            assert release.wait(3)
+            return original(*args)
+        finally:
+            finished.set()
+
+    monkeypatch.setattr(archive_module, "_write_zip", held_write)
+    store = filled_store()
+    destination = tmp_path / "cancelled.zip"
+    task = asyncio.create_task(archive_for(store).export_bundle(store, MAP, destination))
+    try:
+        assert await asyncio.to_thread(entered.wait, 2)
+        task.cancel()
+        await asyncio.sleep(0.01)
+        assert not task.done(), "archive cancellation released staging before its writer settled"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        MapArchive.inspect_bundle(destination)
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        assert await asyncio.to_thread(finished.wait, 2)

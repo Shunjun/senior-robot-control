@@ -200,7 +200,7 @@ class DepthPairBuffer:
 
 def _identity(value: str, limit: int) -> bool:
     try:
-        return bool(value) and len(value.encode("utf-8")) <= limit
+        return isinstance(value, str) and bool(value)
     except UnicodeError:
         return False
 
@@ -245,10 +245,6 @@ def produce_depth_evidence(
         or info.received_ros_ns < 0
         or not math.isfinite(packet.received_steady)
         or not math.isfinite(info.received_steady)
-        or packet.sequence <= 0
-        or not _identity(packet.source_epoch, 64)
-        or not _identity(packet.raw_source, 128)
-        or not _identity(info.raw_source, 128)
         or not _identity(packet.frame_id, 128)
         or not _identity(settings.body_frame, 128)
         or packet.frame_id != info.frame_id

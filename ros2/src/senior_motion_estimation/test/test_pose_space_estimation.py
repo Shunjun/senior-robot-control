@@ -207,7 +207,17 @@ def test_pose_zero_quality_veto_and_cached_republication_do_not_create_new_fix()
         stamp_ns=(observation("gps", (0.1, None, None)).roots)[0].coordinate,
     )
     assert p.ingest(original)
-    invalid = replace(original, quality=0.0, roots=(replace(original.roots[0], sequence=2),))
+    newer_time = replace(
+        original.roots[0].time,
+        stamp_ns=original.roots[0].time.stamp_ns + 1,
+        sample_steady_ns=original.roots[0].time.sample_steady_ns + 1,
+    )
+    invalid = replace(
+        original,
+        quality=0.0,
+        stamp_ns=original.stamp_ns + 1,
+        roots=(replace(original.roots[0], sequence=2, time=newer_time),),
+    )
     assert p.ingest(invalid)
     with pytest.raises(ValueError, match="cannot support"):
         p.at(

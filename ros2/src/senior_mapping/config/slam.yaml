@@ -8,6 +8,9 @@ slam_toolbox:
     solver_plugin: senior_mapping/BoundedCeresSolver
     mapping_solver_threads: 1
     mapping_worker_threads: 1
+    # Fixed admission needs an evidenced owner GeometryProfile; currently unresolved.
+    # Native raster is diagnostic / one-time V1 migration only.
+    qualified_scan_topic: "@wiring:senior_slam_qualified_scan@"
     mapping_max_grid_cells: 1048576
     ceres_linear_solver: SPARSE_NORMAL_CHOLESKY
     ceres_preconditioner: SCHUR_JACOBI

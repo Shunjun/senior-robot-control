@@ -9,11 +9,11 @@ builtin_interfaces/Time transform_stamp
 bool transform_static
 float64 received_steady
 float64 camera_info_received_steady
-string<=128 frame_id
-string<=128 body_frame
-string<=128 raw_source
-string<=128 camera_info_source
-string<=64 source_epoch
+string frame_id
+string body_frame
+string raw_source
+string camera_info_source
+string source_epoch
 string<=64 calibration_id
 uint64 sequence
 bool valid

@@ -187,13 +187,18 @@ class WebSocketLink(Generic[SnapshotT, HeartbeatT]):
         await self._send(serialize_envelope(envelope).decode())
 
     async def send_snapshot(self, snapshot: SnapshotT) -> None:
+        sequence = self._ports.snapshot_sequence(snapshot)
+        if not 0 <= sequence <= 2**53 - 1:
+            # Closing wakes recv and the original supervisor reconnects this session.
+            await self.close()
+            raise ConnectionError("snapshot sequence exhausted")
         envelope = self._ports.snapshot(
             snapshot,
             robot_id=self._robot_id,
             session_id="agent",
             connection_epoch=self.epoch,
             request_id="snapshot",
-            seq=0,
+            seq=sequence,
             expires_at=self._wall() + 60.0,
         )
         await self._send(serialize_envelope(envelope).decode())

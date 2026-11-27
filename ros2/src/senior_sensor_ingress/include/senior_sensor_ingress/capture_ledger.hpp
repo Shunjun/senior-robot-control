@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <set>
 #include <stdexcept>
 #include <string>
 
@@ -16,7 +15,7 @@ namespace senior_sensor_ingress {
 class CaptureLedger {
 public:
   using Header = senior_interfaces::msg::RawCaptureHeader;
-  enum class Match {exact, retired, missing};
+  enum class Match {exact, old_generation, missing};
 
   explicit CaptureLedger(size_t capacity = 128, double age_limit_ms = 1000.0)
   : capacity_(capacity), age_limit_(age_limit_ms / 1000)
@@ -29,14 +28,10 @@ public:
 
   bool advance(const std::string & boot, uint64_t generation)
   {
-    if (closed_ || boot.empty() || boot.size() > 64 || generation == 0 ||
-        retired_boots_.count(boot) != 0) return false;
-    if (!boot_.empty() && boot != boot_) {
-      retired_boots_.insert(boot_);
-      if (retired_boots_.size() >= 256) {
-        closed_ = true;
-        return false;
-      }
+    if (boot.empty() || generation == 0) return false;
+    // Explicit owner transition; observe() never switches boot on an arriving packet.
+    if (boot != boot_) {
+      for (auto & values : entries_) values.clear();
       boot_ = boot;
       generation_ = 0;
     }
@@ -44,7 +39,6 @@ public:
     if (boot_.empty()) boot_ = boot;
     if (generation > generation_) {
       for (auto & values : entries_) values.clear();
-      retired_sequence_.fill(0);
       generation_ = generation;
     }
     return true;
@@ -52,49 +46,42 @@ public:
 
   bool observe(size_t stream, const Header & header, double now_steady)
   {
-    if (stream >= entries_.size() || !header.valid || header.sequence == 0 ||
+    if (stream >= entries_.size() || !header.valid ||
         !std::isfinite(now_steady) || header.clock_generation == 0 ||
         header.sample_steady_ns > header.received_steady_ns ||
         now_steady < steady_seconds(header.received_steady_ns) ||
         now_steady - steady_seconds(header.sample_steady_ns) > age_limit_ ||
+        (!boot_.empty() && header.bridge_boot_id != boot_) ||
         !advance(header.bridge_boot_id, header.capture_generation)) return false;
     auto & values = entries_[stream];
     expire(stream, now_steady);
-    if ((!values.empty() && header.sequence <= values.back().sequence) ||
-        header.sequence <= retired_sequence_[stream]) return false;
-    while (values.size() >= capacity_) retire_front(stream);
+    while (values.size() >= capacity_) evict_front(stream);
     values.push_back(header);
     return true;
   }
 
   Match match(size_t stream, const Header & header, double now_steady)
   {
-    if (stream >= entries_.size() || closed_ || header.sequence == 0 ||
-        !std::isfinite(now_steady)) {
+    if (stream >= entries_.size() || !std::isfinite(now_steady)) {
       return Match::missing;
     }
-    if (retired_boots_.count(header.bridge_boot_id) != 0 ||
-        (header.bridge_boot_id == boot_ && header.capture_generation < generation_)) {
-      return Match::retired;
+    if (header.bridge_boot_id == boot_ && header.capture_generation < generation_) {
+      return Match::old_generation;
     }
     if (header.bridge_boot_id != boot_ || header.capture_generation != generation_) {
       return Match::missing;
     }
     expire(stream, now_steady);
-    if (header.sequence <= retired_sequence_[stream]) return Match::retired;
     for (const auto & issued : entries_[stream]) {
-      if (issued == header) return Match::exact;
+      if (same_capture_coordinates(issued, header)) return Match::exact;
     }
     return Match::missing;
   }
 
 private:
-  void retire_front(size_t stream)
+  void evict_front(size_t stream)
   {
     auto & values = entries_[stream];
-    if (values.front().sequence > retired_sequence_[stream]) {
-      retired_sequence_[stream] = values.front().sequence;
-    }
     values.pop_front();
   }
 
@@ -104,17 +91,14 @@ private:
     while (!values.empty() &&
            (now_steady < steady_seconds(values.front().received_steady_ns) ||
             now_steady - steady_seconds(values.front().sample_steady_ns) > age_limit_)) {
-      retire_front(stream);
+      evict_front(stream);
     }
   }
 
   size_t capacity_;
   double age_limit_;
   std::array<std::deque<Header>, 4> entries_;
-  std::array<uint64_t, 4> retired_sequence_{};
   std::string boot_;
   uint64_t generation_ = 0;
-  std::set<std::string> retired_boots_;
-  bool closed_ = false;
 };
 }  // namespace senior_sensor_ingress

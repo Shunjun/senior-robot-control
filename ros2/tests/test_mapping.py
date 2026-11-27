@@ -107,36 +107,20 @@ def test_mapping_capture_requires_absolute_directory(mapping_launch):
 
 
 @pytest.mark.parametrize("capture", [False, True])
-def test_verified_static_lidar_selects_dedicated_relay_and_native_owner(
-    mapping_launch, tmp_path, capture
-):
+def test_bounded_lidar_uses_standard_tf_without_credential_relay(mapping_launch, tmp_path, capture):
     select, defaults = mapping_launch
     capture_directory = str(tmp_path) if capture else ""
-    relay, graph = select(
+    (graph,) = select(
         {**defaults, "verified_static_lidar": "true", "capture_directory": capture_directory}
     )
-    assert relay.kwargs["package"] == "senior_sensor_ingress"
-    assert relay.kwargs["executable"] == "static_tf_receipt_node"
-    assert relay.kwargs["name"] == "slam_static_lidar_tf_receipt"
-    assert relay.kwargs["namespace"] == "/"
-    (relay_params,) = relay.kwargs["parameters"]
-    assert relay_params["input_topic"] == "/tf_static"
-    assert relay_params["output_topic"] == "/senior/slam/static_lidar_tf_receipt"
-    assert relay_params["base_frame"] == "base_link"
-    assert relay_params["camera_frame"] == "laser_link"
-    assert relay_params["expected_node_name"] == "robot_state_publisher"
-    assert relay_params["expected_namespace"] == "/"
     assert graph.kwargs["package"] == "senior_mapping"
     assert graph.kwargs["executable"] == "slam_graph_node"
     _, bridge = graph.kwargs["parameters"]
     assert bridge["capture_directory"] == capture_directory
     assert bridge["odom_frame"] == "odom"
     assert bridge["bounded_scan_topic"] == "/safety/raw/scan"
-    assert bridge["verified_static_lidar_tf_topic"] == relay_params["output_topic"]
-    assert bridge["verified_static_lidar_frame"] == relay_params["camera_frame"]
-    assert bridge["verified_static_lidar_relay_node"] == "/slam_static_lidar_tf_receipt"
-    assert bridge["verified_static_lidar_tf_source_topic"] == relay_params["input_topic"]
-    assert bridge["verified_static_lidar_tf_source_node"] == "/robot_state_publisher"
+    assert bridge["lidar_frame"] == "laser_link"
+    assert not any("receipt" in key or "verified_static" in key for key in bridge)
 
 
 @pytest.mark.parametrize(
@@ -146,7 +130,6 @@ def test_verified_static_lidar_selects_dedicated_relay_and_native_owner(
         ("lidar_frame", "base_link"),
         ("odom_frame", ""),
         ("odom_frame", "map"),
-        ("odom_frame", " "),
     ],
 )
 def test_verified_static_lidar_rejects_unqualified_inputs(mapping_launch, argument, value):

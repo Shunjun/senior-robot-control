@@ -11,8 +11,9 @@ from numbers import Integral, Real
 from types import SimpleNamespace
 from typing import Any
 
-from senior_perception.vision.independent_motion import _finite, _immutable_header
+from senior_perception.vision.independent_motion import _immutable_header
 from senior_perception.vision.raw_capture import RawCaptureHeader, capture_from_message
+from vehicle_core.source_order import SourceOrder
 
 
 @dataclass(frozen=True)
@@ -161,52 +162,35 @@ class CaptureJoiner:
         self.capacity = capacity
         self.generation = 1
         self._boot = ""
+        self._last_receipt_ns = -1
         self._raw_generation = 0
-        self._retired_boots: set[str] = set()
-        self._bridge_gids: list[str] = ["", "", "", ""]
-        self._identities: list[tuple[str, str, str] | None] = [None, None, None, None]
-        self._sequences = [0, 0, 0, 0]
-        self._times: list[tuple[float, int, float] | None] = [None, None, None, None]
-        self._time_sources: list[tuple[str, str] | None] = [None, None, None, None]
         self._pending: dict[int, dict[int, tuple[RawCaptureHeader, Any, str]]] = {}
         self._faulted = False
-        self._closed = False
+        self._orders = [SourceOrder() for _ in range(4)]
 
     def invalidate(self) -> None:
         self.generation += 1
         self._pending.clear()
         self._faulted = True
 
+    def confirm_boot(self, boot: str) -> None:
+        """Controlled stream reconstruction, not an arbitrary different input UUID."""
+        if boot != self._boot:
+            for order in self._orders:
+                order.confirm_boot(boot)
+            self._boot, self._raw_generation = boot, 0
+            self.invalidate()
+
     def offer(
         self, stream: int, header: RawCaptureHeader, body: Any, *, bridge_gid: str
     ) -> JoinResult:
-        if self._closed or type(stream) is not int or not 0 <= stream < 4:
-            self.invalidate()
-            return JoinResult("invalid")
-        if not _immutable_header(header):
-            self.invalidate()
-            return JoinResult("invalid")
-        if header.bridge_gid != bridge_gid:
-            return JoinResult("ignored")
-        if header.bridge_boot_id in self._retired_boots:
-            return JoinResult("ignored")
-        if not header.bridge_boot_id or header.capture_generation <= 0 or header.sequence <= 0:
+        if type(stream) is not int or not 0 <= stream < 4 or not _immutable_header(header):
             self.invalidate()
             return JoinResult("invalid")
         if self._boot and self._boot != header.bridge_boot_id:
-            prior_gid = self._bridge_gids[stream]
-            if not prior_gid or prior_gid == bridge_gid or len(self._retired_boots) >= 64:
-                self.invalidate()
-                self._closed = True
-                return JoinResult("invalid")
-            self._retired_boots.add(self._boot)
-            self._raw_generation = 0
-            self._bridge_gids = ["", "", "", ""]
-            self._identities = [None, None, None, None]
-            self._sequences = [0, 0, 0, 0]
-            # A new bridge boot does not reset the raw sensor's clock. Keep
-            # each raw source's frontier until that source identity changes.
-            self.invalidate()
+            if not header.valid or header.time.received_steady_ns <= self._last_receipt_ns:
+                return JoinResult("ignored")
+            self.confirm_boot(header.bridge_boot_id)
         if header.capture_generation < self._raw_generation:
             return JoinResult("ignored")
         generation_changed = header.capture_generation > self._raw_generation
@@ -214,57 +198,26 @@ class CaptureJoiner:
             if self._raw_generation:
                 self.invalidate()
             self._raw_generation = header.capture_generation
-            self._identities = [None, None, None, None]
-            self._sequences = [0, 0, 0, 0]
         self._boot = header.bridge_boot_id
-        if self._bridge_gids[stream] and self._bridge_gids[stream] != bridge_gid:
-            self.invalidate()
-            self._closed = True
-            return JoinResult("invalid")
-        self._bridge_gids[stream] = bridge_gid
-        if header.sequence <= self._sequences[stream]:
-            return JoinResult("ignored")
-        self._sequences[stream] = header.sequence
         if not header.valid:
-            if not self._faulted:
-                self.invalidate()
+            if generation_changed or not self._faulted:
+                if not generation_changed:
+                    self.invalidate()
                 return JoinResult("invalid")
-            return JoinResult("invalid" if generation_changed else "ignored")
-        identity = (header.raw_gid, header.source_epoch, header.frame_id)
-        if not all(identity) or header.stamp_ns < 0:
-            self.invalidate()
-            return JoinResult("invalid")
-        if self._identities[stream] is not None and self._identities[stream] != identity:
-            self.invalidate()
-            self._closed = True
-            return JoinResult("invalid")
-        source = (header.raw_gid, header.source_epoch)
-        previous = self._times[stream] if self._time_sources[stream] == source else None
-        if (
-            header.received_ros_ns < 0
-            or not _finite(header.received_steady)
-            or header.received_steady < 0
-            or (
-                previous is not None
-                and (
-                    header.measurement_steady <= previous[0] or header.received_steady < previous[2]
-                )
-            )
+            return JoinResult("ignored")
+        if not header.frame_id or not self._orders[stream].accept_capture(
+            header.bridge_boot_id,
+            header.capture_generation,
+            header.stamp_ns,
+            header.time.received_steady_ns,
         ):
-            self.invalidate()
-            return JoinResult("invalid")
-        self._identities[stream] = identity
-        self._times[stream] = (
-            header.measurement_steady,
-            header.sequence,
-            header.received_steady,
-        )
-        self._time_sources[stream] = source
+            return JoinResult("ignored")
         try:
             snapshot = _snapshot(stream, header, body)
         except (AttributeError, TypeError, ValueError, OverflowError, UnicodeError):
             self.invalidate()
             return JoinResult("invalid")
+        self._last_receipt_ns = max(self._last_receipt_ns, header.time.received_steady_ns)
         bucket = self._pending.setdefault(header.stamp_ns, {})
         bucket[stream] = (header, snapshot, bridge_gid)
         while len(self._pending) > self.capacity:
@@ -275,7 +228,7 @@ class CaptureJoiner:
                 )
             ]
         if len(bucket) != 4 or header.stamp_ns not in self._pending:
-            return JoinResult("invalid" if generation_changed and self._faulted else "pending")
+            return JoinResult("pending")
         entries = tuple(bucket[i] for i in range(4))
         for stamp in tuple(self._pending):
             if (

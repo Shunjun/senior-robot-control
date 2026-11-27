@@ -417,7 +417,15 @@ def production_command_owner(clock):
 
     base = command_class()
     scope = dict(base._publish_barrier.__globals__)
-    scope.update(dataclass=dataclass, secrets=secrets, MotionRuntimeState=MotionRuntimeState)
+    from vehicle_core.ros_wiring import TOPICS, publisher
+
+    scope.update(
+        dataclass=dataclass,
+        secrets=secrets,
+        MotionRuntimeState=MotionRuntimeState,
+        TOPICS=TOPICS,
+        publisher=publisher,
+    )
     scope["__name__"] = __name__
     scope["FinalCommand"] = lambda: N(
         manual_linear=0.0, manual_linear_limit=0.0, degraded_linear_limit=0.0

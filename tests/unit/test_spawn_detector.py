@@ -175,7 +175,7 @@ def test_cpu_inference_isolated_from_geometry_and_latest_queue_bounded(tmp_path:
         worker.close()
 
 
-def test_same_epoch_replay_or_invalid_frame_fences_inflight_result(tmp_path: Path):
+def test_replay_is_dropped_without_blacklisting_next_frame(tmp_path: Path):
     from dataclasses import replace
 
     from senior_perception.vision.spawn_detector import SpawnInferenceWorker
@@ -187,10 +187,11 @@ def test_same_epoch_replay_or_invalid_frame_fences_inflight_result(tmp_path: Pat
     try:
         assert worker.submit(frame)
         wait_until(lambda: worker.in_flight)
-        assert not worker.submit(frame)  # replay must revoke the in-flight generation
-        time.sleep(0.3)
-        assert worker.take_result() is None
-        assert not worker.submit(capture("epoch-a", 1_100_000_000))
+        assert not worker.submit(frame)
+        assert wait_until(worker.take_result).frame == frame
+        following = capture("epoch-a", 1_100_000_000)
+        assert worker.submit(following)
+        assert wait_until(worker.take_result).frame == following
         good = capture("epoch-b", 1_200_000_000)
         assert worker.submit(good)
         assert wait_until(worker.take_result).frame == good

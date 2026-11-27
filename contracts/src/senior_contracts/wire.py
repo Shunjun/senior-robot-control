@@ -475,6 +475,34 @@ class ScanPointPayload(StrictModel):
     y: float
 
 
+class ScanLayerPayload(StrictModel):
+    """Display-only Q identity and its original vehicle monotonic deadline."""
+
+    map_ref: MapRefPayload
+    map_generation: ShortText
+    backend_boot: ShortText
+    source_id: str = Field(pattern=r"^[0-9a-f]{64}$")
+    sequence: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+    sampled_at: float = Field(ge=0)
+    expires_at: float = Field(ge=0)
+    remaining_s: float = Field(ge=0, le=0.5)
+    hit_count: int = Field(ge=0, le=_MAX_SAFE_WEB_INTEGER)
+    preview_count: int = Field(ge=0, le=96)
+    display_mode: Literal["preview"]
+    valid: bool
+
+    @model_validator(mode="after")
+    def display_bounds(self) -> "ScanLayerPayload":
+        if (
+            self.map_ref.reference_revision > _MAX_SAFE_WEB_INTEGER
+            or not 0 <= self.expires_at - self.sampled_at <= 0.5
+            or self.preview_count > self.hit_count
+            or (not self.valid and self.preview_count != 0)
+        ):
+            raise ValueError("invalid display observation")
+        return self
+
+
 class RobotPosePayload(ScanPointPayload):
     yaw: float
 
@@ -535,16 +563,25 @@ class SnapshotPayload(StrictModel):
     robot_pose: RobotPosePayload | None = None
     navigation_block_reason: str | None = Field(default=None, max_length=256)
     scan_points: list[ScanPointPayload] = Field(default_factory=list, max_length=96)
+    # //Compatible: legacy points do not establish qualified current coverage.
+    scan_layer: ScanLayerPayload | None = None
     # //Compatible: absent on unmigrated vehicles; never fabricate a new capability.
     vehicle_ui: dict[str, Any] | None = None
     # Relay-only owner metadata; stripped before control-socket delivery.
     manual_controller_generation: int | None = None
     manual_agent_epoch: int | None = None
 
+    @model_validator(mode="after")
+    def scan_count(self) -> "SnapshotPayload":
+        if self.scan_layer is not None and self.scan_layer.preview_count != len(self.scan_points):
+            raise ValueError("scan preview count mismatch")
+        return self
+
     @model_serializer(mode="wrap")
     def serialize(self, handler: Any) -> dict[str, Any]:
         result: dict[str, Any] = handler(self)
         for optional in (
+            "scan_layer",
             "performance",
             "mapping_protocol_version",
             "vehicle_ui",

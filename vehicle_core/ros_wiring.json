@@ -1,0 +1,102 @@
+{
+  "topics": {
+    "control_recovery_cmd": "/control/recovery_cmd",
+    "motion_core_reference": "/motion/core_reference",
+    "motion_runtime": "/motion/runtime",
+    "motion_scan": "/motion/scan",
+    "motion_scan_diagnostics": "/motion/scan_diagnostics",
+    "perception_scan_candidate": "/perception/scan_candidate",
+    "perception_scan_filtered": "/perception/scan_filtered",
+    "perception_scan_status": "/perception/scan_status",
+    "rgbd_diagnostic": "/rgbd_diagnostic",
+    "rgbd_diagnostic_candidate": "/rgbd_diagnostic/candidate",
+    "rgbd_diagnostic_depth": "/rgbd_diagnostic/depth",
+    "rgbd_diagnostic_depth_info": "/rgbd_diagnostic/depth_info",
+    "rgbd_diagnostic_prefix": "/rgbd_diagnostic/",
+    "rgbd_diagnostic_rgb": "/rgbd_diagnostic/rgb",
+    "rgbd_diagnostic_rgb_info": "/rgbd_diagnostic/rgb_info",
+    "safety_bounded_depth": "/safety/bounded_depth",
+    "safety_bounded_scan": "/safety/bounded_scan",
+    "safety_depth_candidate": "/safety/depth_candidate",
+    "safety_drive_feedback": "/safety/drive_feedback",
+    "safety_final_command": "/safety/final_command",
+    "safety_raw_depth": "/safety/raw/depth",
+    "safety_raw_depth_info": "/safety/raw/depth_info",
+    "safety_raw_prefix": "/safety/raw/",
+    "safety_raw_rgb": "/safety/raw/rgb",
+    "safety_raw_rgb_info": "/safety/raw/rgb_info",
+    "safety_raw_scan": "/safety/raw/scan",
+    "safety_scan_candidate": "/safety/scan_candidate",
+    "safety_semantic_candidate_unfenced": "/safety/semantic_candidate_unfenced",
+    "safety_semantic_candidates": "/safety/semantic_candidates",
+    "safety_status": "/safety/status",
+    "senior_camera_color_image_raw": "/senior_camera/color/image_raw",
+    "senior_mapping_current_obstacles": "/senior/mapping/current_obstacles",
+    "senior_slam_capture_graph": "/senior/slam/capture_graph",
+    "senior_slam_mapping_gate": "/senior/slam/mapping_gate",
+    "senior_slam_match_stationary_scan": "/senior/slam/match_stationary_scan",
+    "senior_slam_qualified_scan": "/senior/slam/qualified_scan",
+    "senior_slam_read_graph": "/senior/slam/read_graph",
+    "senior_slam_read_graph_commit": "/senior/slam/read_graph_commit",
+    "senior_slam_read_loaded_graph": "/senior/slam/read_loaded_graph",
+    "senior_slam_read_mapping_grid": "/senior/slam/read_mapping_grid",
+    "senior_slam_read_mapping_pose": "/senior/slam/read_mapping_pose",
+    "senior_camera_color_compression_input": "/senior_camera/color/compression_input",
+    "senior_camera_depth_compression_input": "/senior_camera/depth/compression_input",
+    "rgbd_diagnostic_fenced": "/rgbd_diagnostic/fenced"
+  },
+  "publishers": {
+    "scan_receipt": {
+      "name": "scan_receipt",
+      "namespace": "/"
+    },
+    "raw_receipt": {
+      "name": "raw_receipt",
+      "namespace": "/"
+    },
+    "scan_adapter": {
+      "name": "scan_adapter",
+      "namespace": "/"
+    },
+    "safety_scan_ingress": {
+      "name": "safety_scan_ingress",
+      "namespace": "/"
+    },
+    "scan_motion_node": {
+      "name": "scan_motion_node",
+      "namespace": "/"
+    },
+    "rgbd_candidate_producer": {
+      "name": "rgbd_candidate_producer",
+      "namespace": "/"
+    },
+    "rgbd_candidate_receipt": {
+      "name": "rgbd_candidate_receipt",
+      "namespace": "/"
+    },
+    "depth_ingress": {
+      "name": "depth_ingress",
+      "namespace": "/"
+    },
+    "semantic_ingress": {
+      "name": "semantic_ingress",
+      "namespace": "/"
+    },
+    "command_node": {
+      "name": "command_node",
+      "namespace": "/"
+    },
+    "safety_gate": {
+      "name": "safety_gate",
+      "namespace": "/"
+    },
+    "motion_reporter": {
+      "name": "motion_reporter",
+      "namespace": "/"
+    },
+    "safety_input": {
+      "name": "safety_input",
+      "namespace": "/"
+    }
+  }
+}

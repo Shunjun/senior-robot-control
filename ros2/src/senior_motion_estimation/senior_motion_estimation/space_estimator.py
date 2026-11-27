@@ -15,6 +15,7 @@ from shapely.ops import unary_union
 from senior_motion_estimation.estimator import Origin, validate_origins
 from senior_motion_estimation.kinematics import compose, inverse
 from vehicle_core.sensor_policy import default_policy
+from vehicle_core.source_order import SourceOrder, source_context
 from vehicle_core.values import Pose2D
 
 
@@ -66,7 +67,7 @@ class SpaceEstimation:
         self.frame_epoch = frame_epoch
         self._evidence: dict[str, SpaceObservation] = {}
         self._frontiers: dict[str, Origin] = {}
-        self._retired: dict[str, set[str]] = {}
+        self._source_orders: dict[str, SourceOrder] = {}
 
     def invalidate(self, source: str) -> None:
         self._evidence.pop(source, None)
@@ -102,22 +103,18 @@ class SpaceEstimation:
             raise ValueError("invalid aligned space evidence")
         root = max(o.roots, key=lambda r: (r.measurement_steady, r.family))
         old = self._frontiers.get(o.source)
-        retired = self._retired.setdefault(o.source, set())
-        if root.epoch in retired:
-            return False
-        if old is not None:
-            if root.epoch == old.epoch:
-                if (
-                    root.sequence <= old.sequence
-                    or root.measurement_steady < old.measurement_steady
-                ):
-                    return False
-            else:
-                if root.received_steady < old.received_steady or len(retired) >= 32:
-                    return False
-                retired.add(old.epoch)
-        elif len(self._frontiers) >= self.capacity:
+        if old is None and len(self._frontiers) >= self.capacity:
             raise ValueError("space source capacity")
+        boot, generation = source_context(root.epoch)
+        order = self._source_orders.setdefault(o.source, SourceOrder())
+        if root.epoch != boot:
+            accepted = order.accept_capture(
+                boot, generation, root.coordinate, root.time.received_steady_ns
+            )
+        else:
+            accepted = order.accept(boot, generation, root.coordinate)
+        if not accepted:
+            return False
         self._frontiers[o.source] = root
         self._evidence[o.source] = o
         return True

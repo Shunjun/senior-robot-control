@@ -1642,3 +1642,500 @@ async def test_missing_update_task_id_is_failed_validation(tmp_path: Path) -> No
         assert replayed.value.status is OperationStatus.FAILED
         assert await journal.get("invalid-update") == entry
         assert await store.list_tasks() == ()
+
+
+def test_real_reference_provider_decodes_current_coverage_reason():
+    from types import SimpleNamespace
+
+    from senior_localization.live_mapping_reference import LiveMappingReference
+    from vehicle_manager.agent.local_state import StateReply
+
+    ref = LiveMappingReference(SimpleNamespace(task_motion_allowed=lambda **_: False))
+    raw = ref.state("idle")
+    assert raw["current_coverage_reason"] == "current_scan_unavailable"
+    decoded = StateReply.model_validate(raw)
+    assert decoded.current_coverage_reason == raw["current_coverage_reason"]
+
+
+def test_real_q_replaces_preview_and_invalid_preserves_fixed():
+    from types import SimpleNamespace
+
+    from senior_mapping.navigation_bridge import NativeNavigationBridge
+    from test_shared_scan import decode, message, reference
+
+    ref = reference()
+    fixed = replace(ref.grid(), cells=bytes([100, 0, 255]) + ref.grid().cells[3:])
+    from vehicle_core.values import Pose2D
+
+    ref.install("backend", fixed, "R1", "0", Pose2D(10.0, 0.0, 0.0), Pose2D(0.0, 0.0, 0.0))
+    bridge = NativeNavigationBridge(SimpleNamespace(), ref, None)
+    bridge.boot = "backend"
+    outputs = []
+    bridge._publish_transform = lambda stamp: None
+    bridge._publish_current = lambda *args: outputs.append(args)
+    wall = ref.grid()
+    a, b = message(1, ranges=(2.0,)), message(2, ranges=(3.0,))
+    bridge.observe_scan(decode(a), a.scan.capture)
+    first = ref.state("idle")
+    assert first["scan_layer"]["valid"]
+    assert (
+        first["scan_layer"]["source_id"]
+        == "7d81dca4df98bff1b11b47a59f81b7f3918384f59a1ee56a5ad601d5dde7d942"
+    )
+    bridge.observe_scan(decode(b), b.scan.capture)
+    second = ref.state("idle")
+    assert second["scan_points"] != first["scan_points"]
+    assert second["scan_layer"]["sequence"] == 2
+    assert not second["navigation_ready"]
+    assert len(outputs[-1][2]) == 1
+    bridge.invalidate_current("invalid")
+    assert ref.state("idle")["scan_points"] == []
+    assert ref.grid() is wall and list(wall.cells[:3]) == [100, 0, 255]
+
+
+def current_q_provider():
+    """Same qualified bridge/reference seam as S05, without starting ROS or services."""
+    from types import SimpleNamespace
+
+    from senior_mapping.navigation_bridge import NativeNavigationBridge
+    from test_shared_scan import decode, message, reference
+
+    ref = reference()
+    bridge = NativeNavigationBridge(SimpleNamespace(), ref, None)
+    bridge.boot = "backend"
+    outputs = []
+    bridge._publish_transform = lambda stamp: None
+    bridge._publish_current = lambda *args: outputs.append(args)
+    msg = message(ranges=(3.0,) * 2047 + (1.0,))
+    msg.scan.angle_increment = 2 * 3.141592653589793 / 2048
+    scan = decode(msg)
+    bridge.observe_scan(scan, msg.scan.capture)
+    return ref, bridge, scan, outputs
+
+
+async def test_2048_full_q_96_angle_preview_and_final_provider_encoding(monkeypatch):
+    import json
+
+    from senior_robot.agent_adapter import AdapterCore
+    from test_manual_wire import runtime
+    from vehicle_manager.agent.local_state import StateReply
+
+    from vehicle_core.ipc import _encode
+
+    monkeypatch.setattr(time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(time, "monotonic_ns", lambda: 100_000_000_000)
+    ref, bridge, scan, outputs = current_q_provider()
+    assert bridge._scan is scan and len(outputs[-1][2]) == 2048
+    preview = ref.state("idle")
+    assert preview["scan_layer"]["hit_count"] == 2048
+    assert preview["scan_layer"]["preview_count"] == len(preview["scan_points"]) == 96
+    assert outputs[-1][2][-1] == tuple(preview["scan_points"][-1].values())
+    selected_indices = [outputs[-1][2].index((p["x"], p["y"])) for p in preview["scan_points"]]
+    assert [index * 96 // 2048 for index in selected_indices] == list(range(96))
+    # Tail is the nearest raw hit in its bucket; all other raw ranges are 3m.
+    assert outputs[-1][2][2027] != tuple(preview["scan_points"][-1].values())
+
+    def provider():
+        result = ref.state("idle")
+        result.update(
+            runtime_observation={"status": "missing", "last_sampled_steady": None},
+            motion_runtime=runtime(time.monotonic()).model_dump(),
+            motion_runtime_version=1,
+            manual_authority={"state": "prepared", "authority_id": "a" * 128},
+            task_evidence_ready=False,
+            navigation_block_reason="planner unavailable",
+            route_progress={
+                "execution_id": "route",
+                "task_id": "task",
+                "map_generation": "R1",
+                "status": "starting",
+            },
+        )
+        return result
+
+    core = AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda *a: None,
+        disconnect=lambda *a: None,
+        request_exit=lambda: None,
+        state_provider=provider,
+        state_preview=ref.resize_preview,
+        routes=object(),
+        manual=lambda m: {},
+    )
+    reply = await core.handle({"type": "state.get"})
+    StateReply.model_validate(reply)
+    packet = _encode(reply)
+    assert (
+        len(packet) - 4
+        == len(
+            json.dumps(reply, separators=(",", ":"), allow_nan=False, ensure_ascii=True).encode()
+        )
+        <= 8192
+    )
+    assert reply["task_lifecycle_version"] == 2 and reply["manual_protocol_version"] == 1
+    print(
+        f"T6 fullQ={len(outputs[-1][2])} preview={len(reply['scan_points'])} "
+        f"body={len(packet) - 4} packet={len(packet)}"
+    )
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from senior_contracts.wire import serialize_envelope, validate_frame
+    from vehicle_manager.agent.local_adapters import IpcState
+    from vehicle_manager.agent.snapshot_bindings import SnapshotState
+
+    from vehicle_core.ipc import IpcServer, _read
+
+    # Actual final answer and frame decoder in memory; no socket or service is started.
+    server = IpcServer(Path("/tmp/t6-not-started.sock"), core.handle)
+
+    class Client:
+        async def request(self, kind):
+            answer = await server._answer({"v": 1, "type": kind})
+            reader = asyncio.StreamReader()
+            reader.feed_data(_encode(answer))
+            reader.feed_eof()
+            return await _read(reader)
+
+    ipc = IpcState(Client(), clock=lambda: 100.0)
+    state = await ipc.read()
+    assert state.scan_layer.sequence == scan.key.sequence
+    assert state.current_coverage_reason == ref.coverage_reason
+    projection = SnapshotState(
+        ipc,
+        SimpleNamespace(snapshot_tasks=AsyncMock(return_value=((), frozenset()))),
+        SimpleNamespace(home=AsyncMock(return_value=None)),
+        clock=lambda: 100.0,
+    )
+    live = await projection.collect()
+    framed = snapshot_envelope(
+        RobotSnapshot(
+            ROBOT,
+            True,
+            live.localized,
+            live.map_ref,
+            None,
+            0,
+            "idle",
+            1.0,
+            map_generation=live.map_generation,
+            scan_layer=live.scan_layer,
+            scan_points=live.scan_points,
+        ),
+        robot_id=ROBOT,
+        session_id="agent",
+        connection_epoch=1,
+        request_id="q",
+        seq=0,
+        expires_at=60.0,
+    )
+    decoded = validate_frame(serialize_envelope(framed), ROBOT)
+    assert decoded.payload.scan_layer.hit_count == 2048
+    assert len(decoded.payload.scan_points) == 96
+
+
+async def test_near_budget_final_reply_rebuckets_only_preview_and_preserves_safety(monkeypatch):
+    import json
+
+    from senior_robot.agent_adapter import AdapterCore
+    from test_manual_wire import runtime
+    from vehicle_manager.agent.local_state import StateReply
+
+    from vehicle_core.ipc import _encode
+
+    monkeypatch.setattr(time, "monotonic", lambda: 100.0)
+    monkeypatch.setattr(time, "monotonic_ns", lambda: 100_000_000_000)
+    ref, bridge, scan, outputs = current_q_provider()
+    safety = dict(
+        runtime_observation={"status": "missing", "last_sampled_steady": None},
+        motion_runtime=runtime(time.monotonic()).model_dump(),
+        motion_runtime_version=1,
+        manual_authority={"state": "prepared", "authority_id": "车" * 550},
+        task_evidence_ready=False,
+        navigation_block_reason="planner unavailable",
+        route_progress={
+            "execution_id": "route",
+            "task_id": "task",
+            "map_generation": "R1",
+            "status": "starting",
+        },
+    )
+
+    def provider():
+        return {**ref.state("idle"), **safety}
+
+    core = AdapterCore(
+        robot_id=ROBOT,
+        submit=lambda *a: None,
+        disconnect=lambda *a: None,
+        request_exit=lambda: None,
+        state_provider=provider,
+        state_preview=ref.resize_preview,
+        routes=object(),
+        manual=lambda m: {},
+    )
+    unbounded = {**provider(), "task_lifecycle_version": 2, "manual_protocol_version": 1}
+    before = len(
+        json.dumps(unbounded, separators=(",", ":"), allow_nan=False, ensure_ascii=True).encode()
+    )
+    assert before > 8192
+    reply = await core.handle({"type": "state.get"})
+    StateReply.model_validate(reply)
+    packet = _encode(reply)
+    count = reply["scan_layer"]["preview_count"]
+    assert 0 < count < 96
+    selected_indices = [outputs[-1][2].index((p["x"], p["y"])) for p in reply["scan_points"]]
+    assert [index * count // 2048 for index in selected_indices] == list(range(count))
+    assert reply["scan_points"] != ref._display.preview(96)[:count]
+    assert {key: reply[key] for key in safety} == safety
+    assert bridge._scan is scan and len(outputs[-1][2]) == 2048
+    print(
+        f"T6 near-budget before={before} body={len(packet) - 4} packet={len(packet)} "
+        f"fullQ=2048 preview={count}"
+    )
+
+
+def test_legal_ros_u64_only_disqualifies_display_not_full_q():
+    from types import SimpleNamespace
+
+    from senior_mapping.navigation_bridge import NativeNavigationBridge
+    from test_shared_scan import decode, message, reference
+
+    ref = reference()
+    bridge = NativeNavigationBridge(SimpleNamespace(), ref, None)
+    bridge.boot = "backend"
+    outputs = []
+    bridge._publish_transform = lambda stamp: None
+    bridge._publish_current = lambda *args: outputs.append(args)
+    msg = message()
+    msg.scan.capture.sequence = 2**53
+    scan = decode(msg)
+    bridge.observe_scan(scan, msg.scan.capture)
+    assert bridge._scan is scan and len(outputs[-1][2]) == 3
+    assert ref.state("idle")["scan_layer"] is None
+    assert ref.display_reason == "display_integer_out_of_range"
+
+
+async def test_collect_poll_deducts_original_q_deadline(rig):
+    from types import SimpleNamespace
+
+    from senior_contracts.wire import ScanLayerPayload, ScanPointPayload
+
+    steady = [10.1]
+    rig.agent._clock = SimpleNamespace(monotonic=lambda: steady[0])
+    old = rig.state.collect
+
+    async def collect():
+        return replace(
+            await old(),
+            map_generation="R1",
+            scan_points=(ScanPointPayload(x=1.0, y=2.0),),
+            scan_layer=ScanLayerPayload(
+                map_ref=dict(map_id=MAP.map_id, reference_revision=MAP.reference_revision),
+                map_generation="R1",
+                backend_boot="backend",
+                source_id="a" * 64,
+                sequence=1,
+                sampled_at=10.0,
+                expires_at=10.5,
+                remaining_s=0.5,
+                hit_count=1,
+                preview_count=1,
+                display_mode="preview",
+                valid=True,
+            ),
+        )
+
+    rig.state.collect = collect
+    first = await rig.agent._collect()
+    steady[0] = 10.4
+    second = await rig.agent._collect()
+    assert second.scan_layer.sampled_at == first.scan_layer.sampled_at == 10.0
+    assert second.scan_layer.expires_at == first.scan_layer.expires_at == 10.5
+    assert second.scan_layer.remaining_s == pytest.approx(0.1)
+    steady[0] = 10.5
+    expired = await rig.agent._collect()
+    assert not expired.scan_layer.valid and expired.scan_points == ()
+
+
+def test_scan_change_key_includes_tail_and_complete_observation_identity():
+    from senior_contracts.wire import ScanLayerPayload, ScanPointPayload
+    from vehicle_manager.agent.main import _snapshot_change_key
+
+    layer = ScanLayerPayload(
+        map_ref=dict(map_id=MAP.map_id, reference_revision=MAP.reference_revision),
+        map_generation="R1",
+        backend_boot="backend",
+        source_id="a" * 64,
+        sequence=1,
+        sampled_at=10.0,
+        expires_at=10.5,
+        remaining_s=0.5,
+        hit_count=2048,
+        preview_count=96,
+        display_mode="preview",
+        valid=True,
+    )
+    base = RobotSnapshot(
+        ROBOT,
+        True,
+        True,
+        MAP,
+        None,
+        0,
+        "idle",
+        1.0,
+        map_generation="R1",
+        scan_layer=layer,
+        scan_points=(ScanPointPayload(x=1.0, y=2.0),) * 96,
+    )
+    for patch in (
+        {"sequence": 2},
+        {"expires_at": 10.4},
+        {"source_id": "b" * 64},
+        {"backend_boot": "new"},
+        {"valid": False},
+    ):
+        assert _snapshot_change_key(base) != _snapshot_change_key(
+            replace(base, scan_layer=layer.model_copy(update=patch))
+        )
+    assert _snapshot_change_key(base) != _snapshot_change_key(
+        replace(base, scan_points=base.scan_points[:95] + (ScanPointPayload(x=3.0, y=4.0),))
+    )
+
+
+def test_scan_layer_strict_contract_keeps_safe_integer_boundary_and_original_times():
+    from senior_contracts.wire import ScanLayerPayload
+
+    base = dict(
+        map_ref=dict(map_id="map", reference_revision=2**53 - 1),
+        map_generation="R1",
+        backend_boot="backend",
+        source_id="a" * 64,
+        sequence=2**53 - 1,
+        sampled_at=10.0,
+        expires_at=10.5,
+        remaining_s=0.5,
+        hit_count=2048,
+        preview_count=96,
+        display_mode="preview",
+        valid=True,
+    )
+    decoded = ScanLayerPayload.model_validate(base)
+    assert decoded.sequence == 2**53 - 1 and decoded.sampled_at == 10.0
+    with pytest.raises(ValidationError):
+        ScanLayerPayload.model_validate({**base, "sequence": 2**53})
+    with pytest.raises(ValidationError):
+        ScanLayerPayload.model_validate(
+            {**base, "map_ref": dict(map_id="map", reference_revision=2**53)}
+        )
+
+
+async def test_snapshot_collect_order_precedes_completion_and_delayed_send(snapshot_polls):
+    runtime = snapshot_polls
+    runtime.state.hold = asyncio.Event()
+    release = runtime.state.hold
+    await runtime.resume()
+    await asyncio.wait_for(runtime.state.entered.wait(), 1)
+    calls = runtime.state.calls
+    runtime.state.generation = "R2"
+    newer = asyncio.create_task(runtime.agent.publish_snapshot(ROBOT))
+    runtime.tasks.append(newer)
+    # Let the public entry reach the same collection gate as the periodic entry.
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert runtime.state.calls == calls
+    release.set()
+    fresh = await asyncio.wait_for(newer, 1)
+    assert fresh.map_generation == "R2"
+    assert fresh.publication_sequence > runtime.link.snapshots[-2].publication_sequence > 0
+
+
+async def test_new_link_collect_does_not_wait_for_retired_link_context(snapshot_polls):
+    runtime = snapshot_polls
+    runtime.state.hold = asyncio.Event()
+    release = runtime.state.hold
+    old = asyncio.create_task(runtime.agent.publish_snapshot(ROBOT))
+    runtime.tasks.append(old)
+    await asyncio.wait_for(runtime.state.entered.wait(), 1)
+    replacement = runtime.new_link(2)
+    runtime.agent._link, runtime.agent._epoch = replacement, replacement.epoch
+    runtime.state.generation = "R2"
+    fresh = await asyncio.wait_for(runtime.agent.publish_snapshot(ROBOT), 1)
+    assert fresh.publication_sequence == 1 and fresh.map_generation == "R2"
+    release.set()
+    await old
+    assert replacement.snapshots == [fresh]
+
+
+async def test_delayed_snapshot_send_keeps_original_collect_ordinal(rig):
+    from cloud.limits import CloudLimits
+    from cloud.runtime_relay import Hub
+    from heartbeat_test_support import RelaySocket
+    from vehicle_manager.agent.production_bindings import WebSocketLink
+
+    hub = Hub(CloudLimits())
+    socket = RelaySocket(hub, ROBOT)
+    entered, release = asyncio.Event(), asyncio.Event()
+
+    class DelayedLink(WebSocketLink):
+        async def send_snapshot(self, snapshot):
+            if snapshot.publication_sequence == 1:
+                entered.set()
+                await release.wait()
+            await super().send_snapshot(snapshot)
+
+    link = DelayedLink(socket, ROBOT, socket.connection.epoch)
+    rig.agent._link, rig.agent._epoch = link, link.epoch
+    old = asyncio.create_task(rig.agent.publish_snapshot(ROBOT))
+    try:
+        await asyncio.wait_for(entered.wait(), 1)
+        fresh = await asyncio.wait_for(rig.agent.publish_snapshot(ROBOT), 1)
+        assert fresh.publication_sequence == 2
+        assert hub.snapshots.get(ROBOT).sequence == 2
+        release.set()
+        previous = await asyncio.wait_for(old, 1)
+        assert previous.publication_sequence == 1
+        frames = [frame for frame in socket.sent if frame["type"] == "snapshot"]
+        assert [frame["seq"] for frame in frames] == [2, 1]
+        assert hub.snapshots.get(ROBOT).sequence == 2
+    finally:
+        release.set()
+        await asyncio.gather(old, return_exceptions=True)
+        rig.agent._link = None
+        await link.close()
+
+
+async def test_snapshot_sequence_exhaustion_closes_real_link_and_supervisor_reconnects(rig):
+    from cloud.limits import CloudLimits
+    from cloud.runtime_relay import Hub
+    from heartbeat_test_support import RelaySocket
+    from vehicle_manager.agent.production_bindings import WebSocketLink
+
+    hub = Hub(CloudLimits())
+    first_socket = RelaySocket(hub, ROBOT)
+    first = WebSocketLink(first_socket, ROBOT, first_socket.connection.epoch)
+    second_socket = None
+    task = await start(rig, first)
+    try:
+        await until(lambda: hub.snapshots.get(ROBOT) is not None)
+        context = rig.agent._snapshot_collection
+        assert context.link is first
+        context.sequence = 2**53 - 2
+        last = await rig.agent.publish_snapshot(ROBOT)
+        assert last.publication_sequence == 2**53 - 1
+        assert hub.snapshots.get(ROBOT).sequence == 2**53 - 1
+        # Supply the next connector result after exhaustion closes the current socket.
+        with pytest.raises(ConnectionError, match="sequence"):
+            await rig.agent.publish_snapshot(ROBOT)
+        assert first_socket.closed
+        second_socket = RelaySocket(hub, ROBOT)
+        second = WebSocketLink(second_socket, ROBOT, second_socket.connection.epoch)
+        rig.connector.add(second)
+        await until(lambda: rig.agent._link is second and hub.snapshots.get(ROBOT).sequence > 0)
+        assert second.epoch > first.epoch
+        assert rig.agent._snapshot_collection.sequence < 2**53 - 1
+        assert hub.snapshots.get(ROBOT).sequence == 1
+    finally:
+        await finish(task, rig)

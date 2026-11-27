@@ -27,7 +27,7 @@ def raw_header(**changes):
     return replace(base, **changes)
 
 
-def test_bridge_and_raw_restart_retire_old_data_without_restamping():
+def test_confirmed_boot_replacement_rejects_old_data_without_restamping():
     from senior_perception.vision.raw_capture import RawCaptureAdmission
 
     admission = RawCaptureAdmission(max_age_ms=300)
@@ -44,6 +44,10 @@ def test_bridge_and_raw_restart_retire_old_data_without_restamping():
         bridge_boot_id="boot-b",
         sequence=1,
     )
+    assert not admission.offer(
+        changed, bridge_gid="03" * 24, now_ros_ns=1_100_000_000, now_steady=10.1
+    )
+    admission.confirm_boot("boot-b")
     assert admission.offer(changed, bridge_gid="03" * 24, now_ros_ns=1_100_000_000, now_steady=10.1)
     generation = admission.generation
     assert not admission.offer(old, bridge_gid="03" * 24, now_ros_ns=1_100_000_000, now_steady=10.1)
@@ -55,7 +59,7 @@ def test_bridge_and_raw_restart_retire_old_data_without_restamping():
     assert admission.latest is changed
 
 
-def test_failed_frame_revokes_and_old_or_same_sequence_cannot_revive():
+def test_failed_frame_recovers_on_new_timestamp_without_sequence_gate():
     from senior_perception.vision.raw_capture import RawCaptureAdmission
 
     admission = RawCaptureAdmission(max_age_ms=300)
@@ -74,13 +78,21 @@ def test_failed_frame_revokes_and_old_or_same_sequence_cannot_revive():
         now_ros_ns=1_100_000_000,
         now_steady=10.1,
     )
-    fresh = replace(good, sequence=3)
+    fresh = replace(
+        good,
+        sequence=0,
+        time=sample_time(
+            stamp_ns=1_010_000_000,
+            received_ros_ns=1_010_000_001,
+            received_steady_ns=10_100_000_000,
+        ),
+    )
     assert admission.offer(
         fresh, bridge_gid=good.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.1
     )
 
 
-def test_source_conflict_invalidates_epoch_and_original_first_receipts_expire():
+def test_gid_epoch_changes_and_transport_age_do_not_reject_a_new_timestamp():
     from senior_perception.vision.raw_capture import RawCaptureAdmission
 
     admission = RawCaptureAdmission(max_age_ms=300)
@@ -88,22 +100,29 @@ def test_source_conflict_invalidates_epoch_and_original_first_receipts_expire():
     assert admission.offer(
         good, bridge_gid=good.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.1
     )
-    conflict = replace(good, raw_gid="04" * 24, sequence=2)
-    assert not admission.offer(
-        conflict, bridge_gid=good.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.1
+    changed = replace(
+        good,
+        raw_gid="",
+        bridge_gid="different-log-value",
+        source_epoch="epoch-b",
+        sequence=0,
+        time=sample_time(
+            stamp_ns=1_010_000_000,
+            received_ros_ns=1_010_000_001,
+            received_steady_ns=10_100_000_000,
+        ),
     )
-    assert admission.latest is None
+    assert admission.offer(
+        changed, bridge_gid=good.bridge_gid, now_ros_ns=100_000_000_000, now_steady=100.0
+    )
+    assert admission.latest is changed and admission.latest.time is changed.time
     assert not admission.offer(
         replace(good, sequence=3),
         bridge_gid=good.bridge_gid,
         now_ros_ns=1_100_000_000,
         now_steady=10.1,
     )
-    newer = replace(good, source_epoch="epoch-b", sequence=1)
-    assert not admission.offer(
-        newer, bridge_gid=good.bridge_gid, now_ros_ns=1_100_000_000, now_steady=10.31
-    )
-    assert admission.latest is None
+    assert admission.latest is changed
 
 
 def test_graph_disappearing_revokes_current_source_without_old_queue_revival():
@@ -225,7 +244,7 @@ def test_group_rejects_same_stamp_from_different_bridge_boots():
     assert not group.paired("depth", "info")
 
 
-def test_group_recovers_bridge_restart_without_reviving_retired_boot():
+def test_group_accepts_confirmed_boot_replacement_without_accepting_old_boot():
     from senior_perception.vision.raw_capture import RawCaptureGroup
 
     group = RawCaptureGroup(("depth", "info"), max_age_ms=300)
@@ -237,6 +256,8 @@ def test_group_recovers_bridge_restart_without_reviving_retired_boot():
     replacement = replace(
         first, source_epoch="new-depth", bridge_boot_id="boot-b", bridge_gid="04" * 24
     )
+    assert not group.offer("depth", replacement, bridge_gid=replacement.bridge_gid, **args)
+    group.confirm_boot("boot-b")
     assert group.offer("depth", replacement, bridge_gid=replacement.bridge_gid, **args)
     assert not group.paired("depth", "info")
     assert not group.offer("info", replace(info, sequence=2), bridge_gid=info.bridge_gid, **args)
@@ -260,19 +281,26 @@ def test_group_graph_loss_revokes_all_without_waiting_for_another_message():
     assert not group.offer("info", info, bridge_gid=info.bridge_gid, **args)
 
 
-def test_legacy_receipt_age_override_cannot_extend_shared_one_second_policy():
-    import pytest
+def test_legacy_age_arguments_do_not_expire_original_raw_data():
     from senior_perception.vision.raw_capture import RawCaptureAdmission
 
-    with pytest.raises(ValueError):
-        RawCaptureAdmission(max_age_ms=3000)
+    RawCaptureAdmission(max_age_ms=3000)
     admission = RawCaptureAdmission(max_age_ms=3000, hard_limit_ms=5000)
     good = raw_header()
-    assert not admission.offer(
+    assert admission.offer(
         good, bridge_gid=good.bridge_gid, now_ros_ns=3_000_000_000, now_steady=12.0
     )
-    assert not admission.offer(
-        replace(good, sequence=2),
+    fresh = replace(
+        good,
+        sequence=0,
+        time=sample_time(
+            stamp_ns=1_010_000_000,
+            received_ros_ns=1_010_000_001,
+            received_steady_ns=10_100_000_000,
+        ),
+    )
+    assert admission.offer(
+        fresh,
         bridge_gid=good.bridge_gid,
         now_ros_ns=4_100_000_000,
         now_steady=13.1,

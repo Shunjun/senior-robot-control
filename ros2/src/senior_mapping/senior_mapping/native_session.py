@@ -5,24 +5,29 @@ catalog/database and never runs ROS spin or graph work on a motion callback.
 """
 
 import asyncio
-import base64
 import hashlib
 import json
 import math
 import os
 import shutil
+import stat
+import tempfile
+import time
 import uuid
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
+
+from senior_perception.vision.raw_capture import RawCaptureHeader
 
 from senior_mapping.active import ActiveMap
 from senior_mapping.archive import MapArchive
 from senior_mapping.catalog import CatalogEntry, MapCatalog
 from senior_mapping.checkpoint_worker import CheckpointWorker
 from senior_mapping.checkpoints import MapCheckpoints
-from senior_mapping.evidence import MappingObservation, OccupancyThresholds, RangeRay, SceneHit
-from senior_mapping.occupancy import OccupancyMaintainer
+from senior_mapping.evidence import OccupancyThresholds, SourceIdentity, VerifiedBasis
+from senior_mapping.fixed_evidence import FixedEvidenceConsumer
 from senior_mapping.references import (
     AnchoredWaypoint,
     AnchorPose,
@@ -30,9 +35,15 @@ from senior_mapping.references import (
     GridExtent,
     SlamSnapshot,
     WaypointBinding,
+    _watermark_payload,
+    encode_fixed_snapshot,
+    migrate_legacy,
+    snapshot_from_fixed,
 )
+from senior_mapping.shared_scan import ScanKey, read_latest_scan
 from senior_mapping.workspace import WorkspaceGrid, render_stable_grid
 from vehicle_core.errors import DomainError, ErrorCode
+from vehicle_core.sample_time import SampleTime
 from vehicle_core.values import MapRef, Pose2D
 
 
@@ -40,16 +51,21 @@ async def transferred(reply: dict[str, Any]) -> dict[str, Any]:
     def read() -> dict[str, Any]:
         path = Path(reply["path"])
         # Only a private, owned regular file is accepted from the already verified IPC peer.
-        metadata = path.lstat()
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or metadata.st_uid != os.getuid()
-            or metadata.st_mode & 0o077
-            or metadata.st_size > 8 * 1024 * 1024
-        ):
-            raise DomainError(ErrorCode.VALIDATION, "mapping transfer is not private and bounded")
-        payload = path.read_bytes()
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            metadata = os.fstat(stream.fileno())
+            if (
+                not stat.S_ISREG(metadata.st_mode)
+                or metadata.st_uid != os.getuid()
+                or metadata.st_mode & 0o077
+                or metadata.st_size > 8 * 1024 * 1024
+            ):
+                raise DomainError(
+                    ErrorCode.VALIDATION, "mapping transfer is not private and bounded"
+                )
+            payload = stream.read(8 * 1024 * 1024 + 1)
+        if len(payload) > 8 * 1024 * 1024:
+            raise DomainError(ErrorCode.VALIDATION, "mapping transfer grew beyond budget")
         if hashlib.sha256(payload).hexdigest() != reply["sha256"]:
             raise DomainError(ErrorCode.CONFLICT, "mapping transfer changed")
         result = json.loads(payload)
@@ -90,11 +106,18 @@ class NativeGraph:
         self, directory: Path, snapshot: Callable[[], SlamSnapshot]
     ) -> SlamSnapshot:
         receipt = await transferred(await self.request("capture", boot_id=self.boot))
-        captured = await asyncio.to_thread(snapshot)
+        captured = snapshot()
         if (
             receipt["boot_id"] != self.boot
             or receipt["sequence"] != self.sequence
             or not _same_anchors(receipt, captured)
+            or (
+                captured.fixed is not None
+                and (
+                    captured.fixed.watermark.backend_boot != receipt["boot_id"]
+                    or captured.fixed.watermark.graph_sequence != receipt["sequence"]
+                )
+            )
         ):
             raise DomainError(
                 ErrorCode.CONFLICT, "native graph and stable layer are different cuts"
@@ -121,6 +144,10 @@ class NativeGraph:
             # A native capture slot is consumed only after copying and verifying both files.
             for suffix in (".posegraph", ".data"):
                 Path(str(prefix) + suffix).unlink()
+            # The native response is sent after both writers close. This owner
+            # serially consumes the verified pair before requesting another slot.
+            # rmdir preserves unknown files and reports an incomplete release.
+            prefix.parent.rmdir()
 
         self._io = asyncio.create_task(asyncio.to_thread(materialize))
         await asyncio.shield(self._io)
@@ -135,6 +162,13 @@ class NativeGraph:
             ]
             return (
                 _same_anchors(proof, snapshot)
+                and (
+                    snapshot.fixed is None
+                    or (
+                        snapshot.fixed.watermark.backend_boot == proof["boot_id"]
+                        and snapshot.fixed.watermark.graph_sequence == proof["sequence"]
+                    )
+                )
                 and hashlib.sha256(b"".join(digests)).hexdigest() == proof["pair_digest"]
             )
 
@@ -175,6 +209,9 @@ class NativeMappingBackend:
         self.robot_id, self.home = robot_id, home
         self.home_id, self.max_delay_s = home_id, max_delay_s
         self.idle = False
+        # Physical admission remains unresolved until an evidenced profile is supplied.
+        self.geometry_profile = None
+        self.clock_ns = time.monotonic_ns
 
     async def stopped(self) -> bool:
         result = await self.client.request("map.backend.status")
@@ -239,10 +276,22 @@ class NativeSession:
         self._navigation_grid: WorkspaceGrid | None = None
         self._navigation_generation: str | None = None
         self._navigation_sequence = 0
-        self._navigation_at = float("-inf")
-        self.occupancy = OccupancyMaintainer(
-            OccupancyThresholds(0.05, 3, 1.0, 3, 1.0, 0.1, 1.0, 1.0, 2.0, -1.0, -5.0, 5.0, 2.0, 0.5)
+        thresholds = OccupancyThresholds(
+            0.05, 3, 1.0, 3, 1.0, 0.1, 1.0, 1.0, 2.0, -1.0, -5.0, 5.0, 2.0, 0.5
         )
+        self._evidence = FixedEvidenceConsumer(
+            thresholds, profile=backend.geometry_profile, clock=backend.clock_ns
+        )
+        self._fixed_retired = False
+        self._scan_revision = 0
+        self._last_scan_capture = None
+        self._scan_path = None
+        self._scan_nonce = self._host_boot_id = ""
+        self._graph_cut = None
+        self._fixed_bound = False
+        self._installed_watermark = None
+        self._capturing = False
+        self._notified_sequence = 0
 
     async def open(self, *, restore: bool, seed: Pose2D | None = None) -> None:
         fields: dict[str, Any] = {
@@ -268,6 +317,7 @@ class NativeSession:
                 )
                 reply = await self.graph.request("start", **fields)
                 self.graph.boot = reply["boot_id"]
+                self._configure_scan_channel(reply)
                 initial = await transferred(reply["loaded"])
                 if not _same_anchors(initial, loaded.snapshot):
                     raise DomainError(
@@ -275,21 +325,26 @@ class NativeSession:
                     )
                 # A load/seed is not localization. Matching is completed by qualified input below.
                 self._restore_snapshot = loaded.snapshot
-                self._pending_grid = render_stable_grid(
-                    loaded.snapshot.map_ref,
-                    uuid.uuid4().hex,
-                    loaded.snapshot.grid,
-                    loaded.snapshot.cell_size_m,
-                    loaded.snapshot.occupancy,
+                self._legacy_archive_digest = loaded.original_digest
+                self._pending_grid = (
+                    loaded.snapshot.fixed.grid
+                    if loaded.snapshot.fixed is not None
+                    else render_stable_grid(
+                        loaded.snapshot.map_ref,
+                        uuid.uuid4().hex,
+                        loaded.snapshot.grid,
+                        loaded.snapshot.cell_size_m,
+                        loaded.snapshot.occupancy,
+                    )
                 )
                 self._poses = {
                     a.anchor_id: a.pose for a in loaded.snapshot.anchors if a.pose is not None
                 }
-                self.occupancy.restore(loaded.snapshot.occupancy, bindings=loaded.snapshot.bindings)
                 await self.backend.home.restore(loaded.snapshot, loaded.home_id)
         else:
             reply = await self.graph.request("start", **fields)
             self.graph.boot = reply["boot_id"]
+            self._configure_scan_channel(reply)
             self._restore_snapshot = None
         await self.graph.request("gate", boot_id=self.graph.boot, accepting=True)
         # A start acknowledgement is insufficient; require a bounded first commit.
@@ -326,9 +381,27 @@ class NativeSession:
             return
         self._activated = True
         await self._publish_reference()
+        selection = await self.backend.catalog.selection()
+        if (
+            selection.state == "ready"
+            and selection.map_ref == self.entry.map_ref
+            and selection.token
+        ):
+            await self.graph.request(
+                "reference",
+                boot_id=self.graph.boot,
+                active=True,
+                navigation_selected=True,
+                map_id=self.entry.map_ref.map_id,
+                reference_revision=self.entry.map_ref.reference_revision,
+                generation=self.active.map_generation,
+                selection_token=selection.token,
+                selection_generation=selection.generation,
+            )
         self._task = asyncio.create_task(self._worker.run())
         if self.active.change_sequence > self._durable_sequence:
             self._worker.changed(self.active.change_sequence)
+            self._notified_sequence = self.active.change_sequence
 
     def grid(self) -> WorkspaceGrid | None:
         if self.active is None:
@@ -337,81 +410,240 @@ class NativeSession:
             return self._navigation_grid
         return self.active.grid()
 
+    def _configure_scan_channel(self, reply: dict[str, Any]) -> None:
+        if reply.get("qualified_scan_schema") != 1:
+            raise DomainError(
+                ErrorCode.UNAVAILABLE, "qualified scan owner requires a coordinated rebuild"
+            )
+        self._scan_path = Path(reply["qualified_scan_path"])
+        self._scan_nonce, self._host_boot_id = reply["qualified_scan_nonce"], reply["host_boot_id"]
+
+    def _retire_fixed(self) -> None:
+        self._fixed_retired = True
+        self.localized = False
+        self._navigation_grid = None
+        self._navigation_generation = None
+        self._evidence.reset()
+        if self.active is not None and self._fixed_bound:
+            try:
+                self.active.retire_fixed(self.source)
+            except DomainError as exc:
+                if exc.code is not ErrorCode.CONFLICT:
+                    raise
+
     async def ingest(self, observation: Any) -> None:
         async with self._lock:
-            reply = await self.graph.request(
-                "next", boot_id=self.graph.boot, sequence=self.graph.sequence + 1
-            )
-            if reply.get("pending"):
+            if self._capturing or self._fixed_retired:
                 return
-            cut = await transferred(reply)
-            await self._apply_cut(cut)
-            await self._refresh_navigation()
-            if self._task is not None:
-                assert self.active is not None
-                self._worker.changed(self.active.change_sequence)
+            try:
+                reply = await self.graph.request(
+                    "next", boot_id=self.graph.boot, sequence=self.graph.sequence + 1
+                )
+                if not reply.get("pending"):
+                    await self._apply_cut(await transferred(reply))
+                await self._consume_latest_scan()
+                await self._refresh_navigation()
+                if (
+                    self._task is not None
+                    and self.active is not None
+                    and self.active.change_sequence > self._notified_sequence
+                ):
+                    self._worker.changed(self.active.change_sequence)
+                    self._notified_sequence = self.active.change_sequence
+            except (ValueError, KeyError, TypeError, OverflowError) as exc:
+                self._retire_fixed()
+                raise DomainError(ErrorCode.VALIDATION, "mapping batch is invalid") from exc
+            except BaseException:
+                self._retire_fixed()
+                raise
+
+    async def _consume_latest_scan(self) -> None:
+        if self.active is None or not self._fixed_bound or self._scan_path is None:
+            return
+        result = await asyncio.to_thread(
+            read_latest_scan,
+            self._scan_path,
+            self._scan_revision,
+            nonce=self._scan_nonce,
+            backend_boot=self.graph.boot,
+            host_boot_id=self._host_boot_id,
+        )
+        if not result.changed:
+            return
+        row = result.envelope
+        self._scan_revision = row.revision
+        if row.status != "valid":
+            # An unbound bootstrap status predates any reference/acceptance floor.
+            # It grants no scan authority and cannot revoke a newly bound reference.
+            if (
+                row.status == "invalid"
+                and row.basis is None
+                and row.acceptance_floor_steady_ns == 0
+                and self._last_scan_capture is None
+            ):
+                self._evidence.reset()
+                return
+            if row.reason in ("starting", "reference_changed") and row.status != "retired":
+                self._evidence.reset()
+                return
+            self._retire_fixed()
+            return
+        cut = self.active.fixed_snapshot(self.source)
+        basis = row.basis
+        if basis is None:
+            return
+        if basis.token != (
+            self.entry.map_ref.map_id,
+            self.entry.map_ref.reference_revision,
+            self.active.map_generation,
+        ):
+            if self._installed_watermark is not None and basis.token == (
+                self._installed_watermark.map_ref.map_id,
+                self._installed_watermark.map_ref.reference_revision,
+                self._installed_watermark.reference_generation,
+            ):
+                self._evidence.reset()  # observed old R cannot authorize the new graph
+                return
+            self._retire_fixed()
+            return
+        verified = VerifiedBasis(
+            basis.anchor_id,
+            basis.map_basis,
+            basis.odom_basis,
+            basis.graph_sequence,
+            basis.anchor_digest,
+            self.entry.map_ref,
+            basis.reference_generation,
+        )
+        if (basis.graph_sequence, basis.anchor_digest) != (
+            cut.watermark.graph_sequence,
+            cut.watermark.anchor_digest,
+        ):
+            self._evidence.reset()
+            return
+        graph = self._graph_cut
+        anchor = next((a for a in graph["anchors"] if str(a["id"]) == basis.anchor_id), None)
+        if (
+            anchor is None
+            or basis.anchor_id != str(graph["keyframe_id"])
+            or basis.map_basis != Pose2D(anchor["x"], anchor["y"], anchor["yaw"])
+            or basis.odom_basis != Pose2D(*graph["odom"])
+            or row.acceptance_floor_steady_ns < self._reference_floor_ns
+        ):
+            raise DomainError(
+                ErrorCode.CONFLICT, "scan TF/basis/floor differs from verified graph cut"
+            )
+        if row.acceptance_floor is not None and (
+            row.key.source != row.acceptance_floor.source
+            or row.key.stamp_ns is None
+            or row.acceptance_floor.stamp_ns is None
+            or row.key.stamp_ns <= row.acceptance_floor.stamp_ns
+        ):
+            self._retire_fixed()
+            return
+        previous = self._last_scan_capture
+        current = row.scan.capture.time
+        if previous is not None and current.stamp_ns <= previous.stamp_ns:
+            # A repeated/older capture contributes nothing; it does not erase history.
+            return
+        self.active.accept_scan(self.source, row.scan, verified)
+        self._last_scan_capture = current
+        try:
+            self._evidence.consume(self.active, self.source, row.scan, verified)
+        except DomainError as exc:
+            if exc.code is ErrorCode.VALIDATION and "fixed_capacity" in str(exc):
+                self._evidence.reason = "coverage_limit"
+                await self.graph.request(
+                    "reference",
+                    boot_id=self.graph.boot,
+                    active=True,
+                    sequence=self.graph.sequence,
+                    map_id=self.entry.map_ref.map_id,
+                    reference_revision=self.entry.map_ref.reference_revision,
+                    generation=self.active.map_generation,
+                    acceptance_floor_steady_ns=self._reference_floor_ns,
+                    coverage_reason="coverage_limit",
+                )
+                return
+            raise
 
     @property
     def map_generation(self) -> str | None:
         return self.active.map_generation if self.active is not None and self.localized else None
 
     async def _refresh_navigation(self) -> None:
-        if self.active is None or not self.localized:
+        if (
+            self.active is None
+            or not self.localized
+            or not self._fixed_bound
+            or self._fixed_retired
+            or self._paused
+        ):
             return
-        generation = self.active.map_generation
-        if self._navigation_generation != generation:
-            if self._activated:
-                await self.graph.request("reference", boot_id=self.graph.boot, active=False)
-            self._navigation_grid = None
-            self._navigation_generation = None
-        now = asyncio.get_running_loop().time()
-        interval = 1.0 if self.backend.idle else 5.0
-        if self._navigation_grid is None or now - self._navigation_at >= interval:
-            reply = await self.graph.request(
-                "grid", boot_id=self.graph.boot, sequence=self.graph.sequence
+        cut = self.active.fixed_snapshot(self.source)
+        if cut.watermark == self._installed_watermark:
+            return
+        if self._navigation_generation != cut.watermark.reference_generation:
+            await self.graph.request(
+                "reference",
+                boot_id=self.graph.boot,
+                active=True,
+                sequence=self.graph.sequence,
+                map_id=self.entry.map_ref.map_id,
+                reference_revision=self.entry.map_ref.reference_revision,
+                generation=cut.watermark.reference_generation,
+                acceptance_floor_steady_ns=self._reference_floor_ns,
             )
-            self._navigation_at = now
-            if not reply.get("pending"):
-                cut = await transferred(reply)
-                if cut["boot_id"] != self.graph.boot or cut["sequence"] != self.graph.sequence:
-                    raise DomainError(ErrorCode.CONFLICT, "native raster identity changed")
-                cells = base64.b64decode(cut["cells_b64"], validate=True)
-                self._navigation_grid = WorkspaceGrid(
-                    self.entry.map_ref,
-                    cut["grid_id"],
-                    cut["width"],
-                    cut["height"],
-                    cut["resolution"],
-                    Pose2D(*cut["origin"]),
-                    cells,
-                    waypoint_writes=True,
-                )
-                self._navigation_generation = generation
-                self._navigation_sequence = self.graph.sequence
-        await self._publish_reference()
+        path = (
+            self._capture_root / "fixed.json"
+            if self._capture_root
+            else self._scan_path.parent / "fixed.json"
+        )
+        payload = encode_fixed_snapshot(cut, transfer=True)
+
+        def write():
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(fd, "wb") as stream:
+                os.fchmod(stream.fileno(), 0o600)
+                stream.write(payload)
+
+        await asyncio.to_thread(write)
+        try:
+            ack = await self.graph.request(
+                "install_fixed",
+                boot_id=self.graph.boot,
+                path=str(path),
+                sha256=hashlib.sha256(payload).hexdigest(),
+                acceptance_floor_steady_ns=self._reference_floor_ns,
+                map_id=self.entry.map_ref.map_id,
+                reference_revision=self.entry.map_ref.reference_revision,
+                generation=self.active.map_generation,
+                coverage_reason="coverage_limit"
+                if self._evidence.reason == "coverage_limit"
+                else None,
+            )
+            if (
+                ack.get("watermark") != _watermark_payload(cut.watermark)
+                or ack.get("grid_id") != cut.grid.grid_id
+                or self._fixed_retired
+            ):
+                raise DomainError(ErrorCode.CONFLICT, "bridge fixed ACK changed cut")
+            self._installed_watermark = cut.watermark
+            self._navigation_grid = replace(cut.grid, display_only=False, waypoint_writes=True)
+            self._navigation_generation = cut.watermark.reference_generation
+            self._navigation_sequence = cut.watermark.graph_sequence
+        finally:
+            path.unlink(missing_ok=True)
 
     async def _publish_reference(self) -> None:
-        if not self._activated or self.active is None:
-            return
-        if (
-            self._navigation_generation != self.active.map_generation
-            or self._navigation_grid is None
-        ):
+        if self._fixed_retired:
             await self.graph.request("reference", boot_id=self.graph.boot, active=False)
             return
-        await self.graph.request(
-            "reference",
-            boot_id=self.graph.boot,
-            active=True,
-            sequence=self.graph.sequence,
-            grid_sequence=self._navigation_sequence,
-            map_id=self.entry.map_ref.map_id,
-            reference_revision=self.entry.map_ref.reference_revision,
-            generation=self.active.map_generation,
-        )
+        await self._refresh_navigation()
 
     async def edit_home(self, pose: Pose2D, expected_revision: int) -> None:
-        async with self._lock, self.backend.home.transaction():
+        async with self.backend.home.transaction(), self._lock:
             if self.active is None or not self.localized:
                 raise DomainError(ErrorCode.LOCALIZATION_UNAVAILABLE, "Home needs a localized map")
             await self.backend.home.edit(
@@ -426,13 +658,48 @@ class NativeSession:
         await self._save(0)
 
     async def _apply_cut(self, cut: dict[str, Any]) -> None:
-        # Cancellation must not release the session lock while its writer still runs.
-        work = asyncio.create_task(asyncio.to_thread(self._apply, cut))
-        try:
-            await asyncio.shield(work)
-        except asyncio.CancelledError:
-            await work
-            raise
+        if (
+            self.active is None
+            and self._restore_snapshot is not None
+            and self._restore_snapshot.fixed is None
+        ):
+            # Exactly one legacy cut may consume the diagnostic native raster.
+            prior = self._restore_snapshot
+            reply = await self.graph.request(
+                "grid", boot_id=self.graph.boot, sequence=cut["sequence"], purpose="migrate_legacy"
+            )
+            native = None
+            if not reply.get("pending"):
+                import base64
+
+                raster = await transferred(reply)
+                if raster["boot_id"] != self.graph.boot or raster["sequence"] != cut["sequence"]:
+                    raise DomainError(ErrorCode.CONFLICT, "legacy raster belongs to another cut")
+                native = WorkspaceGrid(
+                    prior.map_ref,
+                    raster["grid_id"],
+                    raster["width"],
+                    raster["height"],
+                    raster["resolution"],
+                    Pose2D(*raster["origin"]),
+                    base64.b64decode(raster["cells_b64"], validate=True),
+                )
+            fixed = migrate_legacy(
+                prior,
+                legacy_grid=self._pending_grid,
+                native_legacy_grid=native,
+                original_archive_digest=self._legacy_archive_digest,
+            )
+            with tempfile.TemporaryDirectory() as raw:
+                prior.write(Path(raw))
+                audit = prior.legacy_json or (Path(raw) / "occupancy.json").read_bytes()
+            self._restore_snapshot = snapshot_from_fixed(
+                fixed,
+                odom_owner=prior.odom_owner,
+                review_required=prior.review_required,
+                legacy_json=audit,
+            )
+        self._apply(cut)
 
     def _apply(self, cut: dict[str, Any]) -> None:
         if (
@@ -446,11 +713,20 @@ class NativeSession:
         anchor_id = str(cut["keyframe_id"])
         anchor_pose = frames[anchor_id]
         sensor = Pose2D(*cut["sensor"])
+        raw_capture = cut["capture"]
+        capture = RawCaptureHeader(**{**raw_capture, "time": SampleTime(**raw_capture["time"])})
+        identity = SourceIdentity.from_key(ScanKey.of(self.graph.boot, capture))
+        if (
+            self._fixed_bound
+            and identity != self.active.fixed_snapshot(self.source).watermark.source
+        ):
+            self._retire_fixed()
+            raise DomainError(ErrorCode.CONFLICT, "graph source changed within fixed session")
         if self.active is None:
             if self._restore_snapshot is None:
                 self.active = ActiveMap(self.entry.map_ref, "odom", 0.05)
                 self.active.bind_verified_source(
-                    self.source, backend_boot=self.graph.boot, source_epoch=self.graph.boot
+                    self.source, backend_boot=self.graph.boot, source_epoch=identity.source_epoch
                 )
             else:
                 # Check saved geometry before creating a restored writer.
@@ -463,46 +739,11 @@ class NativeSession:
                     self._restore_snapshot,
                     self.source,
                     backend_boot=self.graph.boot,
-                    source_epoch=self.graph.boot,
+                    source_epoch=identity.source_epoch,
                 )
-        self.occupancy.reproject(self._poses, frames)
         self._poses = frames
-        rays, hits = [], []
-        for i, distance in enumerate(cut["ranges"]):
-            angle = cut["angle_min"] + i * cut["angle_increment"]
-            valid = distance is not None and cut["range_min"] <= distance <= cut["range_max"]
-            rays.append(RangeRay(angle, distance if valid else 0.0, valid, False, None))
-            if valid:
-                heading = sensor.yaw + angle
-                hits.append(
-                    SceneHit(
-                        sensor.x + distance * math.cos(heading),
-                        sensor.y + distance * math.sin(heading),
-                        "unknown_static",
-                    )
-                )
-        observation = MappingObservation(
-            self.entry.map_ref,
-            anchor_id,
-            sensor,
-            cut["stamp"],
-            tuple(rays),
-            tuple(hits),
-            (False,) * len(rays),
-            (False,) * len(rays),
-            1.0,
-            True,
-            False,
-            0.0,
-        )
-        delta = self.occupancy.update(observation)
-        if len(self.occupancy.snapshot().cells) > 100000:
-            raise DomainError(ErrorCode.UNAVAILABLE, "stable map cell budget exhausted")
-        points = [(p.x, p.y) for p in frames.values()] + [(h.x, h.y) for h in hits]
-        points.extend(
-            ((item.cell[0] + 0.5) * 0.05, (item.cell[1] + 0.5) * 0.05)
-            for item in self.occupancy.snapshot().cells
-        )
+        # Raw graph hits are localization facts, never fixed classification.
+        points = [(p.x, p.y) for p in frames.values()]
         x0 = math.floor(min(p[0] for p in points) / 0.05) - 1
         y0 = math.floor(min(p[1] for p in points) / 0.05) - 1
         width = math.ceil(max(p[0] for p in points) / 0.05) - x0 + 2
@@ -520,8 +761,7 @@ class NativeSession:
             tuple(AnchorPose(k, v, True) for k, v in frames.items()),
             GridExtent(width, height, x0 * 0.05, y0 * 0.05),
         )
-        changes = self.occupancy.bindings(delta, frames)
-        self.active.commit(self.source, cut["sequence"], anchor_id, anchors, changes)
+        self.active.commit(self.source, cut["sequence"], anchor_id, anchors, ())
         if self.graph.sequence == 0 and self._restore_snapshot is None:
             self.active.update_waypoints(
                 self.source,
@@ -532,13 +772,48 @@ class NativeSession:
                     ),
                 ),
             )
+        if not self._fixed_bound:
+            self._reference_floor_ns = self.backend.clock_ns()
+            self.active.bind_fixed_context(
+                self.source,
+                source_identity=identity,
+                host_boot_id=self._host_boot_id,
+                acceptance_floor=None,
+                acceptance_floor_steady_ns=self._reference_floor_ns,
+                accepting=lambda: not self._fixed_retired,
+                clock=self.backend.clock_ns,
+                profiles=self._evidence.profiles(),
+            )
+            self._fixed_bound = True
+        elif self._graph_cut is not None and self.active.map_generation != self._graph_cut.get(
+            "generation"
+        ):
+            self._reference_floor_ns = self.backend.clock_ns()
+            self._evidence.reset()
+        self._graph_cut = {**cut, "generation": self.active.map_generation}
         self.graph.sequence = cut["sequence"]
         self.localized = True
 
     def _matches(self, cut: dict[str, Any], sensor: Pose2D) -> bool:
         # Confirmation uses saved stable geometry, not the new scan inserted into SLAM itself.
         assert self._restore_snapshot is not None
-        cells = {item.cell for item in self._restore_snapshot.occupancy.cells}
+        saved = self._restore_snapshot
+        if saved.fixed is not None:
+            grid = saved.fixed.grid
+            cells = {
+                (
+                    math.floor((grid.origin.x + (i % grid.width) * grid.resolution) / 0.05),
+                    math.floor((grid.origin.y + (i // grid.width) * grid.resolution) / 0.05),
+                )
+                for i, value in enumerate(grid.cells)
+                if value == 100
+            }
+            # Empty authoritative occupancy cannot provide a geometric veto;
+            # the verified native resume/matcher remains localization authority.
+            if not cells:
+                return True
+        else:
+            cells = {item.cell for item in saved.occupancy.cells}
         total = matched = 0
         for i, distance in enumerate(cut["ranges"]):
             if distance is None or not cut["range_min"] <= distance <= cut["range_max"]:
@@ -551,27 +826,41 @@ class NativeSession:
         return total >= 20 and matched / total >= 0.7
 
     async def _save(self, _: int) -> None:
-        async with self._lock, self.backend.home.transaction():
-            assert self.active is not None
-            succeeded = False
-            barrier = await self.graph.request("gate", boot_id=self.graph.boot, accepting=False)
-            while self.graph.sequence < barrier["sequence"]:
-                cut = await transferred(
-                    await self.graph.request(
-                        "next", boot_id=self.graph.boot, sequence=self.graph.sequence + 1
+        async with self.backend.home.transaction():
+            async with self._lock:
+                assert self.active is not None
+                self._capturing = True
+                try:
+                    barrier = await self.graph.request(
+                        "gate", boot_id=self.graph.boot, accepting=False
                     )
-                )
-                await self._apply_cut(cut)
+                    while self.graph.sequence < barrier["sequence"]:
+                        reply = await self.graph.request(
+                            "next", boot_id=self.graph.boot, sequence=self.graph.sequence + 1
+                        )
+                        if reply.get("pending"):
+                            raise DomainError(
+                                ErrorCode.CONFLICT, "capture drain lost a graph commit"
+                            )
+                        await self._apply_cut(await transferred(reply))
+                    await self._refresh_navigation()
+                    await self.backend.home(
+                        self.entry.map_ref,
+                        self.home_id,
+                        self.active,
+                        self.source,
+                        self._poses,
+                        before=True,
+                    )
+                except BaseException:
+                    self._retire_fixed()
+                    self._paused = True
+                    self._capturing = False
+                    raise
+            # Immutable graph/fixed cut is frozen by the existing archive barrier.
+            # Neither manager intake lock nor Q callback lock is held for disk I/O.
+            succeeded = False
             try:
-                await self._refresh_navigation()
-                await self.backend.home(
-                    self.entry.map_ref,
-                    self.home_id,
-                    self.active,
-                    self.source,
-                    self._poses,
-                    before=True,
-                )
                 selection = await self.backend.catalog.selection()
                 self.entry = await self.active.save_checkpoint(
                     self.source,
@@ -582,6 +871,7 @@ class NativeSession:
                     if selection.map_ref == self.entry.map_ref
                     else None,
                 )
+                self._durable_sequence = self.repository.saved_change_sequence
                 await self.backend.home(
                     self.entry.map_ref,
                     self.home_id,
@@ -590,13 +880,38 @@ class NativeSession:
                     self._poses,
                     before=False,
                 )
-                self._durable_sequence = self.active.change_sequence
                 succeeded = True
             finally:
-                if not succeeded:
-                    self._paused = True
-                if succeeded and not self._paused:
-                    await self.graph.request("gate", boot_id=self.graph.boot, accepting=True)
+                async with self._lock:
+                    # C2 and free confidence retain only consecutive original
+                    # frames. A skipped mailbox sequence resets their windows on
+                    # the first post-capture scan; no replay fills the gap.
+                    self._capturing = False
+                    if not succeeded:
+                        self._paused = True
+                        self._retire_fixed()
+                    elif not self._paused:
+                        try:
+                            await self.graph.request(
+                                "gate", boot_id=self.graph.boot, accepting=True
+                            )
+                        except BaseException:
+                            self._paused = True
+                            self._retire_fixed()
+                            raise
+
+    async def export_bundle(self, destination: Path) -> None:
+        if self.active is not None and self.localized and not self._fixed_retired:
+            await self._save(0)
+        # The existing Home/save serialization also protects the checkpoint lease
+        # from a concurrent writer; graph/fixed intake and Q remain independent.
+        async with self.backend.home.transaction():
+            async with self.repository.open(self.entry) as loaded:
+                archive = self.repository._archive
+                archive._home_waypoint_id = self.home_id
+                await archive.export_checkpoint(
+                    loaded.snapshot, loaded.graph_directory, destination
+                )
 
     @property
     def error(self) -> Exception | None:
@@ -615,6 +930,7 @@ class NativeSession:
         await self._save(0)
 
     async def abort(self) -> None:
+        self._retire_fixed()
         await self.graph.request("stop")
         if self._capture_root is not None:
             await asyncio.to_thread(shutil.rmtree, self._capture_root, True)

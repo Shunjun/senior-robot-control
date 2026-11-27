@@ -133,6 +133,8 @@ def test_depth_admission_preserves_receipt_and_invalidates_replaced_generation()
             "calibration-a",
             valid,
             measurement_steady=received_steady,
+            boot_id="depth-boot",
+            capture_generation=1 if epoch == "a" else 2,
         )
 
     admission = DepthAdmission(max_age_ms=500)
@@ -145,7 +147,9 @@ def test_depth_admission_preserves_receipt_and_invalidates_replaced_generation()
     )
     assert admission.latest is None
     assert admission.generation > generation
-    assert admission.accept(header(epoch="b"), now_ros_ns=1_100_000_000, now_steady=10.1)
+    assert admission.accept(
+        header(epoch="b", stamp_ns=1_010_000_000), now_ros_ns=1_100_000_000, now_steady=10.1
+    )
     current = admission.generation
     assert not admission.accept(
         header(epoch="a", sequence=99, valid=False), now_ros_ns=1_100_000_000, now_steady=10.1
@@ -163,7 +167,7 @@ def test_depth_ros_correction_does_not_delay_fresh_original_capture():
         "camera",
         1,
         1_200_000_000,
-        1_100_000_000,
+        1_300_000_000,
         10.1,
         "frame",
         "cal",
@@ -177,13 +181,14 @@ def test_depth_ros_correction_does_not_delay_fresh_original_capture():
         assert not admission.usable(now_ros_ns=wall, now_steady=10.5)
 
 
-def test_queued_depth_cannot_receive_a_new_lifetime():
+def test_queued_depth_is_received_without_renewing_algorithm_evidence():
     from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
 
     admission = DepthAdmission(max_age_ms=500)
     h = DepthHeader("a", "camera", 1, 1, 1, 10.6, "frame", "cal", True, measurement_steady=10.0)
-    assert not admission.accept(h, now_ros_ns=100, now_steady=10.6)
-    assert admission.latest is None
+    assert admission.accept(h, now_ros_ns=100, now_steady=10.6)
+    assert admission.latest is h
+    assert not admission.usable(now_ros_ns=100, now_steady=10.6)
 
 
 def test_depth_failure_drift_and_out_of_order_revoke_older_results():
@@ -228,11 +233,11 @@ def test_depth_failure_drift_and_out_of_order_revoke_older_results():
         measurement_steady=10.03,
         calibration_id="cal-b",
     )
-    assert not admission.accept(changed, now_ros_ns=1_030_000_000, now_steady=10.03)
-    assert admission.latest is None
+    assert admission.accept(changed, now_ros_ns=1_030_000_000, now_steady=10.03)
+    assert admission.latest is changed
 
 
-def test_depth_admission_rejects_stale_or_fabricated_receipts():
+def test_old_depth_is_forwarded_but_not_adopted_as_current_safety_evidence():
     from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
 
     h = DepthHeader(
@@ -248,8 +253,9 @@ def test_depth_admission_rejects_stale_or_fabricated_receipts():
         measurement_steady=9.0,
     )
     admission = DepthAdmission(max_age_ms=500)
-    assert not admission.accept(h, now_ros_ns=1_000_000_000, now_steady=10.0)
-    assert admission.latest is None
+    assert admission.accept(h, now_ros_ns=1_000_000_000, now_steady=10.0)
+    assert admission.latest is h
+    assert not admission.usable(now_ros_ns=1_000_000_000, now_steady=10.0)
 
 
 def test_replayed_depth_and_true_monotonic_regression_revoke_without_ros_gate():
@@ -265,7 +271,7 @@ def test_replayed_depth_and_true_monotonic_regression_revoke_without_ros_gate():
     assert a.latest is None
 
 
-def test_depth_calibration_drift_requires_new_source_epoch():
+def test_new_depth_uses_current_calibration_without_source_blacklist():
     from dataclasses import replace
 
     from senior_perception.vision.runtime_evidence import DepthAdmission, DepthHeader
@@ -293,7 +299,7 @@ def test_depth_calibration_drift_requires_new_source_epoch():
         measurement_steady=10.001,
         calibration_id="cal-b",
     )
-    assert not admission.accept(h, now_ros_ns=h.stamp_ns, now_steady=10.001)
+    assert admission.accept(h, now_ros_ns=h.stamp_ns, now_steady=10.001)
     h = replace(
         h,
         sequence=3,
@@ -303,7 +309,7 @@ def test_depth_calibration_drift_requires_new_source_epoch():
         measurement_steady=10.002,
         calibration_id="cal-a",
     )
-    assert not admission.accept(h, now_ros_ns=h.stamp_ns, now_steady=10.002)
-    assert admission.latest is None
-    h = replace(h, source_epoch="b", sequence=1)
     assert admission.accept(h, now_ros_ns=h.stamp_ns, now_steady=10.002)
+    assert admission.latest is h
+    h = replace(h, source_epoch="b", sequence=1)
+    assert not admission.accept(h, now_ros_ns=h.stamp_ns, now_steady=10.002)

@@ -739,3 +739,90 @@ def test_verified_resume_keeps_saved_home_and_continues_on_a_fresh_source() -> N
     resumed.commit_ingest(binding, 1, "kf-2", anchors, ())
     assert resumed.map_ref == MAP and resumed.ingest_progress.sequence == 1
     assert resumed.snapshot(Path("graph"), ()).waypoint_bindings == saved.waypoint_bindings
+
+
+# The S04/S06 lifecycle in test_active_map calls these helpers so codec assertions
+# use its *real committed cut*, rather than a second DTO-only lifecycle.
+def fixed_episode_legacy_base(map_ref):
+    from senior_mapping.references import LegacyAnchorBinding, LegacyBase
+    from senior_mapping.workspace import WorkspaceGrid, fixed_grid_id
+
+    cells = bytes([255, 255, 0, 255, 255, 255, 255, 100] + [255] * 8)
+    origin = Pose2D(0, 0, 0)
+    identity = fixed_grid_id(map_ref, 8, 2, 0.5, origin, cells)
+    grid = WorkspaceGrid(map_ref, identity, 8, 2, 0.5, origin, cells, True, False)
+    original = CellBinding(
+        CellEvidence((7, 0), "kf1", 11, 2, 1.125, 3.25, "geometric_confirmation"),
+        3.75,
+        0.25,
+        origin,
+        False,
+    )
+    binding = LegacyAnchorBinding(
+        "kf1", origin, (7,), ((3.5, 0.0, 4.0, 0.0, 4.0, 0.5, 3.5, 0.5),), (original,)
+    )
+    # Explicit synthetic legacy materialization, not a real V1 archive migration.
+    return LegacyBase(
+        identity, grid, "legacy-derived", "b" * 64, "synthetic-legacy", b"\xff\xff", (binding,)
+    )
+
+
+def assert_fixed_episode_codec(cut):
+    import base64
+    import json
+
+    from senior_mapping.references import (
+        decode_fixed_snapshot,
+        encode_fixed_snapshot,
+        fixed_payload_size,
+    )
+
+    payload = encode_fixed_snapshot(cut)
+    assert fixed_payload_size(cut) == len(payload)
+    restored = decode_fixed_snapshot(payload)
+    assert restored == cut
+    assert restored.grid.grid_id == cut.grid.grid_id
+    assert restored.legacy_base.anchor_bindings[0].original_bindings[0].evidence.hit_count == 11
+    body = json.loads(payload)
+    assert body["schema_version"] == 2
+    assert body["supports"][0]["local_endpoints"]["encoding"] == "le-dd"
+    # Both bytes+G must be derived from the same complete support/anchor cut.
+    body["grid"]["cells_b64"] = base64.b64encode(bytes(len(cut.grid.cells))).decode()
+    with pytest.raises(ValueError):
+        decode_fixed_snapshot(json.dumps(body).encode())
+    with pytest.raises(ValueError):
+        SlamSnapshot.from_json(payload)  # actual retained V1 parser rejects V2
+
+
+def repair_legacy_free_base(map_ref, *, mutable_quad=None, mutable_cell=None, offset=False):
+    """Admitted synthetic legacy input; no V1 writer or migration is exercised."""
+    from senior_mapping.references import LegacyAnchorBinding, LegacyBase
+    from senior_mapping.workspace import WorkspaceGrid, fixed_grid_id
+
+    origin = Pose2D(0.25 if offset else 0.0, 0.0, 0.0)
+    cells = bytes(([0] * 8 if offset else [0] + [255] * 7) + [255] * 8)
+    gid = fixed_grid_id(map_ref, 8, 2, 0.5, origin, cells)
+    grid = WorkspaceGrid(map_ref, gid, 8, 2, 0.5, origin, cells, True, False)
+    bindings = ()
+    if not offset:
+        pose = Pose2D(0.0, 0.0, 0.0)
+        original = CellBinding(
+            CellEvidence(
+                (0, 0) if mutable_cell is None else mutable_cell,
+                "kf1",
+                0,
+                3,
+                1.0,
+                0.0,
+                "observed_free_space",
+            ),
+            0.25,
+            0.25,
+            pose,
+            False,
+        )
+        quad = (0.0, 0.0, 0.5, 0.0, 0.5, 0.5, 0.0, 0.5) if mutable_quad is None else mutable_quad
+        bindings = (LegacyAnchorBinding("kf1", pose, (0,), (quad,), (original,)),)
+    return LegacyBase(
+        gid, grid, "legacy-derived", "b" * 64, "synthetic-legacy", b"\xff\xff", bindings
+    )

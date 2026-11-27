@@ -9,11 +9,28 @@ All methods run synchronously on the owning loop, without concurrent writers.
 
 from __future__ import annotations
 
+import time
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
-from senior_mapping.references import AnchorSnapshot, CellBinding, SlamSnapshot, WaypointBinding
+from senior_mapping.evidence import (
+    FixedDelta,
+    FixedWatermark,
+    ProfileProvenance,
+    SourceIdentity,
+    VerifiedBasis,
+)
+from senior_mapping.references import (
+    AnchorSnapshot,
+    CellBinding,
+    FixedSnapshot,
+    LegacyBase,
+    SlamSnapshot,
+    WaypointBinding,
+)
+from senior_mapping.shared_scan import QualifiedScan, ScanKey
 from senior_mapping.store import (
     MapReferenceStore,
     OccupancyIngestBinding,
@@ -62,12 +79,16 @@ class ActiveMap:
         )
         active = cls(snapshot.map_ref, snapshot.odom_owner, snapshot.cell_size_m)
         active._store, active._source, active._binding = store, source, binding
-        active._grid = render_stable_grid(
-            snapshot.map_ref,
-            f"{active._session_id}:restored",
-            snapshot.grid,
-            snapshot.cell_size_m,
-            snapshot.occupancy,
+        active._grid = (
+            snapshot.fixed.grid
+            if snapshot.fixed is not None
+            else render_stable_grid(
+                snapshot.map_ref,
+                f"{active._session_id}:restored",
+                snapshot.grid,
+                snapshot.cell_size_m,
+                snapshot.occupancy,
+            )
         )
         active._restored_cut = True
         return active
@@ -121,6 +142,9 @@ class ActiveMap:
             if self._store.ingest_progress is None:
                 self._close(fenced=True)
             raise
+        if self._store._fixed_cut is not None:
+            self._grid = self._store.fixed_snapshot(binding).grid
+            return progress
         try:
             candidate = render_stable_grid(
                 self._store.map_ref,
@@ -198,3 +222,78 @@ class ActiveMap:
         self._closed = True
         self._restored_cut = False
         self._source = self._binding = self._grid = None
+
+    def bind_fixed_context(
+        self,
+        source: object,
+        *,
+        source_identity: SourceIdentity,
+        host_boot_id: str,
+        acceptance_floor: ScanKey | None,
+        acceptance_floor_steady_ns: int,
+        accepting: Callable[[], bool],
+        clock: Callable[[], int] = time.monotonic_ns,
+        profiles: tuple[ProfileProvenance, ...] = (),
+        legacy_base: LegacyBase | None = None,
+    ) -> FixedSnapshot:
+        """Explicit verifier boundary; production selection waits for T4."""
+        cut = self._store.bind_fixed_context(
+            self._require_source(source),
+            source_identity=source_identity,
+            host_boot_id=host_boot_id,
+            acceptance_floor=acceptance_floor,
+            acceptance_floor_steady_ns=acceptance_floor_steady_ns,
+            accepting=accepting,
+            clock=clock,
+            profiles=profiles,
+            legacy_base=legacy_base,
+        )
+        self._grid = cut.grid
+        return cut
+
+    def allocate_support_id(self, source: object) -> str:
+        return self._store.allocate_support_id(self._require_source(source))
+
+    def accept_scan(self, source: object, scan: QualifiedScan, basis: VerifiedBasis) -> None:
+        self._store.accept_scan(self._require_source(source), scan, basis)
+
+    def retire_fixed(self, source: object) -> None:
+        self._store.retire_fixed(self._require_source(source))
+
+    def fixed_snapshot(self, source: object) -> FixedSnapshot:
+        return self._store.fixed_snapshot(self._require_source(source))
+
+    def apply_evidence(
+        self,
+        source: object,
+        *,
+        expected_graph_sequence: int,
+        expected_anchor_digest: str,
+        delta: FixedDelta,
+    ) -> FixedSnapshot:
+        cut = self._store.commit_evidence(
+            self._require_source(source),
+            expected_graph_sequence=expected_graph_sequence,
+            expected_anchor_digest=expected_anchor_digest,
+            delta=delta,
+        )
+        self._grid = cut.grid
+        return cut
+
+    def ensure_observed_extent(
+        self, source: object, *, expected: FixedWatermark, bounds: tuple[float, float, float, float]
+    ) -> FixedSnapshot:
+        cut = self._store.ensure_observed_extent(
+            self._require_source(source), expected=expected, bounds=bounds
+        )
+        self._grid = cut.grid
+        return cut
+
+    def discard_support_ids(self, source: object, identities: tuple[str, ...]) -> None:
+        self._require_source(source)
+        getattr(self._store, "_fixed_issued", set()).difference_update(identities)
+
+    def local_support_candidates(self, source: object, bounds, *, limit=8):
+        return self._store.local_support_candidates(
+            self._require_source(source), bounds, limit=limit
+        )

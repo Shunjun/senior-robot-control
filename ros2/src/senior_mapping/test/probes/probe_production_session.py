@@ -148,7 +148,6 @@ try:
             assert odometry.ok and odometry.boot_id == boot
             assert abs(odometry.odom_x - 0.2) < 1e-6
             assert odometry.capture.sample_steady_ns > 0
-            assert not odometry.static_lidar_tf_receipt_valid
 
         wait_for_disappearance(node, OWNED_NODE, graph, gate, capture)
         boot = str(uuid.uuid4())

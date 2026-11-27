@@ -5,32 +5,35 @@ import time
 import uuid
 from contextlib import suppress
 
+from geometry_msgs.msg import TransformStamped
 from rclpy._rclpy_pybind11 import RCLError  # //Compatible: Humble exposes RCLError here.
 from rclpy.clock import Clock, ClockType
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
+from rclpy.qos import qos_profile_sensor_data
+from rclpy.time import Time
 from senior_interfaces.msg import (
     BoundedRawCameraInfo,
     BoundedRawImage,
-    BoundedStaticTf,
     RgbdMotionCandidate,
-    StaticTransformEdge,
 )
+from tf2_ros import Buffer, TransformException, TransformListener
 
 from senior_perception.vision.independent_motion import Profile
 from senior_perception.vision.raw_capture import capture_from_message
 from senior_perception.vision.rgbd_bounded_inbox import BoundedInbox
 from senior_perception.vision.rgbd_candidate_codec import fill_candidate
 from senior_perception.vision.rgbd_producer_engine import RetainedFrontiers, RgbdProducerEngine
-from senior_perception.vision.static_tf_binding import StaticBinding
-from senior_perception.vision.static_tf_wire import observe_verified_tf
-from vehicle_core.diagnostics import DiagnosticPending, process_diagnostics
-from vehicle_core.sensor_policy import default_policy
+from senior_perception.vision.static_tf_binding import Edge, StaticBinding, TransformSnapshot
+from vehicle_core.diagnostics import process_diagnostics
+from vehicle_core.ros_wiring import TOPICS, publisher, publisher_identity
 
 
 class RgbdCandidateProducer(Node):
     def __init__(self):
-        super().__init__("rgbd_candidate_producer")
+        super().__init__(
+            publisher("rgbd_candidate_producer").name,
+            namespace=publisher("rgbd_candidate_producer").namespace,
+        )
         try:
             self._initialize()
         except BaseException:
@@ -73,13 +76,12 @@ class RgbdCandidateProducer(Node):
         self._retained: RetainedFrontiers | None = None
         self._overflow_invalidation_pending = False
         self._topics = (
-            "/rgbd_diagnostic/rgb",
-            "/rgbd_diagnostic/depth",
-            "/rgbd_diagnostic/rgb_info",
-            "/rgbd_diagnostic/depth_info",
+            TOPICS.rgbd_diagnostic_rgb,
+            TOPICS.rgbd_diagnostic_depth,
+            TOPICS.rgbd_diagnostic_rgb_info,
+            TOPICS.rgbd_diagnostic_depth_info,
         )
-        self._tf_topic = "/rgbd_diagnostic/tf"
-        self._candidate_topic = "/rgbd_diagnostic/candidate"
+        self._candidate_topic = TOPICS.rgbd_diagnostic_candidate
         self._publisher = self.create_publisher(
             RgbdMotionCandidate, self._candidate_topic, qos_profile_sensor_data
         )
@@ -94,15 +96,8 @@ class RgbdCandidateProducer(Node):
                     qos_profile_sensor_data,
                 )
             )
-        self._tf_qos = QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        )
-        self._tf_epoch = 1
-        self._tf_epoch_lock = threading.Lock()
-        self._tf_subscription = self._create_tf_subscription(self._tf_epoch)
-        self._tf_rearm = self.create_guard_condition(self._replace_tf_subscription)
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self)
         self._fault = None
         self._fault_reported = False
         self._failure_clock = Clock(clock_type=ClockType.STEADY_TIME)
@@ -111,23 +106,6 @@ class RgbdCandidateProducer(Node):
         )
         self._thread = threading.Thread(target=self._run_work, name="rgbd-coordinator", daemon=True)
         self._thread.start()
-
-    def _create_tf_subscription(self, epoch):
-        return self.create_subscription(
-            BoundedStaticTf,
-            self._tf_topic,
-            lambda message: self._enqueue((4, epoch, message)),
-            self._tf_qos,
-        )
-
-    def _replace_tf_subscription(self):
-        if self._stop.is_set():
-            return
-        old = self._tf_subscription
-        self.destroy_subscription(old)
-        with self._tf_epoch_lock:
-            epoch = self._tf_epoch
-        self._tf_subscription = self._create_tf_subscription(epoch)
 
     def _check_failure(self):
         if self._fault is not None and not self._fault_reported:
@@ -146,25 +124,15 @@ class RgbdCandidateProducer(Node):
                 self._fault = fault
 
     def _enqueue(self, item):
-        if item[0] == 4:
-            with self._tf_epoch_lock:
-                if item[1] != self._tf_epoch:
-                    return
-                self._inbox.offer(item)
-        else:
-            self._inbox.offer(item)
+        self._inbox.offer(item)
         self._wake.set()
 
     def _owner(self, topic, name):
         owners = self.get_publishers_info_by_topic(topic)
-        if len(owners) != 1 or owners[0].node_name != name or owners[0].node_namespace != "/":
-            return ""
-        return bytes(owners[0].endpoint_gid).hex()
+        return publisher_identity(owners, name)
 
     def _invalid(self, reason):
         owner = self._owner(self._candidate_topic, "rgbd_candidate_producer")
-        if not owner:
-            return False
         self._publish_invalid_with_owner(reason, owner)
         return True
 
@@ -184,207 +152,136 @@ class RgbdCandidateProducer(Node):
         self._publisher.publish(message)
 
     def _commit_candidate(self, result, output, token):
-        owner = self._owner(self._candidate_topic, "rgbd_candidate_producer")
-        if not owner or owner != output.producer_gid:
-            return False
-        binding = self._binding
-        current = binding.current
-        first, admitted = binding.first_receipt, binding.admitted_from
-        dependencies_valid = True
-        if result.reason == "candidate":
-            dependencies_valid = (
-                current is not None
-                and self._owner(self._tf_topic, "static_tf_receipt") == current.relay_gid
-                and result.tf_receipts == (first, first)
-                and result.tf_admitted_from == (admitted, admitted)
-                and len(result.headers) == 2
-                and all(len(group) == 4 for group in result.headers)
-            )
-            if dependencies_valid:
-                for index, topic in enumerate(self._topics):
-                    raw_owner = self._owner(topic, "raw_receipt")
-                    if not raw_owner or any(
-                        group[index].bridge_gid != raw_owner for group in result.headers
-                    ):
-                        dependencies_valid = False
-                        break
+        geometry = self._binding.current
 
         def commit():
-            if result.reason != "candidate":
-                self._publisher.publish(output)
-                return
-            if (
-                not dependencies_valid
-                or binding.current is not current
-                or binding.first_receipt != first
-                or binding.admitted_from != admitted
+            if result.reason == "candidate" and (
+                geometry is None
+                or self._binding.current is not geometry
+                or result.tf_receipts != (geometry, geometry)
             ):
-                self._publish_invalid_with_owner("dependency_unavailable", owner)
-                return
-            final_steady = time.monotonic()
-            if any(
-                default_policy()
-                .age(
-                    measured_steady=h.measurement_steady,
-                    received_steady=h.received_steady,
-                    now_steady=final_steady,
-                )
-                .band
-                == "invalid"
-                for group in result.headers
-                for h in group
-            ):
-                self._publish_invalid_with_owner("candidate_expired", owner)
+                self._invalid("tf_geometry_changed")
                 return
             self._publisher.publish(output)
 
         return self._inbox.commit_if_current(token, commit)
 
+    def _sync_tf(self, stamp):
+        try:
+            actual = self._tf_buffer.lookup_transform(self._body, self._binding.camera, stamp)
+            t, q = actual.transform.translation, actual.transform.rotation
+            snapshot = TransformSnapshot(
+                (
+                    Edge(
+                        actual.header.frame_id,
+                        actual.child_frame_id,
+                        Time.from_msg(actual.header.stamp).nanoseconds,
+                        (t.x, t.y, t.z),
+                        (q.x, q.y, q.z, q.w),
+                    ),
+                )
+            )
+            if not self._binding.observe(snapshot):
+                raise ValueError("invalid_tf_geometry")
+        except (TransformException, ValueError) as error:
+            self._binding.revoke()
+            if self._engine is not None:
+                self._engine.revoke("tf_unavailable")
+            self._invalid(str(error) or "tf_unavailable")
+            return False
+        if self._engine is None:
+            retained = self._retained
+            self._engine = RgbdProducerEngine(
+                self._profile,
+                self._binding,
+                registration="registered",
+                fresh_after_steady=time.monotonic(),
+                generation=(
+                    self._generation
+                    if retained is None
+                    else max(self._generation, retained.worker_generation + 1)
+                ),
+                sequence_floor=0 if retained is None else retained.sequence_frontier,
+                retained=retained,
+            )
+            self._retained = None
+        return True
+
     def _work(self):
         last_invalid = 0.0
-        pending_tf = DiagnosticPending("rgbd.pending_tf.python", 4)
-        allow_tf_reconfirm = False
-        last_steady = 0.0
         failure = None
         try:
             while not self._stop.is_set():
                 self._wake.wait(0.02)
                 self._wake.clear()
-                now_ros = self.get_clock().now().nanoseconds
-                now_steady = time.monotonic()
-                if last_steady > 0 and now_steady < last_steady:
-                    self._binding.revoke()
-                    self._invalid("clock_invalid")
-                    raise RuntimeError("RGB-D clock moved backwards; restart the diagnostic chain")
-                last_steady = now_steady
+                now_ros, now_steady = self.get_clock().now().nanoseconds, time.monotonic()
                 if not self._enabled:
                     if now_steady - last_invalid >= 0.1:
                         self._invalid("static_domain_unavailable")
                         last_invalid = now_steady
                     continue
-                if self._overflow_invalidation_pending:
-                    if not self._invalid("overflow"):
-                        continue
-                    self._overflow_invalidation_pending = False
-                current_tf = self._binding.current
-                if (
-                    current_tf is not None
-                    and self._owner(self._tf_topic, "static_tf_receipt") != current_tf.relay_gid
-                ):
-                    self._binding.revoke()
-                    if self._engine is not None:
-                        self._engine.revoke("static_tf_unavailable")
-                    self._invalid("static_tf_unavailable")
                 item = self._inbox.take()
                 if item is not None:
                     self._wake.set()
-                if item is not None:
                     generation, value, reason = item
                     if reason:
-                        pending_tf.clear()
-                        if reason == "overflow":
-                            self._binding.suspend()
-                            allow_tf_reconfirm = True
-                            with self._tf_epoch_lock:
-                                self._tf_epoch += 1
-                            if self._engine is not None:
-                                self._retained = self._engine.close_for_recovery()
-                                self._engine = None
-                            self._generation += 1
-                            self._overflow_invalidation_pending = not self._invalid(reason)
-                            self._tf_rearm.trigger()
-                        else:
-                            self._binding.revoke()
-                            allow_tf_reconfirm = False
-                            if self._engine is not None:
-                                self._engine.revoke(reason)
-                            self._invalid(reason)
-                    elif value is not None:
-                        stream = value[0]
-                        if stream == 4:
-                            _, epoch, message = value
-                            if epoch != self._tf_epoch:
-                                continue
-                            gid = message.bridge_gid
-                            # Keep one status per endpoint while graph discovery catches up.
-                            # The cap also bounds ambiguous or obsolete DDS endpoints.
-                            previous = pending_tf.get(gid)
-                            if previous is None or (
-                                message.generation,
-                                message.sequence,
-                                not message.valid,
-                            ) >= (
-                                previous[1].generation,
-                                previous[1].sequence,
-                                not previous[1].valid,
-                            ):
-                                pending_tf.pop(gid, None)
-                                if len(pending_tf) == 4:
-                                    pending_tf.pop(next(iter(pending_tf)))
-                                pending_tf[gid] = (generation, message)
+                        self._binding.revoke()
+                        if reason == "overflow" and self._engine is not None:
+                            self._retained = self._engine.close_for_recovery()
+                            self._engine = None
+                            self._generation += 1  # Explicit receiving-stream rebuild.
                         elif self._engine is not None:
-                            _, message = value
-                            owner = self._owner(self._topics[stream], "raw_receipt")
-                            if owner:
-                                try:
-                                    header = capture_from_message(message.capture)
-                                    self._engine.offer(
-                                        stream,
-                                        header,
-                                        message,
-                                        bridge_gid=owner,
-                                        now_ros_ns=now_ros,
-                                        now_steady=now_steady,
-                                    )
-                                except (AttributeError, ValueError, TypeError, OverflowError):
-                                    self._engine.revoke("invalid_capture")
-                            else:
+                            self._engine.revoke(reason)
+                        self._invalid(reason)
+                    elif value is not None:
+                        stream, message = value
+                        owner = self._owner(self._topics[stream], "raw_receipt")
+                        try:
+                            header = capture_from_message(message.capture)
+                            if owner and self._sync_tf(Time.from_msg(message.capture.stamp)):
+                                self._engine.offer(
+                                    stream,
+                                    header,
+                                    message,
+                                    bridge_gid=owner,
+                                    now_ros_ns=now_ros,
+                                    now_steady=now_steady,
+                                )
+                            elif not owner and self._engine is not None:
                                 self._engine.revoke("raw_owner_unavailable")
+                        except (AttributeError, ValueError, TypeError, OverflowError):
+                            if self._engine is not None:
+                                self._engine.revoke("invalid_capture")
                     if not self._inbox.current(generation):
                         continue
                 process_diagnostics().pump(time.monotonic())
-                if pending_tf:
-                    owner = self._owner(self._tf_topic, "static_tf_receipt")
-                    pending = pending_tf.pop(owner, None)
-                    if pending is not None and self._inbox.current(pending[0]):
-                        admitted = self._observe_tf(
-                            pending[1], owner, allow_tf_reconfirm, now_ros, now_steady
-                        )
-                        if admitted:
-                            allow_tf_reconfirm = False
-                if self._engine is not None:
-                    token = self._inbox.snapshot()
-                    now_ros = self.get_clock().now().nanoseconds
-                    now_steady = time.monotonic()
-                    result = self._engine.poll(now_ros_ns=now_ros, now_steady=now_steady)
-                    if result is not None:
-                        owner = self._owner(self._candidate_topic, "rgbd_candidate_producer")
-                        if owner:
-                            self._sequence += 1
-                            output = RgbdMotionCandidate()
-                            try:
-                                fill_candidate(
-                                    output,
-                                    result,
-                                    producer_gid=owner,
-                                    producer_boot=self._boot,
-                                    owner_generation=self._generation,
-                                    output_sequence=self._sequence,
-                                    body_frame=self._body,
-                                    edge_factory=StaticTransformEdge,
-                                )
-                            except (
-                                AssertionError,
-                                AttributeError,
-                                OverflowError,
-                                TypeError,
-                                ValueError,
-                            ):
-                                self._inbox.commit_if_current(
-                                    token, lambda: self._invalid("candidate_encoding_invalid")
-                                )
-                            else:
-                                self._commit_candidate(result, output, token)
+                if self._engine is None:
+                    continue
+                token = self._inbox.snapshot()
+                result = self._engine.poll(
+                    now_ros_ns=self.get_clock().now().nanoseconds, now_steady=time.monotonic()
+                )
+                if result is None:
+                    continue
+                self._sequence += 1
+                output = RgbdMotionCandidate()
+                try:
+                    fill_candidate(
+                        output,
+                        result,
+                        producer_gid=self._owner(self._candidate_topic, "rgbd_candidate_producer"),
+                        producer_boot=self._boot,
+                        owner_generation=self._generation,
+                        output_sequence=self._sequence,
+                        body_frame=self._body,
+                        edge_factory=TransformStamped,
+                    )
+                except (AssertionError, AttributeError, OverflowError, TypeError, ValueError):
+                    self._inbox.commit_if_current(
+                        token, lambda: self._invalid("candidate_encoding_invalid")
+                    )
+                else:
+                    self._commit_candidate(result, output, token)
         except BaseException as exc:
             if not isinstance(exc, RCLError) or self.context.ok():
                 failure = exc
@@ -397,40 +294,6 @@ class RgbdCandidateProducer(Node):
                     if failure is not None:
                         raise failure from cleanup
                     raise
-
-    def _observe_tf(self, message, owner, allow_tf_reconfirm, now_ros, now_steady):
-        prior = self._binding.current
-        accepted = observe_verified_tf(
-            self._binding,
-            message,
-            current_relay_gid=owner,
-            allow_suspended_reconfirm=allow_tf_reconfirm,
-        )
-        if not accepted:
-            if prior is None or self._binding.current is not prior:
-                if self._engine is not None:
-                    self._engine.revoke("static_tf_unavailable")
-                self._invalid("static_tf_unavailable")
-            return False
-        if self._binding.admitted_from is None or self._engine is not None:
-            return False
-
-        retained = self._retained
-        self._engine = RgbdProducerEngine(
-            self._profile,
-            self._binding,
-            registration="registered",
-            fresh_after_steady=now_steady,
-            generation=(
-                self._generation
-                if retained is None
-                else max(self._generation, retained.worker_generation + 1)
-            ),
-            sequence_floor=0 if retained is None else retained.sequence_frontier,
-            retained=retained,
-        )
-        self._retained = None
-        return True
 
     def destroy_node(self):
         self._stop.set()

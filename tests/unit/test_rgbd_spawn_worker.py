@@ -15,7 +15,6 @@ def test_spawn_worker_returns_small_result_without_pixels():
             item,
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         deadline = time.monotonic() + 10
@@ -41,7 +40,6 @@ def test_pending_replaced_and_invalidation_revokes_inflight():
                 frame(seq, image, depth),
                 now_ros_ns=1_400_000_000,
                 now_steady=1.4,
-                ros_deadline_ns=1_400_000_000,
                 steady_deadline=1.4,
             )
         assert worker.dropped == 1
@@ -73,7 +71,6 @@ def test_candidate_preserves_pair_dependencies_without_pixel_bodies():
                 frame(seq, image, depth),
                 now_ros_ns=1_200_000_000,
                 now_steady=1.2,
-                ros_deadline_ns=1_300_000_000,
                 steady_deadline=1.3,
             )
             deadline = time.monotonic() + 10
@@ -99,7 +96,6 @@ def test_worker_death_produces_explicit_invalid_and_closes_admission():
             frame(1, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         worker._process.terminate()
@@ -110,7 +106,6 @@ def test_worker_death_produces_explicit_invalid_and_closes_admission():
             frame(2, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
     finally:
@@ -126,7 +121,6 @@ def test_inflight_timeout_reports_invalid_without_waiting_for_worker():
             frame(1, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         result = worker.poll(now_ros_ns=1_300_000_001, now_steady=1.31)
@@ -145,7 +139,6 @@ def test_parent_supplies_monotonic_generation_and_sequence_floor():
             frame(1, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         deadline = time.monotonic() + 10
@@ -167,7 +160,6 @@ def test_parent_can_retain_last_issued_sequence_after_submission():
             frame(1, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         assert worker.sequence_frontier == 9
@@ -184,7 +176,6 @@ def test_submission_cannot_extend_original_capture_deadlines():
             frame(1, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=5_000_000_000,
             steady_deadline=5.0,
         )
     finally:
@@ -192,6 +183,9 @@ def test_submission_cannot_extend_original_capture_deadlines():
 
 
 def test_candidate_expires_when_first_capture_deadline_passes():
+    from vehicle_core.sensor_policy import default_policy
+
+    lifetime = default_policy().hard_age_s
     profile = Profile("sim", "fixture", True, "texture", "cal", 0.4, 0.4, 2.0, 0.1, 0.1)
     image, depth = scene()
     worker = SpawnWorker(profile, generation=1, sequence_floor=0)
@@ -200,8 +194,7 @@ def test_candidate_expires_when_first_capture_deadline_passes():
             frame(1, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_400_000_000,
-            steady_deadline=1.4,
+            steady_deadline=1.1 + lifetime,
         )
         deadline = time.monotonic() + 10
         first = None
@@ -213,11 +206,11 @@ def test_candidate_expires_when_first_capture_deadline_passes():
             frame(2, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_500_000_000,
-            steady_deadline=1.5,
+            steady_deadline=1.2 + lifetime,
         )
         time.sleep(0.5)
-        result = worker.poll(now_ros_ns=1_410_000_000, now_steady=1.41)
+        expired = 1.1 + lifetime + 0.01
+        result = worker.poll(now_ros_ns=round(expired * 1e9), now_steady=expired)
         assert result is not None and result.reason == "capture_expired"
     finally:
         worker.close()
@@ -234,7 +227,6 @@ def test_wrong_ticket_does_not_release_live_worker_slot():
             frame(1, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         worker._results.put_nowait(CompactResult(1, 99, "candidate", (), None, 0, 0, None, None))
@@ -260,7 +252,6 @@ def test_worker_cannot_claim_hard_error_qualification():
             frame(1, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         forged = CompactResult(1, 1, "candidate", (), None, 0, 0, None, None)
@@ -289,7 +280,6 @@ def test_finite_nonrigid_candidate_is_rejected():
             first,
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         groups = tuple(
@@ -325,7 +315,6 @@ def test_candidate_must_name_exact_capture_issued_to_worker():
             first,
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         groups = tuple(
@@ -363,7 +352,6 @@ def test_candidate_rejects_fit_counts_above_feature_budget():
             second,
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         groups = tuple(
@@ -405,7 +393,6 @@ def test_hung_worker_timeout_restarts_with_fresh_capture_floor():
             frame(1, image, depth),
             now_ros_ns=1_200_000_000,
             now_steady=1.2,
-            ros_deadline_ns=1_300_000_000,
             steady_deadline=1.3,
         )
         worker._results.put_nowait(CompactResult(1, 1, "initializing", (), None, 0, 0, None, None))
@@ -417,14 +404,12 @@ def test_hung_worker_timeout_restarts_with_fresh_capture_floor():
             frame(2, image, depth),
             now_ros_ns=1_300_000_001,
             now_steady=1.31,
-            ros_deadline_ns=1_400_000_000,
             steady_deadline=1.4,
         )
         assert worker.submit(
             frame(4, image, depth),
             now_ros_ns=1_400_000_000,
             now_steady=1.4,
-            ros_deadline_ns=1_700_000_000,
             steady_deadline=1.7,
         )
         deadline = time.monotonic() + 10
@@ -460,14 +445,12 @@ def test_worker_failure_restarts_with_fresh_capture_floor():
             frame(2, image, depth),
             now_ros_ns=1_300_000_001,
             now_steady=1.31,
-            ros_deadline_ns=1_400_000_000,
             steady_deadline=1.4,
         )
         assert worker.submit(
             frame(4, image, depth),
             now_ros_ns=1_400_000_000,
             now_steady=1.4,
-            ros_deadline_ns=1_700_000_000,
             steady_deadline=1.7,
         )
         deadline = time.monotonic() + 10
@@ -527,7 +510,6 @@ def test_partial_result_cannot_block_poll_or_worker_restart(monkeypatch):
             frame(4, image, depth),
             now_ros_ns=1_400_000_000,
             now_steady=1.4,
-            ros_deadline_ns=1_700_000_000,
             steady_deadline=1.7,
         )
         deadline = time.monotonic() + 10
@@ -654,7 +636,9 @@ def test_process_group_sigint_during_spawn_startup_keeps_child_clean(tmp_path):
     )
     environment = os.environ.copy()
     environment["RGBD_SIGNAL_MARKER"] = str(marker)
-    environment["PYTHONPATH"] = os.pathsep.join((str(tmp_path), os.path.abspath("src")))
+    environment["PYTHONPATH"] = os.pathsep.join(
+        (str(tmp_path), os.getcwd(), os.environ.get("PYTHONPATH", ""))
+    )
     process = subprocess.Popen(
         [sys.executable, str(script)],
         stdout=subprocess.PIPE,

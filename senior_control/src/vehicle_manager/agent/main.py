@@ -6,6 +6,7 @@ import logging
 import signal
 import time
 from collections.abc import Awaitable, Callable, Mapping, MutableMapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Generic, Literal
 
@@ -81,10 +82,32 @@ def _snapshot_change_key(snapshot: RobotSnapshot) -> tuple[Any, ...]:
         snapshot.execution_status,
         snapshot.runnable_task_ids,
         None if pose is None else (pose.x, pose.y, pose.yaw),
-        tuple((point.x, point.y) for point in snapshot.scan_points[:64]),
+        tuple((point.x, point.y) for point in snapshot.scan_points),
+        None
+        if snapshot.scan_layer is None
+        else (
+            snapshot.scan_layer.map_ref.map_id,
+            snapshot.scan_layer.map_ref.reference_revision,
+            snapshot.scan_layer.map_generation,
+            snapshot.scan_layer.backend_boot,
+            snapshot.scan_layer.source_id,
+            snapshot.scan_layer.sequence,
+            snapshot.scan_layer.sampled_at,
+            snapshot.scan_layer.expires_at,
+            snapshot.scan_layer.valid,
+        ),
         snapshot.navigation_block_reason,
         repr(snapshot.vehicle_ui),
     )
+
+
+@dataclass
+class _SnapshotCollection:
+    """Only one current link is retained; retired collectors keep their own gate."""
+
+    link: Link
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    sequence: int = 0
 
 
 class Agent(Generic[ResultT]):
@@ -180,6 +203,7 @@ class Agent(Generic[ResultT]):
             waypoint_create=workspace.create_waypoint if workspace is not None else None,
         )
         self._link: Link | None = None
+        self._snapshot_collection: _SnapshotCollection | None = None
         self._revoked_link: Link | None = None
         self._epoch = 0
         self._last_epoch = 0
@@ -491,7 +515,7 @@ class Agent(Generic[ResultT]):
         if self._link is not link:
             return
         try:
-            snapshot = await self._collect()
+            snapshot = await self._collect_for_link(link)
             if self._link is not link:
                 return
             key = _snapshot_change_key(snapshot)
@@ -504,7 +528,7 @@ class Agent(Generic[ResultT]):
             if self._link is not link:
                 return
             try:
-                snapshot = await self._collect()
+                snapshot = await self._collect_for_link(link)
             except Exception:
                 # Any failed read, ``OSError`` and a timeout included, only skips this round: the
                 # link is still up, so the next successful collect must keep the cloud fresh.
@@ -1114,10 +1138,36 @@ class Agent(Generic[ResultT]):
         if robot_id != self.robot_id:
             raise self._ports.error(ErrorCode.VALIDATION, "snapshot is for another robot")
         link, epoch = self._link, self._epoch
-        snapshot = await self._collect()
+        snapshot = await self._collect_for_link(link)
         if link is not None and self._link is link and self._epoch == epoch:
             await link.send_snapshot(snapshot)
         return snapshot
+
+    async def _collect_for_link(self, link: Link | None) -> RobotSnapshot:
+        if link is None:
+            return await self._collect()
+        context = self._snapshot_collection
+        if context is None or context.link is not link:
+            context = _SnapshotCollection(link)
+            if self._link is link:
+                self._snapshot_collection = context
+        async with context.lock:
+            if self._link is not link:
+                # The public caller may still read locally, but must not send across epochs.
+                return await self._collect()
+            if context.sequence == 2**53 - 1:
+                # A waiter may have consumed the last ordinal. Close outside the gate below.
+                sequence = None
+                snapshot = None
+            else:
+                context.sequence += 1
+                sequence = context.sequence
+                snapshot = await self._collect()
+        if sequence is None:
+            await link.close()
+            raise ConnectionError("snapshot sequence exhausted")
+        assert snapshot is not None
+        return replace(snapshot, publication_sequence=sequence)
 
     async def _collect(self) -> RobotSnapshot:
         live, home_revision = await asyncio.wait_for(
@@ -1141,6 +1191,24 @@ class Agent(Generic[ResultT]):
             if "logs" in self.failed_modules:
                 capabilities = [c for c in capabilities if c != "logs.v1"]
             ui["capabilities"] = capabilities
+        layer, points = live.scan_layer, live.scan_points
+        if layer is not None:
+            remaining = max(0.0, min(0.5, layer.expires_at - self._clock.monotonic()))
+            valid = (
+                layer.valid
+                and remaining > 0
+                and live.localized
+                and live.map_ref is not None
+                and layer.map_ref.map_id == live.map_ref.map_id
+                and layer.map_ref.reference_revision == live.map_ref.reference_revision
+                and layer.map_generation == live.map_generation
+            )
+            points = points if valid else ()
+            layer = layer.model_copy(
+                update=dict(
+                    remaining_s=remaining if valid else 0.0, valid=valid, preview_count=len(points)
+                )
+            )
         snapshot = RobotSnapshot(
             robot_id=self.robot_id,
             connected=self.connected,
@@ -1161,7 +1229,8 @@ class Agent(Generic[ResultT]):
             navigation_ready=live.navigation_ready,
             robot_pose=live.robot_pose,
             navigation_block_reason=live.navigation_block_reason,
-            scan_points=live.scan_points,
+            scan_points=points,
+            scan_layer=layer,
             vehicle_ui=ui if self.module_faults else live.vehicle_ui,
             manual_controller_generation=live.manual_controller_generation,
             manual_agent_epoch=live.manual_agent_epoch,

@@ -48,21 +48,21 @@ def test_real_four_streams_and_tf_produce_nonzero_unqualified_candidate():
     import subprocess
 
     import numpy as np
+    from geometry_msgs.msg import TransformStamped
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from senior_interfaces.msg import (
         BoundedRawCameraInfo,
         BoundedRawImage,
-        BoundedStaticTf,
         FencedRgbdCandidate,
-        StaticTransformEdge,
     )
+    from tf2_msgs.msg import TFMessage
 
     rclpy.init(
         args=["--ros-args", "-p", "static_background_declared:=true", "-p", "camera_frame:=optical"]
     )
     producer = RgbdCandidateProducer()
     raw = rclpy.create_node("raw_receipt")
-    tf = rclpy.create_node("static_tf_receipt")
+    tf = rclpy.create_node("robot_state_publisher")
     observer = rclpy.create_node("rgbd_live_observer")
     topics = ("rgb", "depth", "rgb_info", "depth_info")
     pubs = [
@@ -74,8 +74,8 @@ def test_real_four_streams_and_tf_produce_nonzero_unqualified_candidate():
         for i, topic in enumerate(topics)
     ]
     tf_pub = tf.create_publisher(
-        BoundedStaticTf,
-        "/rgbd_diagnostic/tf",
+        TFMessage,
+        "/tf_static",
         QoSProfile(
             depth=1,
             reliability=ReliabilityPolicy.RELIABLE,
@@ -116,41 +116,12 @@ def test_real_four_streams_and_tf_produce_nonzero_unqualified_candidate():
             assert len(owners) == 1
             return bytes(owners[0].endpoint_gid).hex()
 
-        status = BoundedStaticTf()
-        status.valid = status.admitted = True
-        status.bridge_boot_id = "tfboot"
-        status.bridge_gid = publisher_gid(observer, "/rgbd_diagnostic/tf")
-        status.raw_gid = "01"
-        status.generation = status.sequence = status.first_sequence = 1
-        status.received_ros = status.first_received_ros = status.admitted_from_ros = (
-            observer.get_clock().now().to_msg()
-        )
-        status.received_steady = status.first_received_steady = status.admitted_from_steady = (
-            time.monotonic()
-        )
-        edge = StaticTransformEdge()
-        edge.parent_frame = "base_link"
-        edge.child_frame = "optical"
-        edge.rotation_xyzw = [0.0, 0.0, 0.0, 1.0]
-        status.edges = [edge]
-        from senior_perception.vision.static_tf_binding import StaticBinding
-        from senior_perception.vision.static_tf_wire import observe_verified_tf
-
-        probe = StaticBinding("base_link", "optical")
-        assert observe_verified_tf(probe, status, current_relay_gid=status.bridge_gid)
-        tf_pub.publish(status)
-        time.sleep(0.8)
-        assert producer._binding.current is not None, (producer._enabled, producer._binding.camera)
-        import copy
-
-        prior = producer._binding.current
-        stale = copy.deepcopy(status)
-        stale.bridge_gid = "ff"
-        before_stale = len(received)
-        producer._enqueue((4, producer._tf_epoch, stale))
+        transform = TransformStamped()
+        transform.header.frame_id = "base_link"
+        transform.child_frame_id = "optical"
+        transform.transform.rotation.w = 1.0
+        tf_pub.publish(TFMessage(transforms=[transform]))
         time.sleep(0.1)
-        assert producer._binding.current == prior
-        assert not any(x.reason == "static_tf_unavailable" for x in received[before_stale:])
 
         for sequence in range(1, 51):
             rng = np.random.default_rng(7)
@@ -254,7 +225,7 @@ def test_native_upstream_and_fence_emit_nonzero_candidate():
     import numpy as np
     from geometry_msgs.msg import TransformStamped
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-    from senior_interfaces.msg import BoundedStaticTf, FencedRgbdCandidate
+    from senior_interfaces.msg import FencedRgbdCandidate
     from sensor_msgs.msg import CameraInfo, Image
     from tf2_msgs.msg import TFMessage
 
@@ -290,18 +261,6 @@ def test_native_upstream_and_fence_emit_nonzero_candidate():
     )
     fenced = []
     candidate = []
-    static_status = []
-    static_sub = observer.create_subscription(
-        BoundedStaticTf,
-        "/rgbd_diagnostic/tf",
-        static_status.append,
-        QoSProfile(
-            depth=1,
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
-        ),
-    )
-    assert static_sub is not None
     sub = observer.create_subscription(
         FencedRgbdCandidate, "/rgbd_diagnostic/fenced", fenced.append, qos_profile_sensor_data
     )
@@ -338,19 +297,7 @@ def test_native_upstream_and_fence_emit_nonzero_candidate():
             )
         )
     else:
-        children.extend(
-            [
-                subprocess.Popen(
-                    [
-                        root + "/static_tf_receipt_node",
-                        *opts,
-                        "-p",
-                        "output_topic:=/rgbd_diagnostic/tf",
-                    ]
-                ),
-                subprocess.Popen([root + "/rgbd_candidate_receipt_node", *opts]),
-            ]
-        )
+        children.append(subprocess.Popen([root + "/rgbd_candidate_receipt_node", *opts]))
     executor = MultiThreadedExecutor()
     nodes = tuple(node for node in (producer, camera, rsp, observer) if node is not None)
     for node in nodes:
@@ -370,11 +317,6 @@ def test_native_upstream_and_fence_emit_nonzero_candidate():
         transform.child_frame_id = "optical"
         transform.transform.rotation.w = 1.0
         tf_pub.publish(TFMessage(transforms=[transform]))
-        end = time.monotonic() + 5
-        while time.monotonic() < end and not any(x.valid and x.admitted for x in static_status):
-            time.sleep(0.01)
-        assert any(x.valid and x.admitted for x in static_status)
-        time.sleep(0.3)
         target_samples = int(os.environ.get("RGBD_TEST_SAMPLE_COUNT", "3"))
         exercise_overflow = os.environ.get("RGBD_TEST_OVERFLOW_RECOVERY") == "1"
         assert not exercise_overflow or producer is not None
@@ -424,7 +366,7 @@ def test_native_upstream_and_fence_emit_nonzero_candidate():
             )
             if live_count >= target_samples and exercise_overflow and recovery_marker is None:
                 old_engine = producer._engine
-                old_epoch = producer._tf_epoch
+                old_epoch = producer._generation
                 old_joiner = old_engine.joiner
                 old_ledger = old_engine.coordinator.ledger
                 old_worker_generation = old_engine.coordinator.worker.generation
@@ -435,7 +377,7 @@ def test_native_upstream_and_fence_emit_nonzero_candidate():
                 deadline = time.monotonic() + 5
                 while time.monotonic() < deadline:
                     if (
-                        producer._tf_epoch > old_epoch
+                        producer._generation > old_epoch
                         and producer._engine is not None
                         and producer._engine is not old_engine
                     ):
@@ -480,7 +422,6 @@ def test_native_upstream_and_fence_emit_nonzero_candidate():
         assert len(valid) >= target_samples, (
             [(x.reason, x.valid) for x in candidate[-10:]],
             [(x.owner.reason, x.owner.valid) for x in fenced[-10:]],
-            [(x.reason, x.valid, x.admitted, x.generation) for x in static_status[-10:]],
         )
         for value in valid:
             first_stamp = value.body.first_rgb.stamp
@@ -503,23 +444,6 @@ def test_native_upstream_and_fence_emit_nonzero_candidate():
             "inliers=",
             valid[-1].body.inliers,
         )
-        if not via_launch:
-            loss_start = len(fenced)
-            proposal_loss_start = len(candidate)
-            children[1].terminate()
-            children[1].wait(timeout=5)
-            end = time.monotonic() + 2
-            while time.monotonic() < end:
-                revoked = any(not x.owner.valid for x in fenced[loss_start:])
-                producer_revoked = any(
-                    not x.valid and x.reason == "static_tf_unavailable"
-                    for x in candidate[proposal_loss_start:]
-                )
-                if revoked and producer_revoked:
-                    break
-                time.sleep(0.01)
-            assert revoked
-            assert producer_revoked
     finally:
         for child in children:
             if child.poll() is None:

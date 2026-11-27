@@ -29,7 +29,6 @@ private:
   using Scan = sensor_msgs::msg::LaserScan;
   using Bounded = senior_interfaces::msg::BoundedRawLaserScan;
   std::string new_epoch();
-  bool retire(const std::string & gid);
   bool clock_ok(int64_t ros_ns, uint64_t steady_ns);
   std::optional<ReceiptClock> begin_receipt();
   bool current_receipt(const ReceiptClock & receipt);
@@ -39,9 +38,8 @@ private:
   void inspect_topology();
   void on_scan(const sensor_msgs::msg::LaserScan & message, const rclcpp::MessageInfo & info);
   struct Owner {
-    std::string topic, gid, epoch;
-    std::set<std::string> retired_gids, retired_epochs;
-    uint64_t generation = 0, sequence = 0, relay_sequence = 0;
+    std::string topic, gid, epoch, expected_name, expected_namespace;
+    uint64_t generation = 1, sequence = 0, relay_sequence = 0;
     bool active = false, invalid = false;
   };
   bool qualify_owner(Owner & owner, const rmw_gid_t & incoming,
@@ -66,13 +64,12 @@ private:
   std::mutex mutex_;
   rclcpp::CallbackGroup::SharedPtr test_group_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr subscription_;
-  StampFrontier stamps_;
   senior_sensor_ingress::time::ClockTracker clock_;
   uint64_t clock_generation_ = 1;
   rclcpp::Publisher<Bounded>::SharedPtr publisher_;
   rclcpp::TimerBase::SharedPtr timer_;
   std::string input_topic_, boot_, epoch_, raw_gid_;
-  std::set<std::string> retired_gids_;
+  std::string expected_node_name_, expected_namespace_;
   uint64_t counter_ = 0, generation_ = 1, sequence_ = 0;
   bool active_ = false, invalid_ = false, failed_ = false;
 };

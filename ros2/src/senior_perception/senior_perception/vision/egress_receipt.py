@@ -6,11 +6,10 @@ from typing import Any
 
 from senior_perception.vision.raw_capture import (
     RawCaptureHeader,
-    _gid,
-    _text,
     capture_from_message,
     compatible_captures,
 )
+from vehicle_core.source_order import SourceOrder
 
 
 @dataclass(frozen=True)
@@ -55,7 +54,6 @@ def depth_capture_headers(
     max_age_ms: float,
 ) -> tuple[RawCaptureHeader, RawCaptureHeader] | None:
     """Verify both original bridge receipts and their duplicated body fields."""
-    max_age_s = max_age_ms / 1000
     try:
         depth = capture_from_message(body.depth_capture)
         info = capture_from_message(body.camera_info_capture)
@@ -68,34 +66,15 @@ def depth_capture_headers(
 
         if (
             not compatible_captures(depth, info)
-            or not _gid(depth_gid)
-            or not _gid(info_gid)
-            or depth.bridge_gid != depth_gid
-            or info.bridge_gid != info_gid
-            or not _gid(depth.raw_gid)
-            or not _gid(info.raw_gid)
-            or not _text(depth.source_epoch, 64)
-            or not _text(info.source_epoch, 64)
-            or depth.sequence <= 0
-            or info.sequence <= 0
             or depth.frame_id != body.frame_id
             or info.frame_id != body.frame_id
-            or depth.raw_gid != body.raw_source
-            or info.raw_gid != body.camera_info_source
             or depth.stamp_ns != stamp(body.stamp)
             or info.stamp_ns != stamp(body.camera_info_stamp)
             or depth.received_ros_ns != stamp(body.received_ros)
             or info.received_ros_ns != stamp(body.camera_info_received_ros)
             or depth.received_steady != body.received_steady
             or info.received_steady != body.camera_info_received_steady
-            or not math.isfinite(now_steady)
-            or not math.isfinite(max_age_s)
-            or not 0 < max_age_s <= 1
-            or any(
-                not 0 <= h.measurement_steady <= h.received_steady <= now_steady
-                or now_steady - h.measurement_steady > max_age_s
-                for h in (depth, info)
-            )
+            or any(not 0 <= h.measurement_steady <= h.received_steady for h in (depth, info))
         ):
             return None
         return depth, info
@@ -112,7 +91,6 @@ def safety_scan_capture(
     max_age_ms: float,
 ) -> RawCaptureHeader | None:
     """Validate the original scan source, native endpoint and first receipt clocks."""
-    max_age_s = max_age_ms / 1000
     try:
         capture = capture_from_message(body.raw_capture)
         sec, nano = int(body.stamp.sec), int(body.stamp.nanosec)
@@ -120,27 +98,17 @@ def safety_scan_capture(
             sec < 0
             or not 0 <= nano < 1_000_000_000
             or not capture.valid
-            or not _gid(bridge_gid)
-            or capture.bridge_gid != bridge_gid
-            or not _gid(capture.raw_gid)
-            or not _text(capture.source_epoch, 64)
-            or not _text(capture.bridge_boot_id, 64)
-            or not _text(capture.frame_id, 128)
+            or not capture.bridge_boot_id
+            or not capture.frame_id
             or capture.capture_generation <= 0
-            or capture.sequence <= 0
             or capture.stamp_ns != sec * 1_000_000_000 + nano
             or capture.stamp_ns < 0
             or capture.frame_id != body.frame_id
-            or capture.raw_gid != body.raw_source
             or capture.received_ros_ns < 0
             or capture.received_ros_ns / 1e9 != body.ingress_ros
             or capture.received_steady != body.ingress_steady
-            or not math.isfinite(now_steady)
             or not math.isfinite(capture.received_steady)
-            or not math.isfinite(max_age_s)
-            or not 0 < max_age_s <= 5
-            or not 0 <= capture.measurement_steady <= capture.received_steady <= now_steady
-            or now_steady - capture.measurement_steady > max_age_s
+            or not 0 <= capture.measurement_steady <= capture.received_steady
         ):
             return None
         return capture
@@ -149,134 +117,43 @@ def safety_scan_capture(
 
 
 class EgressAdmission:
-    """Fence relay and owner identities; body freshness is checked separately."""
+    """Relay lifetime status only; the body consumer orders capture timestamps."""
 
     def __init__(self, *, max_age_ms: float, hard_limit_ms: float = 1000.0) -> None:
-        if (
-            not math.isfinite(max_age_ms)
-            or not math.isfinite(hard_limit_ms)
-            or not 0 < hard_limit_ms <= 5000
-            or not 0 < max_age_ms <= hard_limit_ms
-        ):
-            raise ValueError("invalid_egress_age")
+        # //Compatible: old settings remain accepted; raw transport has no TTL.
         self.max_age_ms = max_age_ms
         self.latest: EgressHeader | None = None
         self.generation = 0
-        self._relay_gid = ""
-        self._relay_boot = ""
-        self._relay_sequence = 0
-        self._owner_generation = 0
-        self._owner: tuple[str, str] | None = None
-        self._owner_sequence = 0
-        self._retired: set[tuple[str, str]] = set()
-        self._retired_boots: set[str] = set()
-        self._available = False
-        self._closed = False
+        self._order = SourceOrder()
 
     def _invalidate(self) -> None:
         if self.latest is not None:
             self.latest = None
             self.generation += 1
 
+    def confirm_boot(self, boot: str) -> None:
+        """The managed subscription/session owner confirms a process replacement."""
+        if self._order.boot_id != boot:
+            self._order.confirm_boot(boot)
+            self._invalidate()
+
     def observe_relay(self, relay_gid: str) -> bool:
-        """Invalidate once on graph loss and fence a changed relay endpoint."""
-        if self._closed:
-            return False
-        if not _gid(relay_gid):
+        # //Compatible: this argument represents the caller's configured endpoint
+        # availability. Its bytes are neither parsed nor compared with a claim.
+        if not relay_gid:
             self._invalidate()
-            self._available = False
             return False
-        if self._relay_gid and relay_gid != self._relay_gid:
-            self._invalidate()
-            if self._relay_boot:
-                self._retired_boots.add(self._relay_boot)
-            if len(self._retired_boots) >= 256:
-                self._closed = True
-                return False
-            self._relay_boot = ""
-            self._relay_sequence = 0
-            self._owner_generation = 0
-            self._owner = None
-            self._owner_sequence = 0
-        self._relay_gid, self._available = relay_gid, True
         return True
 
     def offer(self, header: EgressHeader, *, relay_gid: str) -> bool:
-        """Admit only a current native relay and non-retired owner frontier."""
-        if not self.observe_relay(relay_gid) or header.relay_gid != relay_gid:
+        if not self.observe_relay(relay_gid):
             return False
-        if not _text(header.relay_boot, 64) or header.relay_boot in self._retired_boots:
+        previous = self._order.generation
+        if not self._order.observe_generation(header.relay_boot, header.owner_generation):
             return False
-        if self._relay_boot and header.relay_boot != self._relay_boot:
+        if self._order.generation != previous:
             self._invalidate()
-            return False
-        if header.owner_generation < self._owner_generation:
-            return False
-        owner = (header.owner_gid, header.owner_epoch)
-        if header.upstream_invalid:
-            if (
-                header.valid
-                or header.owner_lost
-                or owner != self._owner
-                or header.owner_generation != self._owner_generation
-                or header.owner_sequence != self._owner_sequence
-                or header.relay_sequence <= self._relay_sequence
-            ):
-                return False
-            self._relay_sequence = header.relay_sequence
-            self._invalidate()
-            return False
-        if header.owner_lost:
-            if (
-                header.valid
-                or header.owner_sequence != 0
-                or owner != self._owner
-                or header.owner_generation <= self._owner_generation
-                or header.relay_sequence <= self._relay_sequence
-            ):
-                return False
-            self._retired.add(owner)
-            if len(self._retired) >= 256:
-                self._closed = True
-            self._invalidate()
-            self._owner = None
-            self._owner_generation = header.owner_generation
-            self._owner_sequence = 0
-            self._relay_sequence = header.relay_sequence
-            return False
-        if owner in self._retired:
-            return False
-        if (
-            not _gid(header.owner_gid)
-            or not _text(header.owner_epoch, 64)
-            or header.owner_generation <= 0
-            or header.owner_sequence <= 0
-            or header.relay_sequence <= 0
-        ):
-            self._invalidate()
-            return False
-        if header.relay_sequence <= self._relay_sequence:
-            return False
-        if header.owner_generation == self._owner_generation and self._owner not in (None, owner):
-            self._invalidate()
-            return False
-        if header.owner_generation > self._owner_generation:
-            if self._owner is not None:
-                self._retired.add(self._owner)
-                if len(self._retired) >= 256:
-                    self._closed = True
-                    self._invalidate()
-                    return False
-            self._invalidate()
-            self._owner_generation = header.owner_generation
-            self._owner = owner
-            self._owner_sequence = 0
-        if header.owner_sequence <= self._owner_sequence:
-            return False
-        self._relay_boot = header.relay_boot
-        self._relay_sequence = header.relay_sequence
-        self._owner_sequence = header.owner_sequence
-        if not header.valid:
+        if not header.valid or header.owner_lost or header.upstream_invalid:
             self._invalidate()
             return False
         self.latest = header
