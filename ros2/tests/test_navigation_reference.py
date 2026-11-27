@@ -97,20 +97,20 @@ def test_original_age_duplicate_and_queued_delivery_cannot_renew_pose(reference)
     r.clock.ns += 100_000_000
     message.pose.pose.position.x = 99
     r.ref._on_pose(message, {**info, "receipt_sequence": 2})
-    assert r.ref._pose_sequence == 2
+    assert r.ref._pose_sequence == 1
     assert r.ref._pose_time is info["sample_time"]
     assert r.ref.pose() is original
     assert r.ref._pose_at == pytest.approx(99.8)
     r.clock.ns += 200_000_000
     assert r.ref.pose() is None  # Exactly the original 500ms deadline.
     r.ref._on_pose(message, {**info, "receipt_sequence": 3})
-    assert r.ref._pose_sequence == 3
+    assert r.ref._pose_sequence == 1
     assert r.ref._pose_time is info["sample_time"]
     assert r.ref._pose_at + r.ref.config.max_age_s == pytest.approx(100.3)
     assert r.ref.pose() is None
 
 
-def test_increasing_native_sequence_with_older_stamp_withdraws_without_renewal(reference):
+def test_increasing_native_sequence_with_older_stamp_is_ignored_without_renewal(reference):
     r = reference
     original = r.message(received_ns=10_200_000_000)
     r.ref._on_pose(*original)
@@ -123,8 +123,8 @@ def test_increasing_native_sequence_with_older_stamp_withdraws_without_renewal(r
             x=99,
         )
     )
-    assert r.ref._pose_sequence == 2
-    assert r.ref._pose is None and r.ref.pose() is None
+    assert r.ref._pose_sequence == 1
+    assert r.ref.pose() == Pose2D(1, 0, 0)
     assert r.ref._pose_time is original[1]["sample_time"]
     assert r.ref._pose_at == pytest.approx(99.8)
     assert r.ref._pose_stamp_ns == 10_000_000_000
@@ -161,6 +161,8 @@ def test_source_replacement_retires_queued_old_writer_without_restamping(referen
     old = r.message()
     r.ref._on_pose(*old)
     r.sources["gid"] = b"pose-b"
+    assert r.ref.pose() == Pose2D(1, 0, 0)  # GID itself is not an admission gate.
+    r.ref._invalidate_pose()  # Native channel revocation precedes the new generation.
     assert r.ref.pose() is None
     new = r.message(ns=10_100_000_000, receipt_generation=2, x=2)
     r.ref._on_pose(*new)
@@ -174,10 +176,13 @@ def test_clock_segment_and_map_change_cannot_reuse_old_task_pose(reference):
     r = reference
     old = r.message()
     r.ref._on_pose(*old)
-    new = r.message(ns=1_000_000_000, clock_generation=2, receipt_sequence=2, x=2)
+    new = r.message(
+        ns=1_000_000_000, clock_generation=2, receipt_generation=2, receipt_sequence=2, x=2
+    )
     r.ref._on_pose(*new)
     assert r.ref.pose().x == 2
-    assert r.ref._pose_identity == (b"pose-a", 1, 2)
+    assert r.ref._pose_order.generation == 2
+    assert r.ref._pose_time.clock_generation == 2
     r.ref._on_pose(old[0], {**old[1], "receipt_sequence": 3})
     assert r.ref.pose().x == 2
     r.ref._invalidate_map()
@@ -310,20 +315,21 @@ def test_retained_pose_preserves_native_identity_and_original_age(subscribed_ref
         receipt_sequence=7,
         sample_time=sample,
     )
-    # Discovery alone cannot authenticate even a retained sample.
+    # The native configured-owner channel accepts GID as diagnostic metadata.
     pose_input.callback(msg, {**info, "publisher_gid": b""})
-    assert r.ref.pose() is None
+    assert r.ref.pose() == Pose2D(1, 0, 0)
     pose_input.callback(msg, info)
     assert r.ref.pose() == Pose2D(1, 0, 0)
     assert r.ref._pose_time is sample
-    assert r.ref._pose_identity == (b"pose-a", 2, 3)
+    assert r.ref._pose_order.generation == 2
+    assert r.ref._pose_time.clock_generation == 3
     assert r.ref._pose_sequence == 7
     assert r.ref._pose_stamp_ns == 10_000_000_000
     assert r.ref._pose_at == pytest.approx(99.8)
     r.clock.ns += 300_000_000
     assert r.ref.pose() is None  # 500ms from measurement, not callback receipt.
     pose_input.callback(msg, {**info, "receipt_sequence": 8})
-    assert r.ref._pose_time is sample and r.ref._pose_sequence == 8
+    assert r.ref._pose_time is sample and r.ref._pose_sequence == 7
     assert r.ref.pose() is None
 
     # An unseen historical sample first delivered at the deadline is not stored.

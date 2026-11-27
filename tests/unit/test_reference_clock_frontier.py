@@ -92,6 +92,7 @@ def test_retired_raw_epoch_cannot_return(witness):
     old = e._frontiers["wheel"]
     root = replace(old.roots[0], epoch="replacement", sequence=1)
     new = replace(old, roots=(root,), epoch="replacement", sequence=1)
+    e.confirm_source_boot("wheel", "replacement")
     assert e.ingest(new)
     assert not e.ingest(old)
     assert e._frontiers["wheel"] == new

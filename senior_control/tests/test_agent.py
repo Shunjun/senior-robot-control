@@ -1680,7 +1680,7 @@ def test_real_q_replaces_preview_and_invalid_preserves_fixed():
     assert first["scan_layer"]["valid"]
     assert (
         first["scan_layer"]["source_id"]
-        == "6cf23ac607b3a593ca073a8e2eea80226a321f9845f988206bccebe50b22d940"
+        == "7d81dca4df98bff1b11b47a59f81b7f3918384f59a1ee56a5ad601d5dde7d942"
     )
     bridge.observe_scan(decode(b), b.scan.capture)
     second = ref.state("idle")

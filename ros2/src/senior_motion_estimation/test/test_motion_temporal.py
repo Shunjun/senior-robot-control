@@ -155,7 +155,10 @@ def test_invalid_new_epoch_interrupts_resolver_and_retires_old_packets():
     feed(o, [point(Source.IMU, i * 0.02, i + 1, (0.5,)) for i in range(6)])
     s = o.snapshot(after_cursor=0, now_ros=0.1, now_steady=100.1)
     r.consume(s)
-    bad = replace(point(Source.IMU, 0.12, 1, (0.5,), epoch="new"), status=SourceStatus.UNAVAILABLE)
+    bad = replace(
+        point(Source.IMU, 0.12, 1, (0.5,), epoch='{"boot_id":"p","generation":2}'),
+        status=SourceStatus.UNAVAILABLE,
+    )
     assert not o.ingest(bad, now_ros=0.12, now_steady=100.12).accepted
     s = o.snapshot(after_cursor=s.cursor, now_ros=0.12, now_steady=100.12)
     assert any(e.sample is None for e in s.events)
@@ -165,8 +168,8 @@ def test_invalid_new_epoch_interrupts_resolver_and_retires_old_packets():
         == "source_unavailable"
     )
     old = point(Source.IMU, 0.14, 9, (0.5,))
-    assert o.ingest(old, now_ros=0.14, now_steady=100.14).reason == "retired_epoch"
-    fresh = point(Source.IMU, 0.14, 2, (0.5,), epoch="new")
+    assert o.ingest(old, now_ros=0.14, now_steady=100.14).reason == "old_source_generation"
+    fresh = point(Source.IMU, 0.14, 2, (0.5,), epoch='{"boot_id":"p","generation":2}')
     assert o.ingest(fresh, now_ros=0.14, now_steady=100.14).accepted
 
 
@@ -386,10 +389,13 @@ def test_owner_recovery_blocks_both_dependencies_until_same_epoch_gyro_ready():
     batch(
         0.22,
         12,
-        replace(point(Source.IMU, 0.22, 1, (0,), epoch="restart"), status=SourceStatus.UNAVAILABLE),
+        replace(
+            point(Source.IMU, 0.22, 1, (0,), epoch='{"boot_id":"p","generation":2}'),
+            status=SourceStatus.UNAVAILABLE,
+        ),
     )
-    batch(0.24, 13, point(Source.IMU, 0.24, 2, (0,), epoch="restart"))
-    cold = batch(0.26, 14, point(Source.IMU, 0.26, 3, (0,), epoch="restart"))
+    batch(0.24, 13, point(Source.IMU, 0.24, 2, (0,), epoch='{"boot_id":"p","generation":2}'))
+    cold = batch(0.26, 14, point(Source.IMU, 0.26, 3, (0,), epoch='{"boot_id":"p","generation":2}'))
     assert dict(cold.sources)[Source.GPS].ready and dict(cold.sources)[Source.WHEEL].ready
     assert not dict(cold.sources)[Source.IMU].ready
     for _ in range(3):
@@ -398,13 +404,15 @@ def test_owner_recovery_blocks_both_dependencies_until_same_epoch_gyro_ready():
             assert w.by_source(src).reason == "dependency_imu_recovering"
             assert not w.by_source(src).original_keys
     for i, t in enumerate([0.28, 0.30, 0.32, 0.34]):
-        warm = batch(t, 15 + i, point(Source.IMU, t, 4 + i, (0,), epoch="restart"))
+        warm = batch(
+            t, 15 + i, point(Source.IMU, t, 4 + i, (0,), epoch='{"boot_id":"p","generation":2}')
+        )
     assert dict(warm.sources)[Source.IMU].ready
     w = r.resolve(round((0.24) * 1e9), round((0.34) * 1e9), warm)
     for src in (Source.GPS, Source.WHEEL):
         assert w.by_source(src).reason == "covered"
         assert all(
-            epoch == "restart"
+            epoch == '{"boot_id":"p","generation":2}'
             for source, epoch, seq in w.by_source(src).original_keys
             if source == "imu"
         )

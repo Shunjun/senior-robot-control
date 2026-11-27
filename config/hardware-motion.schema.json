@@ -120,7 +120,6 @@
         "course_frame": {
           "anyOf": [
             {
-              "maxLength": 128,
               "minLength": 1,
               "type": "string"
             },

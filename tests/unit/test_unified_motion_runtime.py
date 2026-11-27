@@ -273,8 +273,12 @@ def test_ros_rollback_revokes_raw_stillness_and_recovery_until_new_inputs():
     s.estimate(9, 20.1)
     assert not s.stationary(20.1) and s.recovery(20.1) is None
 
-    new_wheel = replace(point(Source.WHEEL, 9.1, 20.2, (0.0, 0.0)), epoch="new")
-    new_imu = replace(point(Source.IMU, 9.1, 20.2, (0.0,)), epoch="new")
+    new_wheel = replace(
+        point(Source.WHEEL, 9.1, 20.2, (0.0, 0.0)), epoch='{"boot_id":"boot","generation":2}'
+    )
+    new_imu = replace(
+        point(Source.IMU, 9.1, 20.2, (0.0,)), epoch='{"boot_id":"boot","generation":2}'
+    )
     assert s.ingest(new_wheel, 9.1, 20.2)
     s.estimate(9.1, 20.2)
     assert s.raw_feedback("wheel", 20.2) is not None

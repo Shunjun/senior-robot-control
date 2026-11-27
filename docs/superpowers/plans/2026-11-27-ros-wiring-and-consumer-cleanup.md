@@ -52,3 +52,11 @@
 - 收尾发现运动回调调用`observation_origin`前仍先执行graph查询，且雷达来源默认值残留写死。真实回调回归先1失败（已经检查的NativeReceipt通道意外再次查询graph）后修正；仅跳过该已检查通道的重复查询，普通订阅仍走配置校验，来源默认值统一读取JSON。Mac和VM相关8项通过。
 - 同一路径进一步复现：相同采集被放入新邮箱revision时，NativeSession会清空已累计的1299个格子状态。回归先1失败，修正为忽略重复/旧采集、不清窗后通过；生产装配夹具分开邮箱revision与原始扫描sequence，保留原后续运动撤销/固定墙断言。VM对整个受影响装配文件补验23 passed in 24.81s；这是单测/内部装配，不是原完整ROS case。
 - 两项补漏均Python-only，未变更原生输入，不重复六包编译。最终源索引为source-manifest05；最终增量原始包`output/wiring-1795770907776103131.tar.gz`及SHA/PID索引`output/final-summary.json`，旧包不覆盖。前述69项与补验存在重叠，不相加当新场景总数。
+
+## PR43 CI契约迁移（2026-11-27）
+
+- f2274bd的Linux CI已通过Ruff、格式与严格mypy；完整既有pytest为2511 passed / 8 skipped / 18 failed，打包尚未执行。原始日志本地`/tmp/navigation-pr-ci-f227.log`及Bot1私有`/tmp/navigation-pr-20261127-bd18ab3/`保留。
+- 本次增量产品A0/M0/D0；测试M8、配置M1、文档M1，共M10。同步hardware-motion.schema.json中已批准取消的course_frame长度上限；给抽取CommandNode方法的原测试提供真实接线模块全局，不修改运行语义。
+- 原18项失败全部对应既有契约残留：来源摘要已变；纯算法测试需由生命周期显式确认boot，或用同boot递增generation模拟批次恢复；GID仅诊断、不作拒收；采集时间重复/倒退不替换原观测、不推进已接纳sequence；原生时钟回拨会同时推进receipt generation。保留旧boot/旧generation拒收、恢复样本数与跨度、IMU依赖恢复、定位原TTL/协方差/地图更换保护。没有删除场景或弱化安全年龄要求。
+- 定位clock测试起初被怀疑漏代次；亲读native_receipt.cpp::observe_clock后确认实际接收端已推进各input.generation，因此只修夹具，不新增产品判断。
+- 本地相关文件首轮101 passed / 9 failed / 2 errors：其中10项Linux专用NativeFixture依赖/proc boot_id，Mac不可执行；另1项是本次epoch输入迁移后剩余期望字符串，已同步为同一结构化代次。随后便携相关组102 passed / 10 deselected in 3.52s（日志`/tmp/navigation-pr43-targeted02.log`）；这10项保持原样且未从Linux CI移除。现有Linux全套CI继续覆盖它们，无ROS整链/硬件/环境重跑。
